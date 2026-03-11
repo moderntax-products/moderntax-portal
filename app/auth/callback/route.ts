@@ -1,23 +1,42 @@
-import { createServerRouteClient } from '@/lib/supabase';
-import { cookies } from 'next/headers';
+import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
+  const next = requestUrl.searchParams.get('next') ?? '/';
 
   if (code) {
-    const cookieStore = await cookies();
-    const supabase = createServerRouteClient(cookieStore);
+    // Create the redirect response FIRST, then set cookies on it
+    const redirectTo = `${requestUrl.origin}${next}`;
+    const response = NextResponse.redirect(redirectTo);
 
-    try {
-      await supabase.auth.exchangeCodeForSession(code);
-    } catch (error) {
-      console.error('Auth callback error:', error);
-      return NextResponse.redirect(`${requestUrl.origin}/login?error=auth`);
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              response.cookies.set(name, value, options);
+            });
+          },
+        },
+      }
+    );
+
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+    if (!error) {
+      return response;
     }
+
+    console.error('Auth callback error:', error);
   }
 
-  // Redirect to home page after successful auth
-  return NextResponse.redirect(`${requestUrl.origin}/`);
+  // If no code or error, redirect to login with error
+  return NextResponse.redirect(`${requestUrl.origin}/login?error=auth`);
 }

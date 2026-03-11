@@ -1,8 +1,5 @@
 /**
- * Auto-generated Supabase database types
- * Run: npx supabase gen types typescript --linked > lib/database.types.ts
- *
- * This is a manual definition until you run the command above
+ * Supabase database types for ModernTax Portal v2
  */
 
 export type Database = {
@@ -15,6 +12,8 @@ export type Database = {
           slug: string;
           domain: string | null;
           logo_url: string | null;
+          intake_methods: string[];
+          free_trial: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -24,6 +23,8 @@ export type Database = {
           slug: string;
           domain?: string | null;
           logo_url?: string | null;
+          intake_methods?: string[];
+          free_trial?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -33,9 +34,12 @@ export type Database = {
           slug?: string;
           domain?: string | null;
           logo_url?: string | null;
+          intake_methods?: string[];
+          free_trial?: boolean;
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
       };
       profiles: {
         Row: {
@@ -65,50 +69,155 @@ export type Database = {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [
+          {
+            foreignKeyName: 'profiles_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      batches: {
+        Row: {
+          id: string;
+          client_id: string;
+          uploaded_by: string;
+          intake_method: string;
+          source_file_url: string | null;
+          original_filename: string | null;
+          entity_count: number;
+          request_count: number;
+          status: string;
+          error_message: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          client_id: string;
+          uploaded_by: string;
+          intake_method: string;
+          source_file_url?: string | null;
+          original_filename?: string | null;
+          entity_count?: number;
+          request_count?: number;
+          status?: string;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          client_id?: string;
+          uploaded_by?: string;
+          intake_method?: string;
+          source_file_url?: string | null;
+          original_filename?: string | null;
+          entity_count?: number;
+          request_count?: number;
+          status?: string;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'batches_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'batches_uploaded_by_fkey';
+            columns: ['uploaded_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       requests: {
         Row: {
           id: string;
           client_id: string;
           requested_by: string;
-          account_number: string;
+          batch_id: string | null;
+          loan_number: string;
+          intake_method: string;
           status: string;
+          notes: string | null;
           created_at: string;
           updated_at: string;
           completed_at: string | null;
-          notes: string | null;
         };
         Insert: {
           id?: string;
           client_id: string;
           requested_by: string;
-          account_number: string;
+          batch_id?: string | null;
+          loan_number: string;
+          intake_method?: string;
           status?: string;
+          notes?: string | null;
           created_at?: string;
           updated_at?: string;
           completed_at?: string | null;
-          notes?: string | null;
         };
         Update: {
           id?: string;
           client_id?: string;
           requested_by?: string;
-          account_number?: string;
+          batch_id?: string | null;
+          loan_number?: string;
+          intake_method?: string;
           status?: string;
+          notes?: string | null;
           created_at?: string;
           updated_at?: string;
           completed_at?: string | null;
-          notes?: string | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: 'requests_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'requests_requested_by_fkey';
+            columns: ['requested_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'requests_batch_id_fkey';
+            columns: ['batch_id'];
+            isOneToOne: false;
+            referencedRelation: 'batches';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       request_entities: {
         Row: {
           id: string;
           request_id: string;
           entity_name: string;
-          ein: string;
+          tid: string;
+          tid_kind: string;
+          address: string | null;
+          city: string | null;
+          state: string | null;
+          zip_code: string | null;
           form_type: string;
           years: string[];
+          signer_first_name: string | null;
+          signer_last_name: string | null;
+          signature_id: string | null;
+          signature_created_at: string | null;
+          signed_8821_url: string | null;
           status: string;
           gross_receipts: Record<string, unknown> | null;
           compliance_score: number | null;
@@ -121,9 +230,19 @@ export type Database = {
           id?: string;
           request_id: string;
           entity_name: string;
-          ein: string;
+          tid: string;
+          tid_kind?: string;
+          address?: string | null;
+          city?: string | null;
+          state?: string | null;
+          zip_code?: string | null;
           form_type: string;
           years: string[];
+          signer_first_name?: string | null;
+          signer_last_name?: string | null;
+          signature_id?: string | null;
+          signature_created_at?: string | null;
+          signed_8821_url?: string | null;
           status?: string;
           gross_receipts?: Record<string, unknown> | null;
           compliance_score?: number | null;
@@ -136,9 +255,19 @@ export type Database = {
           id?: string;
           request_id?: string;
           entity_name?: string;
-          ein?: string;
+          tid?: string;
+          tid_kind?: string;
+          address?: string | null;
+          city?: string | null;
+          state?: string | null;
+          zip_code?: string | null;
           form_type?: string;
           years?: string[];
+          signer_first_name?: string | null;
+          signer_last_name?: string | null;
+          signature_id?: string | null;
+          signature_created_at?: string | null;
+          signed_8821_url?: string | null;
           status?: string;
           gross_receipts?: Record<string, unknown> | null;
           compliance_score?: number | null;
@@ -147,6 +276,85 @@ export type Database = {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [
+          {
+            foreignKeyName: 'request_entities_request_id_fkey';
+            columns: ['request_id'];
+            isOneToOne: false;
+            referencedRelation: 'requests';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      expert_assignments: {
+        Row: {
+          id: string;
+          entity_id: string;
+          expert_id: string;
+          assigned_by: string;
+          assigned_at: string;
+          completed_at: string | null;
+          sla_deadline: string;
+          sla_met: boolean | null;
+          status: string;
+          miss_reason: string | null;
+          expert_notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          entity_id: string;
+          expert_id: string;
+          assigned_by: string;
+          assigned_at?: string;
+          completed_at?: string | null;
+          sla_deadline?: string;
+          sla_met?: boolean | null;
+          status?: string;
+          miss_reason?: string | null;
+          expert_notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          entity_id?: string;
+          expert_id?: string;
+          assigned_by?: string;
+          assigned_at?: string;
+          completed_at?: string | null;
+          sla_deadline?: string;
+          sla_met?: boolean | null;
+          status?: string;
+          miss_reason?: string | null;
+          expert_notes?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'expert_assignments_entity_id_fkey';
+            columns: ['entity_id'];
+            isOneToOne: false;
+            referencedRelation: 'request_entities';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'expert_assignments_expert_id_fkey';
+            columns: ['expert_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'expert_assignments_assigned_by_fkey';
+            columns: ['assigned_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       notifications: {
         Row: {
@@ -176,10 +384,28 @@ export type Database = {
           channel?: string;
           read_at?: string | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: 'notifications_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      get_my_client_id: {
+        Args: Record<string, never>;
+        Returns: string;
+      };
+      get_my_role: {
+        Args: Record<string, never>;
+        Returns: string;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

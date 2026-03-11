@@ -1,5 +1,8 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { SessionTimeout } from '@/components/SessionTimeout';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'ModernTax Portal - IRS Transcript Verification',
@@ -14,7 +17,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <SessionTimeout />
+      </body>
     </html>
   );
 }

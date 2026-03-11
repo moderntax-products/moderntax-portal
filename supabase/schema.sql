@@ -1,9 +1,17 @@
 -- ModernTax Portal Schema
 -- Postgres with Supabase auth integration
+-- Drops and recreates portal tables (clients, profiles, requests, request_entities, notifications)
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "http";
+
+-- Drop existing portal tables (in reverse dependency order)
+DROP TABLE IF EXISTS public.notifications CASCADE;
+DROP TABLE IF EXISTS public.request_entities CASCADE;
+DROP TABLE IF EXISTS public.requests CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+DROP TABLE IF EXISTS public.clients CASCADE;
 
 -- Clients table
 CREATE TABLE public.clients (
@@ -176,6 +184,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
@@ -186,3 +195,9 @@ INSERT INTO public.clients (name, slug, domain, created_at, updated_at) VALUES
   ('TMC Financing', 'tmc', 'tmcfinancing.com', NOW(), NOW()),
   ('Clearfirm', 'clearfirm', 'clearfirm.com', NOW(), NOW())
 ON CONFLICT DO NOTHING;
+
+-- Create profile for existing admin user
+INSERT INTO public.profiles (id, email, full_name, role, client_id)
+SELECT '4a62ae4c-c3c4-4399-87e1-63f4f6851153', 'matt@moderntax.io', 'Matt Parker', 'admin', c.id
+FROM public.clients c WHERE c.slug = 'centerstone'
+ON CONFLICT (id) DO NOTHING;

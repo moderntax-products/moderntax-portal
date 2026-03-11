@@ -1,16 +1,65 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [loginMode, setLoginMode] = useState<'magic' | 'password'>('password');
   const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
+  const [success, setSuccess] = useState<string | null>(null);
   const supabase = createClient();
+
+  // Handle error from URL hash (e.g., expired magic link)
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash) {
+      const params = new URLSearchParams(hash.substring(1));
+      const errorDesc = params.get('error_description');
+      if (errorDesc) {
+        setError(errorDesc.replace(/\+/g, ' '));
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    }
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('error') === 'auth') {
+      setError('Authentication failed. Please try again.');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setIsLoading(true);
+
+    try {
+      // Use server-side API route to handle login — sets cookies on the server response
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const result = await res.json();
+
+      if (!res.ok) {
+        setError(result.error || 'Sign in failed.');
+      } else {
+        // Cookies are now set by the server — navigate to dashboard
+        window.location.href = '/';
+        return;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,7 +120,6 @@ export default function LoginPage() {
         {/* Main Card */}
         <div className="bg-white rounded-lg shadow-lg p-8">
           {emailSent ? (
-            // Email Sent State
             <div className="text-center">
               <div className="inline-flex items-center justify-center w-16 h-16 bg-mt-green bg-opacity-10 rounded-full mb-4">
                 <svg
@@ -90,7 +138,7 @@ export default function LoginPage() {
               </div>
               <h2 className="text-2xl font-bold text-mt-dark mb-2">Check your email</h2>
               <p className="text-gray-600 mb-4">
-                We've sent a sign-in link to{' '}
+                We&apos;ve sent a sign-in link to{' '}
                 <span className="font-semibold text-mt-dark">{email}</span>
               </p>
               <p className="text-sm text-gray-500 mb-6">
@@ -107,7 +155,6 @@ export default function LoginPage() {
               </button>
             </div>
           ) : (
-            // Login Form
             <>
               <h2 className="text-2xl font-bold text-mt-dark mb-6">Sign in to your account</h2>
 
@@ -117,31 +164,87 @@ export default function LoginPage() {
                 </div>
               )}
 
-              {/* Magic Link Form */}
-              <form onSubmit={handleMagicLink} className="space-y-4 mb-6">
-                <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-mt-dark mb-2">
-                    Email Address
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@company.com"
-                    required
-                    disabled={isLoading}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
+              {success && (
+                <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-green-700 text-sm">{success}</p>
                 </div>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full bg-mt-green text-white py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? 'Sending...' : 'Send me a login link'}
-                </button>
-              </form>
+              )}
+
+              {/* Password Login Form */}
+              {loginMode === 'password' ? (
+                <form onSubmit={handlePasswordLogin} className="space-y-4 mb-4">
+                  <div>
+                    <label htmlFor="email" className="block text-sm font-medium text-mt-dark mb-2">
+                      Email Address
+                    </label>
+                    <input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@company.com"
+                      required
+                      disabled={isLoading}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="password" className="block text-sm font-medium text-mt-dark mb-2">
+                      Password
+                    </label>
+                    <input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter your password"
+                      required
+                      disabled={isLoading}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full bg-mt-green text-white py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? 'Signing in...' : 'Sign in'}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleMagicLink} className="space-y-4 mb-4">
+                  <div>
+                    <label htmlFor="email" className="block text-sm font-medium text-mt-dark mb-2">
+                      Email Address
+                    </label>
+                    <input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@company.com"
+                      required
+                      disabled={isLoading}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full bg-mt-green text-white py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? 'Sending...' : 'Send me a login link'}
+                  </button>
+                </form>
+              )}
+
+              {/* Toggle login mode */}
+              <button
+                onClick={() => setLoginMode(loginMode === 'password' ? 'magic' : 'password')}
+                className="w-full text-center text-sm text-gray-500 hover:text-mt-green mb-4 transition-colors"
+              >
+                {loginMode === 'password' ? 'Use magic link instead' : 'Use password instead'}
+              </button>
 
               {/* Divider */}
               <div className="relative mb-6">

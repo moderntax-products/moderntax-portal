@@ -12,6 +12,7 @@ interface HeaderProps {
 export function Header({ clientName }: HeaderProps) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isExpert, setIsExpert] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const supabase = createClient();
 
@@ -29,13 +30,14 @@ export function Header({ clientName }: HeaderProps) {
 
         const { data, error } = await supabase
           .from('profiles')
-          .select('*')
+          .select()
           .eq('id', user.id)
-          .single();
+          .single() as { data: Profile | null; error: any };
 
         if (!error && data) {
           setProfile(data);
           setIsAdmin(data.role === 'admin');
+          setIsExpert(data.role === 'expert');
         }
       } catch (error) {
         console.error('Failed to fetch profile:', error);
@@ -86,18 +88,29 @@ export function Header({ clientName }: HeaderProps) {
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-8">
-            <Link
-              href="/dashboard"
-              className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/request/new"
-              className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
-            >
-              New Request
-            </Link>
+            {isExpert ? (
+              <Link
+                href="/expert"
+                className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+              >
+                My Queue
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/dashboard"
+                  className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+                >
+                  Dashboard
+                </Link>
+                <Link
+                  href="/request/new"
+                  className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+                >
+                  New Request
+                </Link>
+              </>
+            )}
             {isAdmin && (
               <Link
                 href="/admin"
@@ -127,18 +140,29 @@ export function Header({ clientName }: HeaderProps) {
 
         {/* Mobile Navigation */}
         <div className="md:hidden flex justify-center gap-6 pb-4 pt-2 border-t border-slate-700">
-          <Link
-            href="/dashboard"
-            className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href="/request/new"
-            className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
-          >
-            New Request
-          </Link>
+          {isExpert ? (
+            <Link
+              href="/expert"
+              className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+            >
+              My Queue
+            </Link>
+          ) : (
+            <>
+              <Link
+                href="/dashboard"
+                className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/request/new"
+                className="text-slate-200 hover:text-emerald-400 transition-colors text-sm font-medium"
+              >
+                New Request
+              </Link>
+            </>
+          )}
           {isAdmin && (
             <Link
               href="/admin"

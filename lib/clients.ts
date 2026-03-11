@@ -15,18 +15,21 @@ export const CLIENT_CONFIG: Record<string, Omit<Client, 'id' | 'created_at' | 'u
     slug: 'centerstone',
     domain: 'teamcenterstone.com',
     logo_url: 'https://cdn.moderntax.io/clients/centerstone-logo.png',
+    intake_methods: ['csv', 'manual'],
   },
   'tmcfinancing.com': {
     name: 'TMC Financing',
     slug: 'tmc',
     domain: 'tmcfinancing.com',
     logo_url: 'https://cdn.moderntax.io/clients/tmc-logo.png',
+    intake_methods: ['pdf', 'manual'],
   },
   'clearfirm.com': {
     name: 'Clearfirm',
     slug: 'clearfirm',
     domain: 'clearfirm.com',
     logo_url: 'https://cdn.moderntax.io/clients/clearfirm-logo.png',
+    intake_methods: ['csv', 'pdf', 'manual'],
   },
 };
 

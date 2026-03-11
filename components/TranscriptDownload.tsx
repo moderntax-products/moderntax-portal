@@ -13,7 +13,7 @@ export function TranscriptDownload({ entity }: TranscriptDownloadProps) {
       <div className="mb-4">
         <h3 className="text-lg font-semibold text-gray-900">{entity.entity_name}</h3>
         <p className="text-sm text-gray-600 mt-1">
-          Form {entity.form_type} • EIN: {entity.ein}
+          Form {entity.form_type} • {entity.tid_kind}: {entity.tid}
         </p>
         {entity.compliance_score !== null && (
           <div className="mt-3 flex items-center gap-2">
@@ -26,7 +26,7 @@ export function TranscriptDownload({ entity }: TranscriptDownloadProps) {
       {hasTranscripts ? (
         <div className="space-y-3">
           <p className="text-sm font-medium text-gray-700 mb-4">Available Transcripts:</p>
-          {entity.transcript_urls.map((url, index) => (
+          {entity.transcript_urls!.map((url, index) => (
             <a
               key={index}
               href={url}

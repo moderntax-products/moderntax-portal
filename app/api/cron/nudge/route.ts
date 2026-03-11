@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase';
+import { createAdminClient } from '@/lib/supabase-server';
 import { sendDailyNudge } from '@/lib/sendgrid';
 import type { DailyNudgeStats } from '@/lib/types';
 
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     const { data: users, error: usersError } = await supabase
       .from('profiles')
       .select('id, email, full_name')
-      .not('email', 'is', null);
+      .not('email', 'is', null) as { data: { id: string; email: string; full_name: string | null }[] | null; error: any };
 
     if (usersError || !users) {
       console.error('Failed to fetch users:', usersError);
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
         const { data: requests, error: requestsError } = await supabase
           .from('requests')
           .select('status, created_at, completed_at')
-          .eq('requested_by', user.id);
+          .eq('requested_by', user.id) as { data: { status: string; created_at: string; completed_at: string | null }[] | null; error: any };
 
         if (requestsError || !requests) {
           console.error(`Failed to fetch requests for user ${user.id}:`, requestsError);

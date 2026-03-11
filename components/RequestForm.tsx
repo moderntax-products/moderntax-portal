@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import type { FormType } from '@/lib/types';
+import { FormType } from '@/lib/types';
 
 interface Entity {
   id: string;
@@ -21,7 +21,7 @@ interface RequestFormProps {
   isLoading?: boolean;
 }
 
-const FORM_TYPES: FormType[] = ['1040', '1065', '1120', '1120S'];
+const FORM_TYPES: FormType[] = [FormType.FORM_1040, FormType.FORM_1065, FormType.FORM_1120, FormType.FORM_1120S];
 const YEARS = Array.from({ length: 10 }, (_, i) =>
   (new Date().getFullYear() - i).toString()
 );
@@ -34,7 +34,7 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
       id: '1',
       name: '',
       ein: '',
-      formType: '1040',
+      formType: FormType.FORM_1040,
       years: [],
     },
   ]);
@@ -47,7 +47,7 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
         id: newId.toString(),
         name: '',
         ein: '',
-        formType: '1040',
+        formType: FormType.FORM_1040,
         years: [],
       },
     ]);

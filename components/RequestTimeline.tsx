@@ -42,7 +42,6 @@ export function RequestTimeline({ currentStatus, timestamps = {} }: RequestTimel
           {steps.map((step, index) => {
             const isCompleted = index < currentIndex;
             const isCurrent = index === currentIndex && !isFailed;
-            const isFutureOrFailed = index > currentIndex || isFailed;
 
             return (
               <div key={step.status} className="relative pl-16">

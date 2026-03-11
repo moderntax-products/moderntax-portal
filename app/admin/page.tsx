@@ -1,7 +1,9 @@
 import { redirect } from 'next/navigation';
-import { createServerComponentClient } from '@/lib/supabase';
+import { createServerComponentClient } from '@/lib/supabase-server';
 import type { RequestStatus } from '@/lib/types';
 import Link from 'next/link';
+import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
+import { FreeTrialToggle } from '@/components/FreeTrialToggle';
 
 export default async function AdminPage() {
   const supabase = await createServerComponentClient();
@@ -15,8 +17,14 @@ export default async function AdminPage() {
     redirect('/login');
   }
 
-  // Check if user is admin (matt@moderntax.io)
-  if (user.email !== 'matt@moderntax.io') {
+  // Check if user has admin role (role-based access)
+  const { data: adminProfile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single() as { data: { role: string } | null; error: any };
+
+  if (!adminProfile || adminProfile.role !== 'admin') {
     redirect('/');
   }
 
@@ -24,13 +32,13 @@ export default async function AdminPage() {
   const { data: clients, error: clientsError } = await supabase
     .from('clients')
     .select('*')
-    .order('name', { ascending: true });
+    .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null }[] | null; error: any };
 
   // Fetch all requests with entities and client info
   const { data: allRequests, error: requestsError } = await supabase
     .from('requests')
     .select('*, request_entities(id, status), clients(name, slug)')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
 
   // Calculate stats per client
   const clientStats: Record<
@@ -72,12 +80,12 @@ export default async function AdminPage() {
     });
   }
 
-  const getStatusBadgeColor = (status: RequestStatus) => {
+  const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'submitted':
-      case 'form_8821_sent':
+      case '8821_sent':
         return 'bg-blue-100 text-blue-800';
-      case 'form_8821_signed':
+      case '8821_signed':
       case 'irs_queue':
         return 'bg-yellow-100 text-yellow-800';
       case 'processing':
@@ -115,6 +123,11 @@ export default async function AdminPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* SOC 2 Data Classification Banner */}
+      <div className={`border-b px-4 py-2 text-center text-xs font-semibold tracking-wide ${getClassificationColor('internal')}`}>
+        🔒 {getClassificationLabel('internal')}
+      </div>
+
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
@@ -122,12 +135,26 @@ export default async function AdminPage() {
             <h1 className="text-3xl font-bold text-mt-dark">Admin Dashboard</h1>
             <p className="text-gray-600 mt-1">Cross-client overview and management</p>
           </div>
-          <Link
-            href="/"
-            className="text-gray-600 hover:text-gray-900 font-medium"
-          >
-            ← Back to Dashboard
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/admin/experts"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              IRS Experts
+            </Link>
+            <Link
+              href="/admin/team"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Team
+            </Link>
+            <Link
+              href="/"
+              className="text-gray-600 hover:text-gray-900 font-medium text-sm"
+            >
+              Dashboard
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -201,6 +228,7 @@ export default async function AdminPage() {
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Client</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Free Trial</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Total</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completed</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
@@ -212,9 +240,17 @@ export default async function AdminPage() {
                   {Object.entries(clientStats).map(([clientId, stats]) => {
                     const completionRate =
                       stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+                    const clientObj = clients?.find((c) => c.id === clientId);
                     return (
                       <tr key={clientId} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4 font-semibold text-mt-dark">{stats.name}</td>
+                        <td className="px-6 py-4">
+                          <FreeTrialToggle
+                            clientId={clientId}
+                            clientName={stats.name}
+                            initialValue={clientObj?.free_trial ?? true}
+                          />
+                        </td>
                         <td className="px-6 py-4 text-sm text-gray-600">{stats.total}</td>
                         <td className="px-6 py-4">
                           <span className="text-sm font-medium text-green-600">{stats.completed}</span>
@@ -271,7 +307,7 @@ export default async function AdminPage() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <code className="text-sm font-mono text-mt-dark">{request.account_number}</code>
+                          <code className="text-sm font-mono text-mt-dark">{request.loan_number}</code>
                         </td>
                         <td className="px-6 py-4">
                           <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(request.status as RequestStatus)}`}>
@@ -284,10 +320,16 @@ export default async function AdminPage() {
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {formatDate(request.created_at)}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-4 flex gap-2">
+                          <Link
+                            href={`/admin/requests/${request.id}`}
+                            className="text-mt-green hover:underline font-medium text-sm"
+                          >
+                            Manage
+                          </Link>
                           <Link
                             href={`/request/${request.id}`}
-                            className="text-mt-green hover:underline font-medium text-sm"
+                            className="text-gray-400 hover:text-gray-600 text-sm"
                           >
                             View
                           </Link>

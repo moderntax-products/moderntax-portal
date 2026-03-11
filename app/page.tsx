@@ -1,12 +1,18 @@
 import { redirect } from 'next/navigation';
-import { createServerComponentClient } from '@/lib/supabase';
-import type { RequestStatus } from '@/lib/types';
+import { createServerComponentClient } from '@/lib/supabase-server';
 import Link from 'next/link';
+import { LogoutButton } from '@/components/LogoutButton';
+import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 
 export default async function DashboardPage() {
-  const supabase = await createServerComponentClient();
+  let supabase;
+  try {
+    supabase = await createServerComponentClient();
+  } catch (err) {
+    console.error('[dashboard] Failed to create Supabase client:', err);
+    redirect('/login');
+  }
 
-  // Check authentication
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -15,20 +21,31 @@ export default async function DashboardPage() {
     redirect('/login');
   }
 
-  // Fetch user profile
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('*')
+    .select()
     .eq('id', user.id)
-    .single();
+    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null } | null; error: any };
 
   if (profileError || !profile) {
-    console.error('Profile fetch error:', profileError);
     redirect('/login');
   }
 
-  // Fetch requests for this client
+  const isManager = profile.role === 'manager';
+  const isAdmin = profile.role === 'admin';
+  const isProcessor = profile.role === 'processor';
+  const isExpert = profile.role === 'expert';
+
+  // Experts have their own dashboard
+  if (isExpert) {
+    redirect('/expert');
+  }
+
+  // Fetch requests scoped by role:
+  // - Processor: only own requests
+  // - Manager/Admin: all client requests
   let requests: any[] = [];
+  let allClientRequests: any[] = [];
   let stats = {
     total: 0,
     pending: 0,
@@ -36,51 +53,132 @@ export default async function DashboardPage() {
     avgTurnaround: 0,
   };
 
+  // For manager team breakdown
+  let teamProfiles: { id: string; full_name: string | null; email: string }[] = [];
+  let officerStats: Record<string, { name: string; total: number; completed: number; pending: number; amount: number }> = {};
+
+  // Fetch client record for free trial status
+  let clientFreeTrial = true; // default: trial active
   if (profile.client_id) {
-    // Get all requests for this client
-    const { data: allRequests, error: requestsError } = await supabase
+    const { data: clientRecord } = await supabase
+      .from('clients')
+      .select('free_trial')
+      .eq('id', profile.client_id)
+      .single() as { data: { free_trial: boolean | null } | null; error: any };
+    if (clientRecord?.free_trial === false) {
+      clientFreeTrial = false;
+    }
+  }
+
+  if (profile.client_id) {
+    // Build the query — all client requests for managers, own-only for processors
+    let query = supabase
       .from('requests')
       .select('*, request_entities(id, status)')
       .eq('client_id', profile.client_id)
-      .order('created_at', { ascending: false })
-      .limit(20);
+      .order('created_at', { ascending: false });
 
-    if (!requestsError && allRequests) {
-      requests = allRequests;
+    if (isProcessor) {
+      query = query.eq('requested_by', user.id);
+    }
 
-      // Calculate stats
-      stats.total = allRequests.length;
+    const { data: fetchedRequests, error: requestsError } = await query.limit(50) as { data: any[] | null; error: any };
 
-      // Pending: any request not completed
-      stats.pending = allRequests.filter((r) => r.status !== 'completed' && r.status !== 'failed')
-        .length;
+    if (!requestsError && fetchedRequests) {
+      allClientRequests = fetchedRequests;
+      requests = fetchedRequests.slice(0, 20); // Show up to 20 in the table
 
-      // Completed this week
+      stats.total = fetchedRequests.length;
+      stats.pending = fetchedRequests.filter((r) => r.status !== 'completed' && r.status !== 'failed').length;
+
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
-      stats.completedThisWeek = allRequests.filter(
-        (r) => r.status === 'completed' && new Date(r.completed_at) > weekAgo
+      stats.completedThisWeek = fetchedRequests.filter(
+        (r) => r.status === 'completed' && r.completed_at && new Date(r.completed_at) > weekAgo
       ).length;
 
-      // Average turnaround
-      const completedRequests = allRequests.filter((r) => r.completed_at);
+      const completedRequests = fetchedRequests.filter((r) => r.completed_at);
       if (completedRequests.length > 0) {
-        const avgMs = completedRequests.reduce((sum, r) => {
-          const created = new Date(r.created_at).getTime();
-          const completed = new Date(r.completed_at).getTime();
-          return sum + (completed - created);
-        }, 0) / completedRequests.length;
-        stats.avgTurnaround = Math.round(avgMs / (1000 * 60 * 60 * 24)); // days
+        const avgMs =
+          completedRequests.reduce((sum, r) => {
+            return sum + (new Date(r.completed_at).getTime() - new Date(r.created_at).getTime());
+          }, 0) / completedRequests.length;
+        stats.avgTurnaround = Math.round(avgMs / (1000 * 60 * 60 * 24));
+      }
+    }
+
+    // For managers: fetch team profiles and build per-officer breakdown
+    if (isManager || isAdmin) {
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('client_id', profile.client_id) as { data: { id: string; full_name: string | null; email: string }[] | null; error: any };
+
+      if (profiles) {
+        teamProfiles = profiles;
+
+        // Build name lookup
+        const nameLookup: Record<string, string> = {};
+        profiles.forEach((p) => {
+          nameLookup[p.id] = p.full_name || p.email;
+        });
+
+        // Billing rates by intake method
+        const RATE_PDF = 59.98;   // Per entity with signed 8821 PDF
+        const RATE_CSV = 69.98;   // Per unique EIN on CSV/Excel upload
+        // Discovery/Entity Transcript: $15.00 per unique EIN (applied when form_type support is added)
+        const FREE_REQUESTS_PER_ACCOUNT = 3;
+
+        // Count total billable requests across all officers (account-level free tier)
+        // Free trial gives first 3 requests free; once trial is completed, all requests are billed
+        let freeRequestIds = new Set<string>();
+        if (clientFreeTrial) {
+          const billableRequests = allClientRequests
+            .filter((r: any) => r.status !== 'failed')
+            .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+          freeRequestIds = new Set(billableRequests.slice(0, FREE_REQUESTS_PER_ACCOUNT).map((r: any) => r.id));
+        }
+
+        // Build per-officer stats from all client requests
+        allClientRequests.forEach((req: any) => {
+          const officerId = req.requested_by;
+          const officerName = nameLookup[officerId] || 'Unknown';
+
+          if (!officerStats[officerId]) {
+            officerStats[officerId] = { name: officerName, total: 0, completed: 0, pending: 0, amount: 0 };
+          }
+          officerStats[officerId].total += 1;
+          const entityCount = req.request_entities?.length || 0;
+
+          // Determine per-entity rate based on intake method
+          const rate = req.intake_method === 'csv' ? RATE_CSV : RATE_PDF;
+          const isFreeRequest = freeRequestIds.has(req.id);
+
+          if (req.status === 'completed') {
+            officerStats[officerId].completed += 1;
+            if (!isFreeRequest) {
+              officerStats[officerId].amount += entityCount * rate;
+            }
+          } else if (req.status !== 'failed') {
+            officerStats[officerId].pending += 1;
+            // Signed/pending items are also billable
+            if (['8821_signed', 'irs_queue', 'processing'].includes(req.status)) {
+              if (!isFreeRequest) {
+                officerStats[officerId].amount += entityCount * rate;
+              }
+            }
+          }
+        });
       }
     }
   }
 
-  const getStatusBadgeColor = (status: RequestStatus) => {
+  const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'submitted':
-      case 'form_8821_sent':
+      case '8821_sent':
         return 'bg-blue-100 text-blue-800';
-      case 'form_8821_signed':
+      case '8821_signed':
       case 'irs_queue':
         return 'bg-yellow-100 text-yellow-800';
       case 'processing':
@@ -109,21 +207,108 @@ export default async function DashboardPage() {
     });
   };
 
+  const intakeMethodLabel = (method: string) => {
+    switch (method) {
+      case 'csv': return 'CSV';
+      case 'pdf': return 'PDF';
+      case 'manual': return 'Manual';
+      default: return method;
+    }
+  };
+
+  // Check MFA enrollment status
+  const { data: mfaFactors } = await supabase.auth.mfa.listFactors();
+  const hasMfaEnabled = mfaFactors?.totp && mfaFactors.totp.length > 0;
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* SOC 2 Data Classification Banner */}
+      <div className={`border-b px-4 py-2 text-center text-xs font-semibold tracking-wide ${getClassificationColor('confidential')}`}>
+        🔒 {getClassificationLabel('confidential')}
+      </div>
+
+      {/* MFA Warning Banner */}
+      {!hasMfaEnabled && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-1.5 bg-red-100 rounded-full">
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-red-800">Multi-Factor Authentication Not Enabled</p>
+                <p className="text-xs text-red-600">SOC 2 requires MFA for all users accessing sensitive data. Please enable MFA in your account settings.</p>
+              </div>
+            </div>
+            <a
+              href="/account/security"
+              className="text-sm font-semibold text-red-700 hover:text-red-900 underline whitespace-nowrap"
+            >
+              Enable MFA →
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold text-mt-dark">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Welcome back, {profile.full_name || user.email}</p>
+            <p className="text-gray-600 mt-1">
+              Welcome back, {profile.full_name || user.email}
+              {isManager && (
+                <span className="ml-2 inline-block px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                  Manager
+                </span>
+              )}
+            </p>
           </div>
-          <Link
-            href="/new"
-            className="bg-mt-green text-white px-6 py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors"
-          >
-            + New Request
-          </Link>
+          <div className="flex items-center gap-3">
+            {/* Admin Link (only for admins) */}
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                ⚙️ Admin
+              </Link>
+            )}
+            {/* Manager Team Link */}
+            {isManager && (
+              <Link
+                href="/team"
+                className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                👥 My Team
+              </Link>
+            )}
+            {/* MFA Status Badge */}
+            {hasMfaEnabled ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-100 text-green-800">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                MFA Active
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                MFA Off
+              </span>
+            )}
+            <Link
+              href="/new"
+              className="bg-mt-green text-white px-6 py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors"
+            >
+              + New Request
+            </Link>
+            <LogoutButton />
+          </div>
         </div>
       </div>
 
@@ -131,11 +316,12 @@ export default async function DashboardPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-          {/* Total Requests */}
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Total Requests</p>
+                <p className="text-gray-600 text-sm font-medium">
+                  {isProcessor ? 'My Requests' : 'Team Requests'}
+                </p>
                 <p className="text-3xl font-bold text-mt-dark mt-2">{stats.total}</p>
               </div>
               <div className="p-3 bg-mt-green bg-opacity-10 rounded-lg">
@@ -146,7 +332,6 @@ export default async function DashboardPage() {
             </div>
           </div>
 
-          {/* Pending */}
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -161,7 +346,6 @@ export default async function DashboardPage() {
             </div>
           </div>
 
-          {/* Completed This Week */}
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -176,28 +360,98 @@ export default async function DashboardPage() {
             </div>
           </div>
 
-          {/* Avg Turnaround */}
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Avg Turnaround</p>
+                <p className="text-gray-600 text-sm font-medium">
+                  {isManager ? 'Team Members' : 'Avg Turnaround'}
+                </p>
                 <p className="text-3xl font-bold text-mt-dark mt-2">
-                  {stats.avgTurnaround > 0 ? `${stats.avgTurnaround}d` : 'N/A'}
+                  {isManager
+                    ? teamProfiles.length
+                    : stats.avgTurnaround > 0 ? `${stats.avgTurnaround}d` : 'N/A'}
                 </p>
               </div>
               <div className="p-3 bg-blue-100 rounded-lg">
                 <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  {isManager ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  )}
                 </svg>
               </div>
             </div>
           </div>
         </div>
 
+        {/* Manager: Team Breakdown by Loan Officer */}
+        {(isManager || isAdmin) && Object.keys(officerStats).length > 0 && (
+          <div className="bg-white rounded-lg shadow overflow-hidden mb-12">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-mt-dark">Breakdown by Loan Officer</h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Loan Officer</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Total</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completed</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
+                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Est. Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {Object.entries(officerStats)
+                    .sort(([, a], [, b]) => b.total - a.total)
+                    .map(([officerId, oStats]) => (
+                      <tr key={officerId} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <span className="text-sm font-semibold text-mt-dark">{oStats.name}</span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{oStats.total}</td>
+                        <td className="px-6 py-4">
+                          <span className="text-sm font-medium text-green-600">{oStats.completed}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-sm font-medium text-yellow-600">{oStats.pending}</span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <span className="text-sm font-semibold text-gray-900">
+                            ${oStats.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  {/* Totals row */}
+                  <tr className="bg-gray-50 font-semibold">
+                    <td className="px-6 py-3 text-sm text-mt-dark">TOTAL</td>
+                    <td className="px-6 py-3 text-sm text-gray-900">
+                      {Object.values(officerStats).reduce((s, o) => s + o.total, 0)}
+                    </td>
+                    <td className="px-6 py-3 text-sm text-green-600">
+                      {Object.values(officerStats).reduce((s, o) => s + o.completed, 0)}
+                    </td>
+                    <td className="px-6 py-3 text-sm text-yellow-600">
+                      {Object.values(officerStats).reduce((s, o) => s + o.pending, 0)}
+                    </td>
+                    <td className="px-6 py-3 text-sm text-right text-gray-900">
+                      ${Object.values(officerStats).reduce((s, o) => s + o.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Recent Requests Table */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-mt-dark">Recent Requests</h2>
+            <h2 className="text-lg font-semibold text-mt-dark">
+              {isProcessor ? 'My Recent Requests' : 'All Recent Requests'}
+            </h2>
           </div>
 
           {requests.length > 0 ? (
@@ -205,38 +459,58 @@ export default async function DashboardPage() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Account</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Loan #</th>
+                    {(isManager || isAdmin) && (
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Officer</th>
+                    )}
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Source</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entities</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Submitted</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {requests.map((request) => (
-                    <tr key={request.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <code className="text-sm font-mono text-mt-dark">{request.account_number}</code>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(request.status)}`}>
-                          {formatStatus(request.status)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {request.request_entities?.length || 0} entity/entities
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{formatDate(request.created_at)}</td>
-                      <td className="px-6 py-4">
-                        <Link
-                          href={`/request/${request.id}`}
-                          className="text-mt-green hover:underline font-medium text-sm"
-                        >
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                  {requests.map((request) => {
+                    // Find officer name for manager view
+                    const officerProfile = teamProfiles.find((p) => p.id === request.requested_by);
+                    const officerName = officerProfile?.full_name || officerProfile?.email || '—';
+
+                    return (
+                      <tr key={request.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <code className="text-sm font-mono text-mt-dark">{request.loan_number}</code>
+                        </td>
+                        {(isManager || isAdmin) && (
+                          <td className="px-6 py-4 text-sm text-gray-600">{officerName}</td>
+                        )}
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(request.status)}`}
+                          >
+                            {formatStatus(request.status)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                            {intakeMethodLabel(request.intake_method)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {request.request_entities?.length || 0}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{formatDate(request.created_at)}</td>
+                        <td className="px-6 py-4">
+                          <Link
+                            href={`/request/${request.id}`}
+                            className="text-mt-green hover:underline font-medium text-sm"
+                          >
+                            View
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -246,7 +520,7 @@ export default async function DashboardPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               <p className="text-gray-500 font-medium mb-4">No requests yet</p>
-              <p className="text-gray-400 text-sm mb-6">Get started by submitting your first verification request.</p>
+              <p className="text-gray-400 text-sm mb-6">Get started by uploading a CSV or signed 8821 PDF.</p>
               <Link
                 href="/new"
                 className="inline-block bg-mt-green text-white px-6 py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors"

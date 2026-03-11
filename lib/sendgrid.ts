@@ -161,7 +161,7 @@ function createEmailTemplate(
  */
 export async function sendRequestConfirmation(
   email: string,
-  requestData: Request & { account_number: string }
+  requestData: Request & { loan_number: string }
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send email');
@@ -172,7 +172,7 @@ export async function sendRequestConfirmation(
 <p>Your verification request has been successfully submitted.</p>
 <p><strong>Request Details:</strong></p>
 <ul>
-  <li>Account Number: <code>${requestData.account_number}</code></li>
+  <li>Account Number: <code>${requestData.loan_number}</code></li>
   <li>Request ID: <code>${requestData.id}</code></li>
   <li>Submitted: ${new Date(requestData.created_at).toLocaleDateString()}</li>
 </ul>
@@ -348,5 +348,340 @@ export async function sendAdminFailureAlert(
   } catch (error) {
     console.error('Failed to send admin failure alert:', error);
     throw error;
+  }
+}
+
+/**
+ * Send expert assignment notification
+ * Notifies expert when new entities are assigned to them
+ */
+export async function sendExpertAssignmentNotification(
+  expertEmail: string,
+  entityNames: string[],
+  assignmentCount: number
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const entitiesList = entityNames.map((name) => `<li>${name}</li>`).join('');
+
+  const content = `
+<p>You have been assigned <strong>${assignmentCount}</strong> new ${assignmentCount === 1 ? 'entity' : 'entities'} for IRS transcript retrieval.</p>
+<p><strong>Assigned Entities:</strong></p>
+<ul>
+  ${entitiesList}
+</ul>
+<div class="stats">
+  <div class="stat-item">
+    <div class="stat-number">24h</div>
+    <div class="stat-label">SLA Deadline</div>
+  </div>
+</div>
+<p>Please log in to your Expert Queue to download the signed 8821 forms and begin processing. If you encounter any issues, use the Flag Issue feature to notify the admin team.</p>
+  `.trim();
+
+  const html = createEmailTemplate('New Assignment', content, {
+    text: 'View My Queue',
+    url: `${appUrl}/expert`,
+  });
+
+  try {
+    await sgMail.send({
+      to: expertEmail,
+      from: fromEmail,
+      subject: `New Assignment: ${assignmentCount} ${assignmentCount === 1 ? 'Entity' : 'Entities'} Ready`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert assignment notification:', error);
+  }
+}
+
+/**
+ * Send expert completion notification to admin
+ * Notifies admin when expert completes transcript upload
+ */
+export async function sendExpertCompletionNotification(
+  adminEmail: string,
+  expertName: string,
+  entityName: string,
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Expert <strong>${expertName}</strong> has completed transcript upload.</p>
+<p><strong>Details:</strong></p>
+<ul>
+  <li>Entity: ${entityName}</li>
+  <li>Completed: ${new Date().toLocaleString()}</li>
+</ul>
+<p>The transcripts are now available in the portal for review.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Transcript Upload Complete', content, {
+    text: 'Review Transcripts',
+    url: `${appUrl}/admin/requests/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `Expert Completed: ${entityName}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert completion notification:', error);
+  }
+}
+
+/**
+ * Send SLA warning to expert
+ * Notifies expert when their assignment is approaching the SLA deadline
+ */
+export async function sendSlaWarningNotification(
+  expertEmail: string,
+  entityName: string,
+  hoursRemaining: number
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Your assignment for <strong>${entityName}</strong> has <strong>${Math.round(hoursRemaining)} hours</strong> remaining before the SLA deadline.</p>
+<p>Please complete the transcript retrieval or flag any issues preventing completion.</p>
+  `.trim();
+
+  const html = createEmailTemplate('SLA Warning', content, {
+    text: 'View Assignment',
+    url: `${appUrl}/expert`,
+  });
+
+  try {
+    await sgMail.send({
+      to: expertEmail,
+      from: fromEmail,
+      subject: `SLA Warning: ${entityName} - ${Math.round(hoursRemaining)}h remaining`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send SLA warning notification:', error);
+  }
+}
+
+/**
+ * Send welcome email to newly invited user
+ * Includes temporary password for first login
+ */
+export async function sendWelcomeEmail(
+  email: string,
+  fullName: string,
+  role: string,
+  tempPassword: string,
+  clientName?: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const roleLabel = role === 'expert' ? 'IRS Expert' : role === 'admin' ? 'Administrator' : role === 'manager' ? 'Manager' : 'Team Member';
+  const contextLine = clientName
+    ? `<p>You've been added to the <strong>${clientName}</strong> organization as a <strong>${roleLabel}</strong>.</p>`
+    : `<p>You've been added to the ModernTax team as a <strong>${roleLabel}</strong>.</p>`;
+
+  const content = `
+<p>Welcome to ModernTax, ${fullName}!</p>
+${contextLine}
+<p>Your account has been created with the following credentials:</p>
+<div class="stats">
+  <p style="margin: 0;"><strong>Email:</strong> ${email}</p>
+  <p style="margin: 8px 0 0 0;"><strong>Temporary Password:</strong> <code style="background: #fff3cd; padding: 2px 8px; border-radius: 4px; font-size: 14px;">${tempPassword}</code></p>
+</div>
+<p><strong>Important:</strong> Please change your password after your first login and enable Multi-Factor Authentication (MFA) for account security.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Welcome to ModernTax', content, {
+    text: 'Log In Now',
+    url: `${appUrl}/login`,
+  });
+
+  try {
+    await sgMail.send({
+      to: email,
+      from: fromEmail,
+      subject: 'Welcome to ModernTax Portal — Your Account Is Ready',
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send welcome email:', error);
+  }
+}
+
+/**
+ * Send status change notification to the requesting user
+ * Triggered when admin updates a request or entity status
+ */
+export async function sendStatusChangeNotification(
+  email: string,
+  requestId: string,
+  loanNumber: string,
+  oldStatus: string,
+  newStatus: string,
+  entityName?: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const formatStatus = (s: string) =>
+    s.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+  const entityLine = entityName
+    ? `<li>Entity: ${entityName}</li>`
+    : '';
+
+  const statusMessage: Record<string, string> = {
+    '8821_sent': 'Your Form 8821 has been sent for e-signature. Please check your email for a signing request.',
+    '8821_signed': 'Your Form 8821 has been signed. We\'re now queuing it for IRS processing.',
+    'irs_queue': 'Your request is in the IRS processing queue. Transcripts are typically returned within 24 hours.',
+    'processing': 'Your IRS transcripts are being processed and analyzed.',
+    'completed': 'Your IRS transcripts are ready for download!',
+    'failed': 'There was an issue processing your request. Our team is looking into it.',
+  };
+
+  const message = statusMessage[newStatus] || `Your request status has been updated to ${formatStatus(newStatus)}.`;
+
+  const content = `
+<p>${message}</p>
+<p><strong>Request Details:</strong></p>
+<ul>
+  <li>Account Number: <code>${loanNumber}</code></li>
+  ${entityLine}
+  <li>Previous Status: ${formatStatus(oldStatus)}</li>
+  <li>New Status: <strong>${formatStatus(newStatus)}</strong></li>
+</ul>
+<p>Visit your portal dashboard for full details.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Request Status Update', content, {
+    text: 'View Request',
+    url: `${appUrl}/request/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: email,
+      from: fromEmail,
+      subject: `Status Update: ${loanNumber} — ${formatStatus(newStatus)}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send status change notification:', error);
+  }
+}
+
+/**
+ * Send expert issue notification to admin
+ * Triggered when expert flags an issue with an assignment
+ */
+export async function sendExpertIssueNotification(
+  adminEmail: string,
+  expertName: string,
+  entityName: string,
+  issueReason: string,
+  notes: string | null,
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Expert <strong>${expertName}</strong> has flagged an issue with an assignment.</p>
+<p><strong>Details:</strong></p>
+<ul>
+  <li>Entity: ${entityName}</li>
+  <li>Issue: <strong>${issueReason}</strong></li>
+  ${notes ? `<li>Notes: ${notes}</li>` : ''}
+  <li>Reported: ${new Date().toLocaleString()}</li>
+</ul>
+<p>Please review the assignment and take appropriate action (reassign, contact IRS, etc.).</p>
+  `.trim();
+
+  const html = createEmailTemplate('Expert Issue Flagged', content, {
+    text: 'Review Assignment',
+    url: `${appUrl}/admin/requests/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `[Action Required] Expert Issue: ${entityName} — ${issueReason}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert issue notification:', error);
+  }
+}
+
+/**
+ * Send notification to manager when a team member submits a new request
+ */
+export async function sendManagerNewRequestNotification(
+  managerEmail: string,
+  processorName: string,
+  loanNumber: string,
+  entityCount: number,
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p><strong>${processorName}</strong> submitted a new verification request.</p>
+<p><strong>Request Details:</strong></p>
+<ul>
+  <li>Account Number: <code>${loanNumber}</code></li>
+  <li>Entities: ${entityCount}</li>
+  <li>Submitted: ${new Date().toLocaleString()}</li>
+</ul>
+<p>You can track the progress of this request in your dashboard.</p>
+  `.trim();
+
+  const html = createEmailTemplate('New Team Request', content, {
+    text: 'View Request',
+    url: `${appUrl}/request/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: managerEmail,
+      from: fromEmail,
+      subject: `New Request: ${loanNumber} by ${processorName}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send manager notification:', error);
   }
 }

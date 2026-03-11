@@ -5,8 +5,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase';
+import { createAdminClient } from '@/lib/supabase-server';
 import { sendCompletionNotification, sendAdminFailureAlert } from '@/lib/sendgrid';
+import { logAuditFromRequest } from '@/lib/audit';
 import type { RequestStatus } from '@/lib/types';
 
 interface WebhookPayload {
@@ -23,11 +24,19 @@ interface WebhookPayload {
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createAdminClient();
+
     // Validate API key
     const apiKey = request.headers.get('x-api-key');
     const expectedApiKey = process.env.WEBHOOK_API_KEY;
 
     if (!apiKey || !expectedApiKey || apiKey !== expectedApiKey) {
+      // Audit log: unauthorized webhook attempt
+      await logAuditFromRequest(supabase, request, {
+        action: 'login_failed',
+        resourceType: 'webhook',
+        details: { reason: 'Invalid API key' },
+      });
       return NextResponse.json(
         { error: 'Unauthorized: Invalid API key' },
         { status: 401 }
@@ -45,14 +54,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createAdminClient();
-
     // Get request details
     const { data: requestData, error: fetchError } = await supabase
       .from('requests')
       .select('*, profiles:requested_by(email, full_name)')
       .eq('id', payload.request_id)
-      .single();
+      .single() as { data: any; error: any };
 
     if (fetchError || !requestData) {
       console.error('Request not found:', payload.request_id);
@@ -111,7 +118,7 @@ export async function POST(request: NextRequest) {
         const { data: entities } = await supabase
           .from('request_entities')
           .select('*')
-          .eq('request_id', payload.request_id);
+          .eq('request_id', payload.request_id) as { data: any[] | null; error: any };
 
         if (entities) {
           await sendCompletionNotification(
@@ -135,7 +142,7 @@ export async function POST(request: NextRequest) {
           .select('email')
           .eq('role', 'admin')
           .limit(1)
-          .single();
+          .single() as { data: { email: string } | null; error: any };
 
         if (adminData?.email) {
           await sendAdminFailureAlert(
@@ -149,6 +156,18 @@ export async function POST(request: NextRequest) {
         // Don't fail the webhook if email fails
       }
     }
+
+    // Audit log: webhook status update processed
+    await logAuditFromRequest(supabase, request, {
+      action: 'request_created',
+      resourceType: 'request',
+      resourceId: payload.request_id,
+      details: {
+        webhook_action: 'status_update',
+        new_status: payload.status,
+        entity_count: payload.entities?.length || 0,
+      },
+    });
 
     return NextResponse.json(
       {

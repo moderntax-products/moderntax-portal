@@ -30,7 +30,7 @@ export function RequestTable({ requests }: RequestTableProps) {
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                Account #
+                Loan #
               </th>
               <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                 Entities
@@ -54,7 +54,7 @@ export function RequestTable({ requests }: RequestTableProps) {
                 className="hover:bg-gray-50 cursor-pointer transition-colors"
               >
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                  {request.account_number}
+                  {request.loan_number}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                   <span className="bg-gray-100 px-2.5 py-1 rounded text-xs">-</span>
