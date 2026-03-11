@@ -63,60 +63,67 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
 }
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  try {
+    let supabaseResponse = NextResponse.next({
+      request,
+    });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value }) =>
+              request.cookies.set(name, value)
+            );
+            supabaseResponse = NextResponse.next({
+              request,
+            });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              supabaseResponse.cookies.set(name, value, {
+                ...options,
+                // SOC 2: Enforce secure cookie flags
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+              })
+            );
+          },
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({
-            request,
-          });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, {
-              ...options,
-              // SOC 2: Enforce secure cookie flags
-              httpOnly: true,
-              secure: process.env.NODE_ENV === 'production',
-              sameSite: 'lax',
-            })
-          );
-        },
-      },
+      }
+    );
+
+    // IMPORTANT: Do not use getSession() — use getUser() for security
+    // This also refreshes the session cookie if needed
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    // If no user and not on login/auth/api pages, redirect to login
+    if (
+      !user &&
+      !request.nextUrl.pathname.startsWith('/login') &&
+      !request.nextUrl.pathname.startsWith('/auth') &&
+      !request.nextUrl.pathname.startsWith('/api/')
+    ) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/login';
+      const redirectResponse = NextResponse.redirect(url);
+      return applySecurityHeaders(redirectResponse);
     }
-  );
 
-  // IMPORTANT: Do not use getSession() — use getUser() for security
-  // This also refreshes the session cookie if needed
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // If no user and not on login/auth/api pages, redirect to login
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    !request.nextUrl.pathname.startsWith('/api/')
-  ) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    const redirectResponse = NextResponse.redirect(url);
-    return applySecurityHeaders(redirectResponse);
+    // Apply SOC 2 security headers to all responses
+    return applySecurityHeaders(supabaseResponse);
+  } catch (error) {
+    // Log error details for debugging, still serve the page
+    console.error('Middleware error:', error);
+    const response = NextResponse.next({ request });
+    return applySecurityHeaders(response);
   }
-
-  // Apply SOC 2 security headers to all responses
-  return applySecurityHeaders(supabaseResponse);
 }
 
 export const config = {
