@@ -31,7 +31,8 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   );
 
   // Content Security Policy — restrict content sources
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  // .trim() prevents trailing newlines from env vars breaking Edge Runtime headers
+  const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
 
   const cspDirectives = [
     "default-src 'self'",
@@ -47,7 +48,9 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
     "form-action 'self'",
   ];
 
-  response.headers.set('Content-Security-Policy', cspDirectives.join('; '));
+  // Ensure no newlines in header value (Edge Runtime rejects them)
+  const cspValue = cspDirectives.join('; ').replace(/[\r\n]/g, ' ');
+  response.headers.set('Content-Security-Policy', cspValue);
 
   // Prevent caching of sensitive pages
   response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
