@@ -137,6 +137,12 @@ export default async function AdminPage() {
           </div>
           <div className="flex items-center gap-3">
             <Link
+              href="/admin/analytics"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Analytics
+            </Link>
+            <Link
               href="/admin/experts"
               className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >

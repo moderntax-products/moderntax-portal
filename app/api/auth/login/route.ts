@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { trackFromRequest } from '@/lib/analytics';
+import { createAdminClient } from '@/lib/supabase-server';
 
 export async function POST(request: NextRequest) {
   const { email, password } = await request.json();
@@ -43,6 +45,13 @@ export async function POST(request: NextRequest) {
       resourceType: 'auth',
       details: { email, reason: error.message },
     });
+    // Analytics: track failed login
+    const adminClient = createAdminClient();
+    await trackFromRequest(adminClient, request, {
+      type: 'login_failed',
+      userEmail: email,
+      metadata: { reason: error.message },
+    });
     return NextResponse.json({ error: error.message }, { status: 401 });
   }
 
@@ -51,6 +60,23 @@ export async function POST(request: NextRequest) {
     action: 'login',
     resourceType: 'auth',
     details: { email, method: 'password' },
+  });
+
+  // Analytics: track successful login
+  const adminClient = createAdminClient();
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role, client_id')
+    .eq('id', data.user?.id || '')
+    .single();
+
+  await trackFromRequest(adminClient, request, {
+    type: 'login',
+    userId: data.user?.id,
+    userEmail: email,
+    userRole: profile?.role || undefined,
+    clientId: profile?.client_id || undefined,
+    metadata: { method: 'password' },
   });
 
   return NextResponse.json({ success: true, user: data.user?.email });

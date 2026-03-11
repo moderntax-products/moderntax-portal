@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { trackFromRequest } from '@/lib/analytics';
 import { sendWelcomeEmail } from '@/lib/sendgrid';
 
 export async function POST(request: Request) {
@@ -152,6 +153,20 @@ export async function POST(request: Request) {
         invited_name: fullName,
         invited_role: role,
         client_id: clientId,
+      },
+    });
+
+    // Analytics: track signup
+    await trackFromRequest(adminSupabase, request, {
+      type: 'signup',
+      userId: newUser.user.id,
+      userEmail: email,
+      userRole: role,
+      clientId: isInternalRole ? undefined : clientId,
+      metadata: {
+        fullName,
+        invitedBy: user.email,
+        method: 'admin_invite',
       },
     });
 

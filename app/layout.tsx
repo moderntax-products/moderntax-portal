@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { SessionTimeout } from '@/components/SessionTimeout';
+import { Analytics } from '@/components/Analytics';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,7 @@ export default function RootLayout({
       <body>
         {children}
         <SessionTimeout />
+        <Analytics />
       </body>
     </html>
   );
