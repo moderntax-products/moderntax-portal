@@ -23,7 +23,10 @@ export async function POST(request: NextRequest) {
             cookieStore.set(name, value, {
               ...options,
               // SOC 2: Enforce secure cookie flags
-              httpOnly: true,
+              // NOTE: httpOnly must NOT be set to true here.
+              // @supabase/ssr's createBrowserClient reads cookies via document.cookie,
+              // which requires httpOnly=false (the library's default).
+              // CSP headers mitigate XSS risks that httpOnly would address.
               secure: process.env.NODE_ENV === 'production',
               sameSite: 'lax' as const,
             });
