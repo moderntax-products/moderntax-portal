@@ -4,7 +4,7 @@
  */
 
 import sgMail from '@sendgrid/mail';
-import type { Request, RequestEntity, DailyNudgeStats } from './types';
+import type { Request, RequestEntity, DailyNudgeStats, AdminDailySummaryStats, ManagerWeeklySummaryStats } from './types';
 
 // Initialize SendGrid
 const sendGridApiKey = process.env.SENDGRID_API_KEY;
@@ -153,6 +153,45 @@ function createEmailTemplate(
 </body>
 </html>
   `.trim();
+}
+
+/**
+ * Send password reset email
+ * Triggered when user requests a password reset via /forgot-password
+ */
+export async function sendPasswordResetEmail(
+  email: string,
+  name: string,
+  resetLink: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Hi ${name},</p>
+<p>We received a request to reset your password for the ModernTax Portal. Click the button below to set a new password:</p>
+<p style="font-size: 13px; color: #666; margin-top: 24px;"><strong>This link will expire in 24 hours.</strong> If you didn't request a password reset, you can safely ignore this email — your password will remain unchanged.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Password Reset', content, {
+    text: 'Reset My Password',
+    url: resetLink,
+  });
+
+  try {
+    await sgMail.send({
+      to: email,
+      from: fromEmail,
+      subject: 'Reset Your ModernTax Password',
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send password reset email:', error);
+    throw error;
+  }
 }
 
 /**
@@ -358,7 +397,8 @@ export async function sendAdminFailureAlert(
 export async function sendExpertAssignmentNotification(
   expertEmail: string,
   entityNames: string[],
-  assignmentCount: number
+  assignmentCount: number,
+  isEmployment?: boolean
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send email');
@@ -367,8 +407,16 @@ export async function sendExpertAssignmentNotification(
 
   const entitiesList = entityNames.map((name) => `<li>${name}</li>`).join('');
 
+  const taskDescription = isEmployment
+    ? 'Wage & Income transcript retrieval'
+    : 'IRS transcript retrieval';
+
+  const instructions = isEmployment
+    ? 'Please log in to your Expert Queue to pull Wage & Income transcripts from IRS and begin processing. If you encounter any issues, use the Flag Issue feature to notify the admin team.'
+    : 'Please log in to your Expert Queue to download the signed 8821 forms and begin processing. If you encounter any issues, use the Flag Issue feature to notify the admin team.';
+
   const content = `
-<p>You have been assigned <strong>${assignmentCount}</strong> new ${assignmentCount === 1 ? 'entity' : 'entities'} for IRS transcript retrieval.</p>
+<p>You have been assigned <strong>${assignmentCount}</strong> new ${assignmentCount === 1 ? 'entity' : 'entities'} for ${taskDescription}.</p>
 <p><strong>Assigned Entities:</strong></p>
 <ul>
   ${entitiesList}
@@ -379,7 +427,7 @@ export async function sendExpertAssignmentNotification(
     <div class="stat-label">SLA Deadline</div>
   </div>
 </div>
-<p>Please log in to your Expert Queue to download the signed 8821 forms and begin processing. If you encounter any issues, use the Flag Issue feature to notify the admin team.</p>
+<p>${instructions}</p>
   `.trim();
 
   const html = createEmailTemplate('New Assignment', content, {
@@ -489,7 +537,8 @@ export async function sendWelcomeEmail(
   fullName: string,
   role: string,
   tempPassword: string,
-  clientName?: string
+  clientName?: string,
+  resetLink?: string
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send email');
@@ -501,32 +550,46 @@ export async function sendWelcomeEmail(
     ? `<p>You've been added to the <strong>${clientName}</strong> organization as a <strong>${roleLabel}</strong>.</p>`
     : `<p>You've been added to the ModernTax team as a <strong>${roleLabel}</strong>.</p>`;
 
-  const content = `
-<p>Welcome to ModernTax, ${fullName}!</p>
-${contextLine}
-<p>Your account has been created with the following credentials:</p>
+  // If we have a reset link, use a cleaner email without plaintext password
+  // (plaintext passwords in emails trigger spam filters on iCloud, Gmail, etc.)
+  const credentialsBlock = resetLink
+    ? `
+<div class="stats">
+  <p style="margin: 0;"><strong>Email:</strong> ${email}</p>
+</div>
+<p>Click the button below to set your password and log in for the first time.</p>
+    `
+    : `
 <div class="stats">
   <p style="margin: 0;"><strong>Email:</strong> ${email}</p>
   <p style="margin: 8px 0 0 0;"><strong>Temporary Password:</strong> <code style="background: #fff3cd; padding: 2px 8px; border-radius: 4px; font-size: 14px;">${tempPassword}</code></p>
 </div>
-<p><strong>Important:</strong> Please change your password after your first login and enable Multi-Factor Authentication (MFA) for account security.</p>
+<p><strong>Important:</strong> Please change your password after your first login.</p>
+    `;
+
+  const content = `
+<p>Welcome to ModernTax, ${fullName}!</p>
+${contextLine}
+<p>Your account has been created.</p>
+${credentialsBlock}
   `.trim();
 
   const html = createEmailTemplate('Welcome to ModernTax', content, {
-    text: 'Log In Now',
-    url: `${appUrl}/login`,
+    text: resetLink ? 'Set Password & Log In' : 'Log In Now',
+    url: resetLink || `${appUrl}/login`,
   });
 
   try {
     await sgMail.send({
       to: email,
       from: fromEmail,
-      subject: 'Welcome to ModernTax Portal — Your Account Is Ready',
+      subject: 'Welcome to ModernTax — Set Up Your Account',
       html,
       replyTo: 'support@moderntax.io',
     });
   } catch (error) {
     console.error('Failed to send welcome email:', error);
+    throw error; // Re-throw so caller can handle/report
   }
 }
 
@@ -665,11 +728,11 @@ export async function sendManagerNewRequestNotification(
   <li>Entities: ${entityCount}</li>
   <li>Submitted: ${new Date().toLocaleString()}</li>
 </ul>
-<p>You can track the progress of this request in your dashboard.</p>
+<p>Click below to review the request details and 8821 form information.</p>
   `.trim();
 
   const html = createEmailTemplate('New Team Request', content, {
-    text: 'View Request',
+    text: 'Review Request',
     url: `${appUrl}/request/${requestId}`,
   });
 
@@ -683,5 +746,335 @@ export async function sendManagerNewRequestNotification(
     });
   } catch (error) {
     console.error('Failed to send manager notification:', error);
+  }
+}
+
+/**
+ * Send admin notification when a new request is submitted
+ * Includes entity details and direct link to admin request page for assignment
+ */
+export async function sendAdminNewRequestNotification(
+  adminEmail: string,
+  submitterName: string,
+  submitterRole: string,
+  clientName: string,
+  loanNumber: string,
+  entityCount: number,
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const isApi = submitterRole === 'api';
+  const roleLabel = isApi ? 'API' : submitterRole === 'manager' ? 'Manager' : 'Processor';
+
+  const actionLine = isApi
+    ? 'Review the request and assign to an expert for Wage & Income transcript retrieval.'
+    : 'Review the 8821 forms and assign to an expert when ready.';
+
+  const content = `
+<p><strong>${submitterName}</strong> (${roleLabel} at ${clientName}) submitted a new verification request.</p>
+<p><strong>Request Details:</strong></p>
+<ul>
+  <li>Account Number: <code>${loanNumber}</code></li>
+  <li>Entities: ${entityCount}</li>
+  <li>Client: ${clientName}</li>
+  <li>Submitted: ${new Date().toLocaleString()}</li>
+</ul>
+<p>${actionLine}</p>
+  `.trim();
+
+  const html = createEmailTemplate('New Request Submitted', content, {
+    text: 'Review & Assign',
+    url: `${appUrl}/admin/requests/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `New Request: ${loanNumber} — ${clientName} (${entityCount} ${entityCount === 1 ? 'entity' : 'entities'})`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send admin new request notification:', error);
+  }
+}
+
+/**
+ * Send admin notification when all entities on a request have signer emails
+ * and are ready for 8821 preparation in Dropbox Sign
+ */
+export async function sendAdminReadyFor8821Notification(
+  adminEmail: string,
+  processorName: string,
+  clientName: string,
+  loanNumber: string,
+  entities: { entity_name: string; signer_email: string; form_type: string }[],
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const entityRows = entities
+    .map((e) => `<li><strong>${e.entity_name}</strong> (${e.form_type}) → ${e.signer_email}</li>`)
+    .join('\n');
+
+  const content = `
+<p>All entities for <strong>Loan ${loanNumber}</strong> (${clientName}) now have signer email addresses and are ready for 8821 preparation.</p>
+<p><strong>Updated by:</strong> ${processorName}</p>
+<p><strong>Entities ready for 8821:</strong></p>
+<ul>
+${entityRows}
+</ul>
+<p><strong>Next step:</strong> Create and send the 8821 forms via Dropbox Sign to the signer emails listed above.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Ready for 8821 Preparation', content, {
+    text: 'View Request',
+    url: `${appUrl}/admin/requests/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `🟢 Ready for 8821: Loan ${loanNumber} — ${clientName} (${entities.length} ${entities.length === 1 ? 'entity' : 'entities'})`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send admin ready-for-8821 notification:', error);
+  }
+}
+
+/**
+ * Send daily summary to admin
+ * Includes completions, errors, new requests, expert activity, and SLA compliance
+ */
+export async function sendAdminDailySummary(
+  adminEmail: string,
+  stats: AdminDailySummaryStats,
+  date: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Here is your daily operations summary for <strong>${date}</strong>.</p>
+
+<div class="stats">
+  <div class="stat-item">
+    <div class="stat-number">${stats.new_requests_today}</div>
+    <div class="stat-label">New Entities</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">${stats.completions_today}</div>
+    <div class="stat-label">Completed</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number" style="color: ${stats.failures_today > 0 ? '#e53e3e' : '#00C48C'}">${stats.failures_today}</div>
+    <div class="stat-label">Failed</div>
+  </div>
+</div>
+
+<p><strong>Operations Overview:</strong></p>
+<ul>
+  <li>Active entities in pipeline: <strong>${stats.active_requests}</strong></li>
+  <li>Entities completed today: <strong>${stats.total_entities_completed_today}</strong></li>
+  <li>Entities pending: <strong>${stats.total_entities_pending}</strong></li>
+</ul>
+
+<p><strong>Expert Activity:</strong></p>
+<ul>
+  <li>Expert transcript completions today: <strong>${stats.expert_completions_today}</strong></li>
+  <li>Expert SLA compliance rate: <strong>${stats.expert_sla_compliance}%</strong></li>
+</ul>
+
+<p><strong>Estimated Revenue:</strong></p>
+<ul>
+  <li>Entities completed today: ${stats.total_entities_completed_today} &times; $50 = <strong>$${(stats.total_entities_completed_today * 50).toLocaleString()}</strong></li>
+</ul>
+
+<p>Visit the admin dashboard for full details and to manage assignments.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Daily Operations Summary', content, {
+    text: 'Open Admin Dashboard',
+    url: `${appUrl}/admin`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `ModernTax Daily Summary — ${date}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send admin daily summary:', error);
+  }
+}
+
+/**
+ * Send weekly team summary to manager
+ * Includes team completions, requests, errors, and per-processor breakdown
+ */
+export async function sendManagerWeeklySummary(
+  managerEmail: string,
+  managerName: string,
+  clientName: string,
+  stats: ManagerWeeklySummaryStats,
+  weekRange: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const processorRows = stats.processor_breakdown.length > 0
+    ? stats.processor_breakdown.map(
+        (p) => `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;">${p.name}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">${p.submitted}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">${p.completed}</td></tr>`
+      ).join('')
+    : '<tr><td colspan="3" style="padding:8px 12px;text-align:center;color:#999;">No activity this week</td></tr>';
+
+  const avgTurnaround = stats.avg_turnaround_hours !== null
+    ? `${Math.round(stats.avg_turnaround_hours)} hours`
+    : 'N/A';
+
+  const content = `
+<p>Hi ${managerName},</p>
+<p>Here is your weekly team summary for <strong>${clientName}</strong> — ${weekRange}.</p>
+
+<div class="stats">
+  <div class="stat-item">
+    <div class="stat-number">${stats.requests_submitted}</div>
+    <div class="stat-label">Entities Submitted</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">${stats.requests_completed}</div>
+    <div class="stat-label">Entities Completed</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number" style="color: ${stats.requests_failed > 0 ? '#e53e3e' : '#00C48C'}">${stats.requests_failed}</div>
+    <div class="stat-label">Entities Failed</div>
+  </div>
+</div>
+
+<p><strong>Performance:</strong></p>
+<ul>
+  <li>Average turnaround time: <strong>${avgTurnaround}</strong></li>
+</ul>
+
+<p><strong>Team Breakdown:</strong></p>
+<table style="width:100%;border-collapse:collapse;border:1px solid #eee;border-radius:4px;margin:16px 0;">
+  <thead>
+    <tr style="background:#f9f9f9;">
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #00C48C;font-size:13px;">Processor</th>
+      <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #00C48C;font-size:13px;">Entities Submitted</th>
+      <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #00C48C;font-size:13px;">Entities Completed</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${processorRows}
+  </tbody>
+</table>
+
+<p>Visit the dashboard to view full details and manage your team's requests.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Weekly Team Summary', content, {
+    text: 'View Dashboard',
+    url: `${appUrl}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: managerEmail,
+      from: fromEmail,
+      subject: `Weekly Team Summary: ${clientName} — ${weekRange}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send manager weekly summary:', error);
+  }
+}
+
+/**
+ * Send weekly summary to processor
+ * Shows their own request activity for the week
+ */
+export async function sendProcessorWeeklySummary(
+  processorEmail: string,
+  processorName: string,
+  clientName: string,
+  stats: {
+    requests_submitted: number;
+    requests_completed: number;
+    requests_pending: number;
+    avg_turnaround_hours: number | null;
+  },
+  weekRange: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const avgTurnaround = stats.avg_turnaround_hours !== null
+    ? `${Math.round(stats.avg_turnaround_hours)} hours`
+    : 'N/A';
+
+  const content = `
+<p>Hi ${processorName},</p>
+<p>Here is your weekly summary for <strong>${clientName}</strong> — ${weekRange}.</p>
+
+<div class="stats">
+  <div class="stat-item">
+    <div class="stat-number">${stats.requests_submitted}</div>
+    <div class="stat-label">Entities Submitted</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">${stats.requests_completed}</div>
+    <div class="stat-label">Entities Completed</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">${stats.requests_pending}</div>
+    <div class="stat-label">Entities Pending</div>
+  </div>
+</div>
+
+<p><strong>Performance:</strong></p>
+<ul>
+  <li>Average turnaround time: <strong>${avgTurnaround}</strong></li>
+</ul>
+
+<p>Visit the dashboard to view your requests and submit new ones.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Weekly Request Summary', content, {
+    text: 'View Dashboard',
+    url: `${appUrl}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: processorEmail,
+      from: fromEmail,
+      subject: `Weekly Summary: ${clientName} — ${weekRange}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send processor weekly summary:', error);
   }
 }
