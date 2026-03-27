@@ -3,6 +3,8 @@ import { createServerComponentClient } from '@/lib/supabase-server';
 import type { RequestEntity } from '@/lib/types';
 import { maskTid } from '@/lib/mask';
 import Link from 'next/link';
+import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
+import { EditEntityButton } from '@/components/EditEntityButton';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -180,6 +182,12 @@ export default async function RequestDetailPage({ params }: Props) {
                               </p>
                             </div>
                           )}
+                          {entity.signer_email && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase tracking-wide">Signer Email</p>
+                              <p className="text-sm text-blue-600">{entity.signer_email}</p>
+                            </div>
+                          )}
                         </div>
                         {/* Address */}
                         {entity.address && (
@@ -188,23 +196,41 @@ export default async function RequestDetailPage({ params }: Props) {
                           </p>
                         )}
                       </div>
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(entity.status)}`}>
-                        {formatStatus(entity.status)}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <EditEntityButton
+                          entityId={entity.id}
+                          entityName={entity.entity_name}
+                          currentSignerEmail={entity.signer_email}
+                          currentAddress={entity.address}
+                          currentCity={entity.city}
+                          currentState={entity.state}
+                          currentZipCode={entity.zip_code}
+                          status={entity.status}
+                        />
+                        <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(entity.status)}`}>
+                          {formatStatus(entity.status)}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Signed 8821 */}
                     {entity.signed_8821_url && (
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4 flex items-center gap-3">
-                        <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        <span className="text-sm text-green-700 font-medium">Signed 8821 on file</span>
-                        {entity.signature_id && (
-                          <span className="text-xs text-green-600 font-mono ml-auto">
-                            Sig: {entity.signature_id}
-                          </span>
-                        )}
+                      <div className="mb-4">
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3 mb-2">
+                          <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          <span className="text-sm text-green-700 font-medium">Signed 8821 on file</span>
+                          {entity.signature_id && (
+                            <span className="text-xs text-green-600 font-mono ml-auto">
+                              Sig: {entity.signature_id}
+                            </span>
+                          )}
+                        </div>
+                        <TranscriptDownloadLink
+                          storagePath={entity.signed_8821_url}
+                          label="Download Signed 8821"
+                        />
                       </div>
                     )}
 
@@ -242,19 +268,12 @@ export default async function RequestDetailPage({ params }: Props) {
                       <div className="border-t border-gray-200 pt-6">
                         <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Transcript Downloads</h4>
                         <div className="space-y-2">
-                          {entity.transcript_urls.map((url, idx) => (
-                            <a
+                          {entity.transcript_urls.map((url: string, idx: number) => (
+                            <TranscriptDownloadLink
                               key={idx}
-                              href={url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
-                            >
-                              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                              </svg>
-                              <p className="text-sm font-medium text-blue-600">Transcript {idx + 1}</p>
-                            </a>
+                              storagePath={url}
+                              label={`Transcript ${idx + 1}`}
+                            />
                           ))}
                         </div>
                       </div>

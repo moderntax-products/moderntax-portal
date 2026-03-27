@@ -80,20 +80,8 @@ export async function POST(request: Request) {
           details: { admin_action: 'status_update', new_status: status, old_status: oldStatus, notes },
         });
 
-        // Send status change email to requesting user
-        if (currentRequest?.profiles?.email && oldStatus !== status) {
-          try {
-            await sendStatusChangeNotification(
-              currentRequest.profiles.email,
-              requestId,
-              currentRequest.loan_number || requestId,
-              oldStatus,
-              status
-            );
-          } catch (emailError) {
-            console.error('Failed to send status change email:', emailError);
-          }
-        }
+        // Request-level status changes don't email processors
+        // Processors only get notified on entity-level 8821_signed and completed transitions
 
         return NextResponse.json({ success: true });
       }
@@ -142,7 +130,8 @@ export async function POST(request: Request) {
         });
 
         // Send status change email for key entity status transitions
-        const notifiableStatuses = ['8821_sent', '8821_signed', 'irs_queue', 'completed', 'failed'];
+        // Processors only get notified on 8821_signed and completed
+        const notifiableStatuses = ['8821_signed', 'completed'];
         if (notifiableStatuses.includes(status) && oldEntityStatus !== status && currentEntity?.requests?.profiles?.email) {
           try {
             await sendStatusChangeNotification(

@@ -26,22 +26,28 @@ export enum FormType {
   FORM_1065 = '1065',
   FORM_1120 = '1120',
   FORM_1120S = '1120S',
+  FORM_W2_INCOME = 'W2_INCOME',
 }
 
 export type TidKind = 'EIN' | 'SSN';
 
-export type IntakeMethod = 'csv' | 'pdf' | 'manual';
+export type IntakeMethod = 'csv' | 'pdf' | 'manual' | 'api';
+
+export type ProductType = 'transcript' | 'employment';
 
 export type UserRole = 'processor' | 'manager' | 'admin' | 'expert';
 
-export type NotificationType = 'confirmation' | 'completion' | 'nudge' | 'batch_complete' | 'expert_assigned' | 'expert_completed' | 'expert_issue' | 'sla_warning';
+export type NotificationType = 'confirmation' | 'completion' | 'nudge' | 'batch_complete' | 'expert_assigned' | 'expert_completed' | 'expert_issue' | 'sla_warning' | 'admin_daily_summary' | 'manager_weekly_summary';
+
+export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
+export type PaymentMethod = 'ach' | 'wire';
 
 export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'failed' | 'reassigned';
 
 export type BatchStatus = 'processing' | 'completed' | 'failed';
 
 /**
- * Client - A lending partner (Centerstone, TMC Financing, Clearfirm)
+ * Client - A lending partner (Centerstone, TMC Financing, Clearfirm) or API client (Employer.com)
  */
 export interface Client {
   id: string;
@@ -50,6 +56,35 @@ export interface Client {
   domain: string | null;
   logo_url: string | null;
   intake_methods: IntakeMethod[];
+  api_key: string | null;
+  api_request_limit: number | null;
+  billing_payment_method: PaymentMethod | null;
+  billing_ap_email: string | null;
+  billing_ap_phone: string | null;
+  billing_rate_pdf: number;
+  billing_rate_csv: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Invoice - Monthly billing record for a client
+ */
+export interface Invoice {
+  id: string;
+  client_id: string;
+  invoice_number: string;
+  billing_period_start: string;
+  billing_period_end: string;
+  total_entities: number;
+  total_amount: number;
+  status: InvoiceStatus;
+  payment_method: PaymentMethod | null;
+  mercury_reference: string | null;
+  due_date: string | null;
+  sent_at: string | null;
+  paid_at: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,8 +96,18 @@ export interface Profile {
   id: string;
   email: string;
   full_name: string | null;
+  title: string | null;
   role: UserRole;
   client_id: string | null;
+  // Expert credential fields (Form 8821 Section 2)
+  caf_number: string | null;
+  ptin: string | null;
+  phone_number: string | null;
+  fax_number: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,7 +130,7 @@ export interface Batch {
 }
 
 /**
- * Request - One per loan/credit application
+ * Request - One per loan/credit application or employment verification
  */
 export interface Request {
   id: string;
@@ -94,10 +139,48 @@ export interface Request {
   batch_id: string | null;
   loan_number: string;
   intake_method: IntakeMethod;
+  product_type: ProductType;
+  external_request_token: string | null;
   status: RequestStatus;
   notes: string | null;
   created_at: string;
   updated_at: string;
+  completed_at: string | null;
+}
+
+/**
+ * EmploymentData - Structured W-2/1099 employment verification data
+ */
+export interface EmploymentEmployer {
+  ein: string;
+  name: string;
+  address: string;
+  gross_earnings: number;
+  form_type?: string;
+  is_peo?: boolean;
+}
+
+export interface EmploymentYearData {
+  total_w2_income?: number;
+  total_income?: number;
+  employers: EmploymentEmployer[];
+}
+
+export interface EmploymentData {
+  request_id: string;
+  status: string;
+  timestamp: string;
+  taxpayer: {
+    ssn_last_four: string;
+    name: string;
+  };
+  employment_by_year: Record<string, EmploymentYearData>;
+  summary: {
+    total_employers: number;
+    total_w2_income?: number;
+    total_income?: number;
+    years_covered: number[];
+  };
   completed_at: string | null;
 }
 
@@ -118,10 +201,12 @@ export interface RequestEntity {
   years: string[];
   signer_first_name: string | null;
   signer_last_name: string | null;
+  signer_email: string | null;
   signature_id: string | null;
   signature_created_at: string | null;
   signed_8821_url: string | null;
   status: EntityStatus;
+  employment_data: EmploymentData | null;
   gross_receipts: Record<string, unknown> | null;
   compliance_score: number | null;
   transcript_urls: string[] | null;
@@ -196,6 +281,36 @@ export interface DailyNudgeStats {
   completed_count: number;
   in_progress_count: number;
   oldest_pending_days: number | null;
+}
+
+/**
+ * AdminDailySummaryStats - Aggregated daily stats for admin email
+ */
+export interface AdminDailySummaryStats {
+  new_requests_today: number;
+  completions_today: number;
+  failures_today: number;
+  expert_completions_today: number;
+  active_requests: number;
+  expert_sla_compliance: number; // percentage
+  total_entities_completed_today: number;
+  total_entities_pending: number;
+}
+
+/**
+ * ManagerWeeklySummaryStats - Aggregated weekly stats for manager email
+ */
+export interface ManagerWeeklySummaryStats {
+  requests_submitted: number;
+  requests_completed: number;
+  requests_failed: number;
+  entities_completed: number;
+  avg_turnaround_hours: number | null;
+  processor_breakdown: {
+    name: string;
+    submitted: number;
+    completed: number;
+  }[];
 }
 
 /**

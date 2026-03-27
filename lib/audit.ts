@@ -35,7 +35,11 @@ export type AuditAction =
   | 'expert_assigned'
   | 'expert_completed'
   | 'expert_issue_flagged'
-  | 'expert_transcript_uploaded';
+  | 'expert_transcript_uploaded'
+  | 'client_created'
+  | 'employment_request_received'
+  | 'employment_result_retrieved'
+  | 'invite_resent';
 
 export interface AuditEvent {
   action: AuditAction;

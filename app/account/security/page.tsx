@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/LogoutButton';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { MfaSetup } from '@/components/MfaSetup';
+import { ChangePasswordForm } from '@/components/ChangePasswordForm';
 
 export default async function SecuritySettingsPage() {
   let supabase;
@@ -98,6 +99,13 @@ export default async function SecuritySettingsPage() {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Change Password */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold text-mt-dark mb-2">Change Password</h2>
+          <p className="text-sm text-gray-500 mb-4">Update your account password. You will remain logged in after changing it.</p>
+          <ChangePasswordForm />
         </div>
 
         {/* MFA Section */}

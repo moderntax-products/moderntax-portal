@@ -3,6 +3,7 @@ import { createServerComponentClient } from '@/lib/supabase-server';
 import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { InviteUserForm } from '@/components/InviteUserForm';
+import { RoleSelector } from '@/components/RoleSelector';
 
 export default async function ManagerTeamPage() {
   const supabase = await createServerComponentClient();
@@ -65,13 +66,7 @@ export default async function ManagerTeamPage() {
       day: 'numeric',
     });
 
-  const getRoleBadgeColor = (role: string) => {
-    switch (role) {
-      case 'manager': return 'bg-blue-100 text-blue-800';
-      case 'processor': return 'bg-gray-100 text-gray-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
-  };
+
 
   // Manager can only invite processors to their own client
   const clientList = client ? [{ id: client.id, name: client.name }] : [];
@@ -145,9 +140,12 @@ export default async function ManagerTeamPage() {
                           <span className="text-sm text-gray-600">{member.email}</span>
                         </td>
                         <td className="px-6 py-4">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold capitalize ${getRoleBadgeColor(member.role)}`}>
-                            {member.role}
-                          </span>
+                          <RoleSelector
+                            userId={member.id}
+                            currentRole={member.role}
+                            callerRole="manager"
+                            userName={member.full_name || member.email}
+                          />
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">{stats.total}</td>
                         <td className="px-6 py-4">

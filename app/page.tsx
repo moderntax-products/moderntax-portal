@@ -74,7 +74,7 @@ export default async function DashboardPage() {
     // Build the query — all client requests for managers, own-only for processors
     let query = supabase
       .from('requests')
-      .select('*, request_entities(id, status)')
+      .select('*, request_entities(id, status, completed_at, created_at)')
       .eq('client_id', profile.client_id)
       .order('created_at', { ascending: false });
 
@@ -88,22 +88,29 @@ export default async function DashboardPage() {
       allClientRequests = fetchedRequests;
       requests = fetchedRequests.slice(0, 20); // Show up to 20 in the table
 
-      stats.total = fetchedRequests.length;
-      stats.pending = fetchedRequests.filter((r) => r.status !== 'completed' && r.status !== 'failed').length;
+      // Count at entity level (each EIN/SSN is a unique request unit)
+      const allEntities = fetchedRequests.flatMap((r: any) => r.request_entities || []);
+      stats.total = allEntities.length;
+      stats.pending = allEntities.filter((e: any) => e.status !== 'completed' && e.status !== 'failed').length;
 
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
-      stats.completedThisWeek = fetchedRequests.filter(
-        (r) => r.status === 'completed' && r.completed_at && new Date(r.completed_at) > weekAgo
+      // Count entities completed this week (entities have completed_at via expert flow)
+      const completedEntities = allEntities.filter((e: any) => e.status === 'completed');
+      stats.completedThisWeek = completedEntities.filter(
+        (e: any) => e.completed_at && new Date(e.completed_at) > weekAgo
       ).length;
 
-      const completedRequests = fetchedRequests.filter((r) => r.completed_at);
-      if (completedRequests.length > 0) {
-        const avgMs =
-          completedRequests.reduce((sum, r) => {
-            return sum + (new Date(r.completed_at).getTime() - new Date(r.created_at).getTime());
-          }, 0) / completedRequests.length;
-        stats.avgTurnaround = Math.round(avgMs / (1000 * 60 * 60 * 24));
+      if (completedEntities.length > 0) {
+        // Average turnaround per entity (use entity created_at to completed_at)
+        const entitiesWithTimes = completedEntities.filter((e: any) => e.completed_at && e.created_at);
+        if (entitiesWithTimes.length > 0) {
+          const avgMs =
+            entitiesWithTimes.reduce((sum: number, e: any) => {
+              return sum + (new Date(e.completed_at).getTime() - new Date(e.created_at).getTime());
+            }, 0) / entitiesWithTimes.length;
+          stats.avgTurnaround = Math.round(avgMs / (1000 * 60 * 60 * 24));
+        }
       }
     }
 
@@ -126,45 +133,53 @@ export default async function DashboardPage() {
         // Billing rates by intake method
         const RATE_PDF = 59.98;   // Per entity with signed 8821 PDF
         const RATE_CSV = 69.98;   // Per unique EIN on CSV/Excel upload
-        // Discovery/Entity Transcript: $15.00 per unique EIN (applied when form_type support is added)
-        const FREE_REQUESTS_PER_ACCOUNT = 3;
+        const FREE_ENTITIES_PER_ACCOUNT = 3;
 
-        // Count total billable requests across all officers (account-level free tier)
-        // Free trial gives first 3 requests free; once trial is completed, all requests are billed
-        let freeRequestIds = new Set<string>();
+        // Flatten all entities with their request context for entity-level counting
+        const allEntityRows = allClientRequests.flatMap((req: any) =>
+          (req.request_entities || []).map((e: any) => ({
+            ...e,
+            requested_by: req.requested_by,
+            intake_method: req.intake_method,
+            request_created_at: req.created_at,
+          }))
+        );
+
+        // Free trial gives first 3 entities free (sorted by creation time)
+        let freeEntityIds = new Set<string>();
         if (clientFreeTrial) {
-          const billableRequests = allClientRequests
-            .filter((r: any) => r.status !== 'failed')
-            .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-          freeRequestIds = new Set(billableRequests.slice(0, FREE_REQUESTS_PER_ACCOUNT).map((r: any) => r.id));
+          const billableEntities = allEntityRows
+            .filter((e: any) => e.status !== 'failed')
+            .sort((a: any, b: any) => new Date(a.created_at || a.request_created_at).getTime() - new Date(b.created_at || b.request_created_at).getTime());
+          freeEntityIds = new Set(billableEntities.slice(0, FREE_ENTITIES_PER_ACCOUNT).map((e: any) => e.id));
         }
 
-        // Build per-officer stats from all client requests
-        allClientRequests.forEach((req: any) => {
-          const officerId = req.requested_by;
+        // Build per-officer stats from all entities
+        allEntityRows.forEach((entity: any) => {
+          const officerId = entity.requested_by;
           const officerName = nameLookup[officerId] || 'Unknown';
 
           if (!officerStats[officerId]) {
             officerStats[officerId] = { name: officerName, total: 0, completed: 0, pending: 0, amount: 0 };
           }
           officerStats[officerId].total += 1;
-          const entityCount = req.request_entities?.length || 0;
 
-          // Determine per-entity rate based on intake method
-          const rate = req.intake_method === 'csv' ? RATE_CSV : RATE_PDF;
-          const isFreeRequest = freeRequestIds.has(req.id);
+          const rate = entity.intake_method === 'csv' ? RATE_CSV : RATE_PDF;
+          const isFreeEntity = freeEntityIds.has(entity.id);
 
-          if (req.status === 'completed') {
+          if (entity.status === 'completed') {
             officerStats[officerId].completed += 1;
-            if (!isFreeRequest) {
-              officerStats[officerId].amount += entityCount * rate;
+            if (!isFreeEntity) {
+              officerStats[officerId].amount += rate;
             }
-          } else if (req.status !== 'failed') {
+          } else if (entity.status === 'failed') {
+            // Don't count failed entities as pending
+          } else {
             officerStats[officerId].pending += 1;
-            // Signed/pending items are also billable
-            if (['8821_signed', 'irs_queue', 'processing'].includes(req.status)) {
-              if (!isFreeRequest) {
-                officerStats[officerId].amount += entityCount * rate;
+            // Signed/in-progress entities are also billable
+            if (['8821_signed', 'irs_queue', 'processing', 'completed'].includes(entity.status)) {
+              if (!isFreeEntity) {
+                officerStats[officerId].amount += rate;
               }
             }
           }
@@ -276,15 +291,29 @@ export default async function DashboardPage() {
                 ⚙️ Admin
               </Link>
             )}
-            {/* Manager Team Link */}
+            {/* Manager Navigation */}
             {isManager && (
-              <Link
-                href="/team"
-                className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                👥 My Team
-              </Link>
+              <>
+                <Link
+                  href="/invoicing"
+                  className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Invoicing
+                </Link>
+                <Link
+                  href="/team"
+                  className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  My Team
+                </Link>
+              </>
             )}
+            <Link
+              href="/account/security"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Settings
+            </Link>
             {/* MFA Status Badge */}
             {hasMfaEnabled ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-100 text-green-800">
@@ -320,7 +349,7 @@ export default async function DashboardPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-gray-600 text-sm font-medium">
-                  {isProcessor ? 'My Requests' : 'Team Requests'}
+                  {isProcessor ? 'My Entities' : 'Team Entities'}
                 </p>
                 <p className="text-3xl font-bold text-mt-dark mt-2">{stats.total}</p>
               </div>

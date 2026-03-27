@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 interface Client {
   id: string;
@@ -22,41 +23,87 @@ interface InviteResult {
   tempPassword: string;
 }
 
+interface InviteResponse {
+  success: boolean;
+  emailSent: boolean;
+  emailError: string | null;
+  user: InviteResult;
+}
+
 export function InviteUserForm({ clients = [], managerMode = false, internalMode = false, defaultRole }: InviteUserFormProps) {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState(defaultRole || (internalMode ? 'admin' : 'processor'));
   const [clientId, setClientId] = useState(clients[0]?.id || '');
+  const [newClientName, setNewClientName] = useState('');
 
   const isInternalRole = role === 'admin' || role === 'expert';
+  const isNewClient = clientId === '__new__';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<InviteResult | null>(null);
+  const [emailStatus, setEmailStatus] = useState<{ sent: boolean; error: string | null } | null>(null);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     setResult(null);
+    setEmailStatus(null);
 
     try {
+      let resolvedClientId = isInternalRole ? null : clientId;
+
+      // If adding a new client, create it first
+      if (!isInternalRole && isNewClient) {
+        if (!newClientName.trim()) {
+          setError('Please enter a client name');
+          setLoading(false);
+          return;
+        }
+
+        const clientRes = await fetch('/api/admin/create-client', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newClientName.trim() }),
+        });
+
+        const clientData = await clientRes.json();
+
+        if (!clientRes.ok) {
+          setError(clientData.error || 'Failed to create client');
+          setLoading(false);
+          return;
+        }
+
+        resolvedClientId = clientData.client.id;
+      }
+
       const res = await fetch('/api/admin/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, fullName, role, clientId: isInternalRole ? null : clientId }),
+        body: JSON.stringify({ email, fullName, role, clientId: resolvedClientId }),
       });
 
-      const data = await res.json();
+      const data = await res.json() as InviteResponse;
 
       if (!res.ok) {
-        setError(data.error || 'Failed to invite user');
+        setError((data as any).error || 'Failed to invite user');
         return;
       }
 
       setResult(data.user);
+      setEmailStatus({ sent: data.emailSent, error: data.emailError });
       setEmail('');
       setFullName('');
+      setNewClientName('');
       setRole(defaultRole || (internalMode ? 'admin' : 'processor'));
+
+      // Refresh the page to update client list if a new client was created
+      if (isNewClient) {
+        router.refresh();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to invite user');
     } finally {
@@ -85,7 +132,7 @@ export function InviteUserForm({ clients = [], managerMode = false, internalMode
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="jane@teamcenterstone.com"
+              placeholder="jane@company.com"
               required
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent text-sm"
             />
@@ -117,7 +164,12 @@ export function InviteUserForm({ clients = [], managerMode = false, internalMode
               <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
               <select
                 value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
+                onChange={(e) => {
+                  setClientId(e.target.value);
+                  if (e.target.value !== '__new__') {
+                    setNewClientName('');
+                  }
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent text-sm bg-white"
               >
                 {clients.map((client) => (
@@ -125,7 +177,21 @@ export function InviteUserForm({ clients = [], managerMode = false, internalMode
                     {client.name}
                   </option>
                 ))}
+                <option value="__new__">+ Add new client...</option>
               </select>
+            </div>
+          )}
+          {!managerMode && !internalMode && !isInternalRole && isNewClient && (
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">New Client Name</label>
+              <input
+                type="text"
+                value={newClientName}
+                onChange={(e) => setNewClientName(e.target.value)}
+                placeholder="e.g. Acme Lending Group"
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent text-sm"
+              />
             </div>
           )}
         </div>
@@ -141,7 +207,7 @@ export function InviteUserForm({ clients = [], managerMode = false, internalMode
           disabled={loading}
           className="px-6 py-2.5 bg-mt-green text-white rounded-lg font-semibold text-sm hover:bg-opacity-90 disabled:opacity-50 transition-colors"
         >
-          {loading ? 'Creating...' : 'Invite User'}
+          {loading ? 'Creating...' : isNewClient ? 'Create Client & Invite User' : 'Invite User'}
         </button>
       </form>
 
@@ -175,8 +241,19 @@ export function InviteUserForm({ clients = [], managerMode = false, internalMode
               </code>
             </div>
           </div>
+          {emailStatus && (
+            emailStatus.sent ? (
+              <p className="text-xs text-green-600">
+                ✅ Welcome email sent to {result.email} with login instructions.
+              </p>
+            ) : (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded">
+                ⚠️ Welcome email could not be sent{emailStatus.error ? `: ${emailStatus.error}` : ''}. Please share the temporary password manually.
+              </div>
+            )
+          )}
           <p className="text-xs text-green-600">
-            ⚠️ Share the temporary password securely with the user. They should change it on first login.
+            Share the temporary password securely with the user. They should change it on first login.
           </p>
         </div>
       )}

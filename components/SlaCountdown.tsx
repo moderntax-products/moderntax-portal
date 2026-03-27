@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react';
 
 interface SlaCountdownProps {
   slaDeadline: string;
+  status?: string;
+  slaMet?: boolean | null;
+  completedAt?: string | null;
 }
 
-export function SlaCountdown({ slaDeadline }: SlaCountdownProps) {
+export function SlaCountdown({ slaDeadline, status, slaMet, completedAt }: SlaCountdownProps) {
   const [remaining, setRemaining] = useState<{ hours: number; minutes: number } | null>(null);
   const [overdue, setOverdue] = useState(false);
 
@@ -34,6 +37,27 @@ export function SlaCountdown({ slaDeadline }: SlaCountdownProps) {
     const interval = setInterval(update, 60000); // Update every minute
     return () => clearInterval(interval);
   }, [slaDeadline]);
+
+  // For completed assignments, show SLA Met/Missed instead of live countdown
+  if (status === 'completed') {
+    const met = slaMet !== null ? slaMet : (completedAt ? new Date(completedAt) <= new Date(slaDeadline) : true);
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-xs font-medium ${
+        met
+          ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+          : 'text-amber-600 bg-amber-50 border-amber-200'
+      }`}>
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {met ? (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          )}
+        </svg>
+        {met ? 'SLA Met' : 'SLA Missed'}
+      </span>
+    );
+  }
 
   if (!remaining) return null;
 

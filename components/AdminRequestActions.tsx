@@ -231,7 +231,7 @@ export function EntityStatusUpdate({
           value={transcriptUrls}
           onChange={(e) => setTranscriptUrls(e.target.value)}
           rows={3}
-          placeholder="https://storage.example.com/transcript-2024.pdf"
+          placeholder="https://storage.example.com/transcript-2026.pdf"
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green text-sm font-mono resize-none"
         />
       </div>

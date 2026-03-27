@@ -5,7 +5,12 @@ import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { FreeTrialToggle } from '@/components/FreeTrialToggle';
 
-export default async function AdminPage() {
+interface PageProps {
+  searchParams: Promise<{ type?: string }>;
+}
+
+export default async function AdminPage({ searchParams }: PageProps) {
+  const { type: productTypeFilter } = await searchParams;
   const supabase = await createServerComponentClient();
 
   // Check authentication
@@ -32,7 +37,7 @@ export default async function AdminPage() {
   const { data: clients, error: clientsError } = await supabase
     .from('clients')
     .select('*')
-    .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null }[] | null; error: any };
+    .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null; api_key: string | null; api_request_limit: number | null; billing_payment_method: string | null; billing_ap_email: string | null; billing_ap_phone: string | null }[] | null; error: any };
 
   // Fetch all requests with entities and client info
   const { data: allRequests, error: requestsError } = await supabase
@@ -40,7 +45,7 @@ export default async function AdminPage() {
     .select('*, request_entities(id, status), clients(name, slug)')
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
 
-  // Calculate stats per client
+  // Calculate stats per client — count at entity (EIN/SSN) level, not request level
   const clientStats: Record<
     string,
     {
@@ -49,6 +54,9 @@ export default async function AdminPage() {
       pending: number;
       completed: number;
       failed: number;
+      api_key: string | null;
+      api_request_limit: number | null;
+      employment_count: number;
     }
   > = {};
 
@@ -60,6 +68,9 @@ export default async function AdminPage() {
         pending: 0,
         completed: 0,
         failed: 0,
+        api_key: client.api_key,
+        api_request_limit: client.api_request_limit,
+        employment_count: 0,
       };
     });
   }
@@ -67,18 +78,30 @@ export default async function AdminPage() {
   if (!requestsError && allRequests) {
     allRequests.forEach((request: any) => {
       if (clientStats[request.client_id]) {
-        clientStats[request.client_id].total += 1;
+        const entities = request.request_entities || [];
+        // Count each entity (EIN/SSN) individually
+        entities.forEach((entity: any) => {
+          clientStats[request.client_id].total += 1;
+          if (entity.status === 'completed') {
+            clientStats[request.client_id].completed += 1;
+          } else if (entity.status === 'failed') {
+            clientStats[request.client_id].failed += 1;
+          } else {
+            clientStats[request.client_id].pending += 1;
+          }
+        });
 
-        if (request.status === 'completed') {
-          clientStats[request.client_id].completed += 1;
-        } else if (request.status === 'failed') {
-          clientStats[request.client_id].failed += 1;
-        } else {
-          clientStats[request.client_id].pending += 1;
+        if (request.product_type === 'employment') {
+          clientStats[request.client_id].employment_count += 1;
         }
       }
     });
   }
+
+  // Filter requests by product type if filter is active
+  const filteredRequests = productTypeFilter && productTypeFilter !== 'all'
+    ? allRequests?.filter((r: any) => r.product_type === productTypeFilter) || []
+    : allRequests || [];
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
@@ -114,11 +137,13 @@ export default async function AdminPage() {
     });
   };
 
+  // Count total stats at entity level
+  const allEntities = allRequests?.flatMap((r: any) => r.request_entities || []) || [];
   const totalStats = {
-    total: allRequests?.length || 0,
-    completed: allRequests?.filter((r: any) => r.status === 'completed').length || 0,
-    pending: allRequests?.filter((r: any) => r.status !== 'completed' && r.status !== 'failed').length || 0,
-    failed: allRequests?.filter((r: any) => r.status === 'failed').length || 0,
+    total: allEntities.length,
+    completed: allEntities.filter((e: any) => e.status === 'completed').length,
+    pending: allEntities.filter((e: any) => e.status !== 'completed' && e.status !== 'failed').length,
+    failed: allEntities.filter((e: any) => e.status === 'failed').length,
   };
 
   return (
@@ -136,6 +161,12 @@ export default async function AdminPage() {
             <p className="text-gray-600 mt-1">Cross-client overview and management</p>
           </div>
           <div className="flex items-center gap-3">
+            <Link
+              href="/admin/email-intake"
+              className="px-4 py-2 text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
+            >
+              Email Intake
+            </Link>
             <Link
               href="/admin/analytics"
               className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -171,7 +202,7 @@ export default async function AdminPage() {
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Total Requests</p>
+                <p className="text-gray-600 text-sm font-medium">Total Entities</p>
                 <p className="text-3xl font-bold text-mt-dark mt-2">{totalStats.total}</p>
               </div>
               <div className="p-3 bg-mt-green bg-opacity-10 rounded-lg">
@@ -239,6 +270,8 @@ export default async function AdminPage() {
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completed</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Failed</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">API Usage</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Billing</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completion Rate</th>
                   </tr>
                 </thead>
@@ -268,6 +301,34 @@ export default async function AdminPage() {
                           <span className="text-sm font-medium text-red-600">{stats.failed}</span>
                         </td>
                         <td className="px-6 py-4">
+                          {stats.api_key ? (
+                            <span className="text-sm text-gray-700">
+                              {stats.employment_count}
+                              {stats.api_request_limit && (
+                                <span className="text-gray-400"> / {stats.api_request_limit}</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {clientObj?.billing_payment_method ? (
+                            <div>
+                              <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
+                                {clientObj.billing_payment_method.toUpperCase()}
+                              </span>
+                              {clientObj.billing_ap_email && (
+                                <p className="text-xs text-gray-400 mt-0.5 truncate max-w-[140px]" title={clientObj.billing_ap_email}>
+                                  {clientObj.billing_ap_email}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">Not set</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
                             <div className="w-24 bg-gray-200 rounded-full h-2">
                               <div
@@ -289,14 +350,49 @@ export default async function AdminPage() {
 
         {/* All Requests */}
         <div>
-          <h2 className="text-2xl font-bold text-mt-dark mb-6">All Requests</h2>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-mt-dark">All Requests</h2>
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+              <Link
+                href="/admin"
+                className={`px-4 py-2 font-medium transition-colors ${
+                  !productTypeFilter || productTypeFilter === 'all'
+                    ? 'bg-mt-dark text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                All
+              </Link>
+              <Link
+                href="/admin?type=transcript"
+                className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
+                  productTypeFilter === 'transcript'
+                    ? 'bg-mt-dark text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Transcripts
+              </Link>
+              <Link
+                href="/admin?type=employment"
+                className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
+                  productTypeFilter === 'employment'
+                    ? 'bg-mt-dark text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Employment
+              </Link>
+            </div>
+          </div>
           <div className="bg-white rounded-lg shadow overflow-hidden">
-            {allRequests && allRequests.length > 0 ? (
+            {filteredRequests.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Client</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Type</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Account</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entities</th>
@@ -305,7 +401,7 @@ export default async function AdminPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {allRequests.map((request: any) => (
+                    {filteredRequests.map((request: any) => (
                       <tr key={request.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4">
                           <span className="text-sm font-medium text-gray-700">
@@ -313,15 +409,43 @@ export default async function AdminPage() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
+                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
+                            request.product_type === 'employment'
+                              ? 'bg-indigo-100 text-indigo-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {request.product_type === 'employment' ? 'Employment' : 'Transcript'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
                           <code className="text-sm font-mono text-mt-dark">{request.loan_number}</code>
                         </td>
                         <td className="px-6 py-4">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(request.status as RequestStatus)}`}>
-                            {formatStatus(request.status)}
-                          </span>
+                          {(() => {
+                            const entities = request.request_entities || [];
+                            const completedCount = entities.filter((e: any) => e.status === 'completed').length;
+                            const allComplete = entities.length > 0 && completedCount === entities.length;
+                            const anyFailed = entities.some((e: any) => e.status === 'failed');
+                            const displayStatus = allComplete ? 'completed' : anyFailed ? 'failed' : request.status;
+                            return (
+                              <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(displayStatus as RequestStatus)}`}>
+                                {formatStatus(displayStatus)}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
-                          {request.request_entities?.length || 0}
+                          {(() => {
+                            const entities = request.request_entities || [];
+                            const completedCount = entities.filter((e: any) => e.status === 'completed').length;
+                            return (
+                              <span>
+                                <span className="font-medium text-green-600">{completedCount}</span>
+                                <span className="text-gray-400"> / </span>
+                                <span>{entities.length}</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {formatDate(request.created_at)}

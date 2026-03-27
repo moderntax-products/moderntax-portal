@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import { ExpertAssignmentCard } from '@/components/ExpertAssignmentCard';
+import { LogoutButton } from '@/components/LogoutButton';
 import { useRouter } from 'next/navigation';
 
 interface AssignmentData {
@@ -23,16 +24,17 @@ interface AssignmentData {
     form_type: string;
     years: string[];
     signed_8821_url: string | null;
+    transcript_urls: string[] | null;
     request_id: string;
   };
 }
 
 export default function ExpertDashboard() {
   const [assignments, setAssignments] = useState<AssignmentData[]>([]);
-  const [completedToday, setCompletedToday] = useState<AssignmentData[]>([]);
+  const [completedAll, setCompletedAll] = useState<AssignmentData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [profile, setProfile] = useState<{ full_name: string | null; role: string } | null>(null);
+  const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null } | null>(null);
   const supabase = createClient();
   const router = useRouter();
 
@@ -48,23 +50,45 @@ export default function ExpertDashboard() {
       }
 
       // Get profile and verify expert role
-      const { data: profileData } = await supabase
+      // Use select() without specific columns to avoid breaking if columns don't exist yet
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('full_name, role')
         .eq('id', user.id)
         .single();
 
-      if (!profileData || profileData.role !== 'expert') {
+      if (profileError || !profileData || profileData.role !== 'expert') {
         router.push('/');
         return;
       }
 
-      setProfile(profileData);
+      // Fetch credential fields separately (may not exist if migration not run)
+      const { data: credentialData } = await supabase
+        .from('profiles')
+        .select('caf_number, ptin, phone_number, address')
+        .eq('id', user.id)
+        .single();
+
+      const mergedProfile = {
+        ...profileData,
+        caf_number: credentialData?.caf_number || null,
+        ptin: credentialData?.ptin || null,
+        phone_number: credentialData?.phone_number || null,
+        address: credentialData?.address || null,
+      };
+
+      setProfile(mergedProfile);
+
+      // Redirect to profile setup if credentials are incomplete
+      if (!mergedProfile.caf_number || !mergedProfile.ptin || !mergedProfile.phone_number || !mergedProfile.address) {
+        router.push('/expert/profile');
+        return;
+      }
 
       // Fetch active assignments
       const { data: activeData, error: activeError } = await supabase
         .from('expert_assignments')
-        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, request_id)')
+        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, transcript_urls, request_id)')
         .in('status', ['assigned', 'in_progress'])
         .eq('expert_id', user.id)
         .order('sla_deadline', { ascending: true });
@@ -77,19 +101,15 @@ export default function ExpertDashboard() {
 
       setAssignments((activeData as AssignmentData[]) || []);
 
-      // Fetch completed today
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-
+      // Fetch all completed assignments
       const { data: completedData } = await supabase
         .from('expert_assignments')
-        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, request_id)')
+        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, transcript_urls, request_id)')
         .eq('status', 'completed')
         .eq('expert_id', user.id)
-        .gte('completed_at', todayStart.toISOString())
         .order('completed_at', { ascending: false });
 
-      setCompletedToday((completedData as AssignmentData[]) || []);
+      setCompletedAll((completedData as AssignmentData[]) || []);
     } catch (err) {
       console.error('Dashboard error:', err);
       setError('Failed to load dashboard');
@@ -118,10 +138,33 @@ export default function ExpertDashboard() {
     );
   }
 
-  // Calculate SLA stats from completed today
-  const slaMetCount = completedToday.filter((a) => a.sla_met === true).length;
-  const slaTotalCompleted = completedToday.filter((a) => a.sla_met !== null).length;
+  // Calculate SLA stats from all completed
+  const slaMetCount = completedAll.filter((a) => a.sla_met === true).length;
+  const slaTotalCompleted = completedAll.filter((a) => a.sla_met !== null).length;
   const slaRate = slaTotalCompleted > 0 ? Math.round((slaMetCount / slaTotalCompleted) * 100) : 100;
+
+  // Group completed by month for pay cycle view
+  const completedByMonth: Record<string, AssignmentData[]> = {};
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  let completedTodayCount = 0;
+
+  completedAll.forEach((a) => {
+    if (a.completed_at) {
+      const d = new Date(a.completed_at);
+      if (d >= todayStart) completedTodayCount++;
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!completedByMonth[monthKey]) completedByMonth[monthKey] = [];
+      completedByMonth[monthKey].push(a);
+    }
+  });
+
+  const sortedMonths = Object.keys(completedByMonth).sort().reverse();
+
+  const formatMonthLabel = (key: string) => {
+    const [y, m] = key.split('-');
+    return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -139,29 +182,94 @@ export default function ExpertDashboard() {
               Welcome, {profile?.full_name || 'Expert'}
             </p>
           </div>
-          <button
-            onClick={fetchData}
-            className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push('/expert/profile')}
+              className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Edit Profile
+            </button>
+            <button
+              onClick={fetchData}
+              className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Refresh
+            </button>
+            <a
+              href="/account/security"
+              className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Settings
+            </a>
+            <LogoutButton />
+          </div>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-4 gap-4 mb-8">
           <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
             <div className="text-2xl font-bold text-blue-600">{assignments.length}</div>
             <div className="text-xs text-gray-500 uppercase tracking-wide">Active</div>
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-            <div className="text-2xl font-bold text-emerald-600">{completedToday.length}</div>
+            <div className="text-2xl font-bold text-emerald-600">{completedTodayCount}</div>
             <div className="text-xs text-gray-500 uppercase tracking-wide">Completed Today</div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+            <div className="text-2xl font-bold text-gray-700">{completedAll.length}</div>
+            <div className="text-xs text-gray-500 uppercase tracking-wide">All Time</div>
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
             <div className="text-2xl font-bold text-amber-600">{slaRate}%</div>
             <div className="text-xs text-gray-500 uppercase tracking-wide">SLA Compliance</div>
           </div>
         </div>
+
+        {/* IRS Direct Upload — Primary Workflow */}
+        {assignments.length > 0 && (
+          <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg p-6 mb-8">
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  IRS Direct Upload
+                </h2>
+                <p className="text-sm text-indigo-700 mt-1">
+                  Run the bookmarklet on the IRS SOR inbox to upload transcripts directly to the portal — no manual file handling needed.
+                </p>
+                <ol className="mt-3 text-sm text-indigo-800 space-y-1">
+                  <li><strong>1.</strong> Open IRS Secure Object Repository (SOR) inbox</li>
+                  <li><strong>2.</strong> Run the bookmarklet below in your browser console</li>
+                  <li><strong>3.</strong> Transcripts auto-match to your assignments and upload instantly</li>
+                </ol>
+              </div>
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">
+                Recommended
+              </span>
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <a
+                href="https://portal.moderntax.io/irs-batch-v6.js"
+                target="_blank"
+                rel="noopener"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download Script (v6)
+              </a>
+              <span className="text-xs text-indigo-600">
+                Or run: <code className="bg-white/60 px-2 py-1 rounded font-mono text-xs">fetch(&apos;https://portal.moderntax.io/irs-batch-v6.js&apos;).then(r=&gt;r.text()).then(eval)</code>
+              </span>
+            </div>
+            <p className="mt-3 text-xs text-indigo-500">
+              You can still upload files manually using the &quot;Add Files&quot; button on each assignment below.
+            </p>
+          </div>
+        )}
 
         {/* Active Assignments */}
         <div className="space-y-4">
@@ -184,37 +292,37 @@ export default function ExpertDashboard() {
           )}
         </div>
 
-        {/* Completed Today */}
-        {completedToday.length > 0 && (
-          <div className="mt-8 space-y-4">
+        {/* Completed Work — grouped by pay cycle (month) */}
+        {completedAll.length > 0 && (
+          <div className="mt-8 space-y-6">
             <h2 className="text-lg font-semibold text-gray-900">
-              Completed Today ({completedToday.length})
+              Completed Work ({completedAll.length})
             </h2>
-            {completedToday.map((assignment) => (
-              <div
-                key={assignment.id}
-                className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between"
-              >
-                <div>
-                  <span className="font-medium text-gray-900">
-                    {assignment.request_entities.entity_name}
-                  </span>
-                  <span className="ml-2 text-xs text-gray-500">
-                    {assignment.request_entities.form_type} | {assignment.request_entities.years.join(', ')}
-                  </span>
+            {sortedMonths.map((monthKey) => {
+              const monthAssignments = completedByMonth[monthKey];
+              const monthFileCount = monthAssignments.reduce(
+                (sum, a) => sum + (a.request_entities.transcript_urls?.length || 0), 0
+              );
+              return (
+                <div key={monthKey} className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-700">
+                      {formatMonthLabel(monthKey)}
+                      <span className="ml-2 text-xs font-normal text-gray-400">
+                        {monthAssignments.length} {monthAssignments.length === 1 ? 'entity' : 'entities'} · {monthFileCount} files
+                      </span>
+                    </h3>
+                  </div>
+                  {monthAssignments.map((assignment) => (
+                    <ExpertAssignmentCard
+                      key={assignment.id}
+                      assignment={assignment}
+                      onRefresh={fetchData}
+                    />
+                  ))}
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${assignment.sla_met ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                    SLA {assignment.sla_met ? 'Met' : 'Missed'}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {assignment.completed_at
-                      ? new Date(assignment.completed_at).toLocaleTimeString()
-                      : ''}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

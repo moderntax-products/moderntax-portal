@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
-import { createServerComponentClient } from '@/lib/supabase-server';
+import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { InviteUserForm } from '@/components/InviteUserForm';
+import { ResendInviteButton } from '@/components/ResendInviteButton';
+import { RoleSelector } from '@/components/RoleSelector';
 
 export default async function TeamManagementPage() {
   const supabase = await createServerComponentClient();
@@ -33,6 +35,21 @@ export default async function TeamManagementPage() {
     .from('profiles')
     .select('id, email, full_name, role, client_id, created_at')
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
+
+  // Fetch auth user data for activation status (last_sign_in_at)
+  const adminSupabase = createAdminClient();
+  const authStatusMap: Record<string, { lastSignIn: string | null; confirmed: boolean }> = {};
+  if (allProfiles) {
+    const { data: { users: authUsers } } = await adminSupabase.auth.admin.listUsers({ perPage: 1000 });
+    if (authUsers) {
+      authUsers.forEach((u) => {
+        authStatusMap[u.id] = {
+          lastSignIn: u.last_sign_in_at || null,
+          confirmed: !!u.email_confirmed_at,
+        };
+      });
+    }
+  }
 
   // Build client lookup
   const clientLookup: Record<string, string> = {};
@@ -67,6 +84,19 @@ export default async function TeamManagementPage() {
       month: 'short',
       day: 'numeric',
     });
+
+  const getActivationStatus = (profileId: string) => {
+    const auth = authStatusMap[profileId];
+    if (!auth) return { label: 'Unknown', color: 'bg-gray-100 text-gray-500', lastSignIn: null };
+    if (auth.lastSignIn) {
+      return {
+        label: 'Active',
+        color: 'bg-green-100 text-green-800',
+        lastSignIn: auth.lastSignIn,
+      };
+    }
+    return { label: 'Invited', color: 'bg-yellow-100 text-yellow-800', lastSignIn: null };
+  };
 
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
@@ -147,11 +177,16 @@ export default async function TeamManagementPage() {
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Name</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Email</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Role</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Joined</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Invited</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Last Login</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {modernTaxTeam.map((profile: any) => (
+                    {modernTaxTeam.map((profile: any) => {
+                      const status = getActivationStatus(profile.id);
+                      return (
                       <tr key={profile.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4">
                           <span className="text-sm font-medium text-mt-dark">
@@ -166,11 +201,25 @@ export default async function TeamManagementPage() {
                             {profile.role === 'expert' ? 'IRS Expert' : profile.role}
                           </span>
                         </td>
+                        <td className="px-6 py-4">
+                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${status.color}`}>
+                            {status.label}
+                          </span>
+                        </td>
                         <td className="px-6 py-4 text-sm text-gray-500">
                           {formatDate(profile.created_at)}
                         </td>
+                        <td className="px-6 py-4 text-sm text-gray-500">
+                          {status.lastSignIn ? formatDate(status.lastSignIn) : '—'}
+                        </td>
+                        <td className="px-6 py-4">
+                          {status.label === 'Invited' && (
+                            <ResendInviteButton userId={profile.id} userName={profile.full_name || profile.email} />
+                          )}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -230,11 +279,16 @@ export default async function TeamManagementPage() {
                           <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Name</th>
                           <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Email</th>
                           <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Role</th>
-                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Joined</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Invited</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Last Login</th>
+                          <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {group.members.map((profile: any) => (
+                        {group.members.map((profile: any) => {
+                          const status = getActivationStatus(profile.id);
+                          return (
                           <tr key={profile.id} className="hover:bg-gray-50 transition-colors">
                             <td className="px-6 py-4">
                               <span className="text-sm font-medium text-mt-dark">
@@ -245,15 +299,32 @@ export default async function TeamManagementPage() {
                               <span className="text-sm text-gray-600">{profile.email}</span>
                             </td>
                             <td className="px-6 py-4">
-                              <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold capitalize ${getRoleBadgeColor(profile.role)}`}>
-                                {profile.role}
+                              <RoleSelector
+                                userId={profile.id}
+                                currentRole={profile.role}
+                                callerRole="admin"
+                                userName={profile.full_name || profile.email}
+                              />
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${status.color}`}>
+                                {status.label}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-500">
                               {formatDate(profile.created_at)}
                             </td>
+                            <td className="px-6 py-4 text-sm text-gray-500">
+                              {status.lastSignIn ? formatDate(status.lastSignIn) : '—'}
+                            </td>
+                            <td className="px-6 py-4">
+                              {status.label === 'Invited' && (
+                                <ResendInviteButton userId={profile.id} userName={profile.full_name || profile.email} />
+                              )}
+                            </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

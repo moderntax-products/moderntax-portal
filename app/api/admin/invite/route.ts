@@ -170,7 +170,27 @@ export async function POST(request: Request) {
       },
     });
 
-    // Send welcome email with temp password
+    // Generate a password reset link so the email doesn't contain a plaintext password
+    // (plaintext passwords trigger spam filters on iCloud, Gmail, etc.)
+    let resetLink: string | undefined;
+    try {
+      const { data: linkData } = await adminSupabase.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        options: { redirectTo: `${process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io'}/reset-password` },
+      });
+      if (linkData?.properties?.hashed_token) {
+        const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://nixzwnfjglojemozlvmf.supabase.co';
+        resetLink = `${baseUrl}/auth/v1/verify?token=${linkData.properties.hashed_token}&type=recovery&redirect_to=${encodeURIComponent(`${process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io'}/reset-password`)}`;
+      }
+    } catch (linkErr) {
+      console.error('Failed to generate reset link:', linkErr);
+      // Fall back to sending temp password in email
+    }
+
+    // Send welcome email (with reset link if available, temp password as fallback)
+    let emailSent = false;
+    let emailError: string | null = null;
     try {
       let clientName: string | undefined;
       if (!isInternalRole && clientId) {
@@ -181,14 +201,19 @@ export async function POST(request: Request) {
           .single();
         clientName = client?.name;
       }
-      await sendWelcomeEmail(email, fullName, role, tempPassword, clientName);
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
+      await sendWelcomeEmail(email, fullName, role, tempPassword, clientName, resetLink);
+      emailSent = true;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('Failed to send welcome email:', errMsg);
+      emailError = errMsg;
       // Don't fail the invite if email fails
     }
 
     return NextResponse.json({
       success: true,
+      emailSent,
+      emailError,
       user: {
         id: newUser.user.id,
         email: email,

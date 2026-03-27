@@ -1,15 +1,16 @@
 /**
- * Daily Nudge Cron Job
- * Sends daily summary emails to users with pending requests
+ * Weekly Summary Cron Job (replaces daily nudge)
+ * Sends weekly summary emails to processors (their own requests)
+ * and managers (team-wide summary handled by manager-weekly-summary cron)
  * GET /api/cron/nudge
  *
  * Expected to be called by Vercel Cron with CRON_SECRET in headers
+ * Scheduled: Every Monday
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
-import { sendDailyNudge } from '@/lib/sendgrid';
-import type { DailyNudgeStats } from '@/lib/types';
+import { sendProcessorWeeklySummary } from '@/lib/sendgrid';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,111 +27,123 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Get all active users (who have created requests)
-    const { data: users, error: usersError } = await supabase
-      .from('profiles')
-      .select('id, email, full_name')
-      .not('email', 'is', null) as { data: { id: string; email: string; full_name: string | null }[] | null; error: any };
+    // Calculate date range for last 7 days
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const weekAgoISO = weekAgo.toISOString();
+    const weekRange = `${weekAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 
-    if (usersError || !users) {
-      console.error('Failed to fetch users:', usersError);
+    // Get processors only (managers get their own weekly summary via manager-weekly-summary cron)
+    const { data: processors, error: usersError } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, role, client_id')
+      .eq('role', 'processor')
+      .not('email', 'is', null) as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null }[] | null; error: any };
+
+    if (usersError || !processors) {
+      console.error('Failed to fetch processors:', usersError);
       return NextResponse.json(
-        { error: 'Failed to fetch users' },
+        { error: 'Failed to fetch processors' },
         { status: 500 }
       );
+    }
+
+    // Get client names
+    const clientIds = [...new Set(processors.map((p) => p.client_id).filter(Boolean))];
+    const { data: clients } = await supabase
+      .from('clients')
+      .select('id, name')
+      .in('id', clientIds as string[]) as { data: { id: string; name: string }[] | null; error: any };
+
+    const clientMap: Record<string, string> = {};
+    if (clients) {
+      clients.forEach((c) => { clientMap[c.id] = c.name; });
     }
 
     let emailsSent = 0;
     const errors: { email: string; error: string }[] = [];
 
-    // Process each user
-    for (const user of users) {
+    // Process each processor
+    for (const processor of processors) {
       try {
-        // Get user's request stats
-        const { data: requests, error: requestsError } = await supabase
+        // Get processor's own requests from the past week (with entities)
+        const { data: weekRequests } = await supabase
           .from('requests')
-          .select('status, created_at, completed_at')
-          .eq('requested_by', user.id) as { data: { status: string; created_at: string; completed_at: string | null }[] | null; error: any };
+          .select('id, status, created_at, completed_at, request_entities(id, status, completed_at, created_at)')
+          .eq('requested_by', processor.id)
+          .gte('created_at', weekAgoISO) as { data: any[] | null; error: any };
 
-        if (requestsError || !requests) {
-          console.error(`Failed to fetch requests for user ${user.id}:`, requestsError);
-          continue;
-        }
+        // Get all processor requests that have entities completed this week
+        const { data: allProcessorRequests } = await supabase
+          .from('requests')
+          .select('id, status, created_at, completed_at, request_entities(id, status, completed_at, created_at)')
+          .eq('requested_by', processor.id) as { data: any[] | null; error: any };
 
-        if (requests.length === 0) {
-          // Skip users with no requests
-          continue;
-        }
-
-        // Calculate stats
-        const now = new Date();
-        const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const today = new Date(now);
-        today.setHours(0, 0, 0, 0);
-
-        const pendingCount = requests.filter(
-          (r) => r.status !== 'completed' && r.status !== 'failed'
-        ).length;
-
-        const inProgressCount = requests.filter(
-          (r) => r.status !== 'submitted' && r.status !== 'completed' && r.status !== 'failed'
-        ).length;
-
-        const completedThisWeekCount = requests.filter((r) => {
-          if (r.status !== 'completed' || !r.completed_at) return false;
-          return new Date(r.completed_at) >= oneWeekAgo;
-        }).length;
-
-        // Calculate oldest pending request
-        const pendingRequests = requests.filter(
-          (r) => r.status !== 'completed' && r.status !== 'failed'
+        // Count at entity level
+        const entitiesSubmitted = (weekRequests || []).reduce(
+          (sum: number, r: any) => sum + (r.request_entities?.length || 0), 0
         );
-        let oldestPendingDays: number | null = null;
 
-        if (pendingRequests.length > 0) {
-          const oldestPending = pendingRequests.reduce((oldest, current) => {
-            const oldestDate = new Date(oldest.created_at);
-            const currentDate = new Date(current.created_at);
-            return currentDate < oldestDate ? current : oldest;
-          });
+        const allEntities = (allProcessorRequests || []).flatMap((r: any) =>
+          (r.request_entities || []).map((e: any) => ({ ...e, request_created_at: r.created_at }))
+        );
+        const entitiesCompleted = allEntities.filter(
+          (e: any) => e.status === 'completed' && e.completed_at && e.completed_at >= weekAgoISO
+        ).length;
+        const entitiesPending = (weekRequests || []).flatMap((r: any) => r.request_entities || [])
+          .filter((e: any) => e.status !== 'completed' && e.status !== 'failed').length;
 
-          oldestPendingDays = Math.floor(
-            (now.getTime() - new Date(oldestPending.created_at).getTime()) /
-              (24 * 60 * 60 * 1000)
-          );
+        // Skip if zero activity
+        if (entitiesSubmitted === 0 && entitiesCompleted === 0) {
+          continue;
         }
 
-        const stats: DailyNudgeStats = {
-          pending_count: pendingCount,
-          completed_count: completedThisWeekCount,
-          in_progress_count: inProgressCount,
-          oldest_pending_days: oldestPendingDays,
-        };
+        // Calculate avg turnaround per entity
+        let avgTurnaroundHours: number | null = null;
+        const completedEntities = allEntities.filter(
+          (e: any) => e.status === 'completed' && e.completed_at && e.completed_at >= weekAgoISO
+        );
+        if (completedEntities.length > 0) {
+          const turnarounds = completedEntities
+            .map((e: any) => {
+              const created = new Date(e.request_created_at || e.created_at).getTime();
+              const done = new Date(e.completed_at).getTime();
+              return (done - created) / (1000 * 60 * 60);
+            });
+          if (turnarounds.length > 0) {
+            avgTurnaroundHours = turnarounds.reduce((a, b) => a + b, 0) / turnarounds.length;
+          }
+        }
 
-        // Send email
-        await sendDailyNudge(user.email, stats);
+        const clientName = processor.client_id ? (clientMap[processor.client_id] || 'Your Organization') : 'Your Organization';
+
+        await sendProcessorWeeklySummary(
+          processor.email,
+          processor.full_name || 'Team Member',
+          clientName,
+          {
+            requests_submitted: entitiesSubmitted,
+            requests_completed: entitiesCompleted,
+            requests_pending: entitiesPending,
+            avg_turnaround_hours: avgTurnaroundHours,
+          },
+          weekRange
+        );
         emailsSent++;
       } catch (userError) {
         const errorMessage = userError instanceof Error ? userError.message : 'Unknown error';
-        console.error(`Error processing user ${user.email}:`, errorMessage);
-        errors.push({
-          email: user.email,
-          error: errorMessage,
-        });
+        console.error(`Error processing processor ${processor.email}:`, errorMessage);
+        errors.push({ email: processor.email, error: errorMessage });
       }
     }
 
-    // Return summary
-    return NextResponse.json(
-      {
-        success: true,
-        emailsSent,
-        totalUsers: users.length,
-        processedAt: new Date().toISOString(),
-        errors: errors.length > 0 ? errors : undefined,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({
+      success: true,
+      emailsSent,
+      totalProcessors: processors.length,
+      processedAt: new Date().toISOString(),
+      errors: errors.length > 0 ? errors : undefined,
+    });
   } catch (error) {
     console.error('Cron job error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

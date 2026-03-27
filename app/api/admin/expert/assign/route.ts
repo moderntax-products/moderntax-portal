@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     // Verify all entities exist and have signed 8821s
     const { data: entities } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, signed_8821_url, request_id')
+      .select('id, entity_name, signed_8821_url, request_id, form_type')
       .in('id', entityIds);
 
     if (!entities || entities.length !== entityIds.length) {
@@ -64,7 +64,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const withoutForm = entities.filter((e) => !e.signed_8821_url);
+    // All entities need a signed 8821 before expert assignment
+    // Exception: W2_INCOME (employment verification) entities don't require 8821
+    const withoutForm = entities.filter((e) => !e.signed_8821_url && e.form_type !== 'W2_INCOME');
     if (withoutForm.length > 0) {
       return NextResponse.json(
         {
