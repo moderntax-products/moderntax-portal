@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,13 +21,21 @@ export async function POST(request: NextRequest) {
     // Get profile
     const { data: profile } = (await supabase
       .from('profiles')
-      .select('client_id')
+      .select('client_id, full_name, role')
       .eq('id', user.id)
-      .single()) as { data: { client_id: string | null } | null; error: unknown };
+      .single()) as { data: { client_id: string | null; full_name: string | null; role: string } | null; error: unknown };
 
     if (!profile?.client_id) {
       return NextResponse.json({ error: 'No client associated' }, { status: 400 });
     }
+
+    // Get client name for notifications
+    const { data: clientRecord } = await supabase
+      .from('clients')
+      .select('name')
+      .eq('id', profile.client_id)
+      .single() as { data: { name: string } | null; error: any };
+    const clientName = clientRecord?.name || 'Unknown';
 
     // Parse form data
     const formData = await request.formData();
@@ -109,7 +118,7 @@ export async function POST(request: NextRequest) {
           .split(/[,;\s]+/)
           .map((y) => y.trim())
           .filter((y) => /^\d{4}$/.test(y))
-      : ['2024'];
+      : ['2026'];
 
     let entityCount = 0;
 
@@ -135,7 +144,7 @@ export async function POST(request: NextRequest) {
         request_id: req.id,
         entity_name: entityName.trim(),
         tid: tid.trim(),
-        tid_kind: tidKind.toUpperCase() === 'SSN' ? 'SSN' : 'EIN',
+        tid_kind: ['SSN', 'ITIN'].includes(tidKind.toUpperCase()) ? 'SSN' : 'EIN',
         form_type: formType,
         years: parsedYears,
         signed_8821_url: filePath,
@@ -147,6 +156,31 @@ export async function POST(request: NextRequest) {
       } else {
         entityCount++;
       }
+    }
+
+    // Notify all admins about the new request in real-time
+    try {
+      const adminClient = createAdminClient();
+      const { data: admins } = await adminClient
+        .from('profiles')
+        .select('email')
+        .eq('role', 'admin');
+
+      if (admins && admins.length > 0) {
+        for (const admin of admins) {
+          await sendAdminNewRequestNotification(
+            admin.email,
+            profile.full_name || user.email || 'Team Member',
+            profile.role || 'processor',
+            clientName,
+            loanNumber!.trim(),
+            entityCount,
+            req.id
+          );
+        }
+      }
+    } catch (notifyErr) {
+      console.error('[pdf-upload] Failed to send admin notification:', notifyErr);
     }
 
     // Audit log: PDF upload completed

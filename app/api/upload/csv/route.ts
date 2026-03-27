@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sendSignatureRequest } from '@/lib/dropbox-sign';
+import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -15,6 +17,7 @@ interface CsvRow {
   signature_id: string;
   'first name': string;
   'last name': string;
+  email: string;
   signature_created_at: string;
   credit_application_id: string;
   years: string;
@@ -43,6 +46,7 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
     signature_id: normalized['signature_id'] || normalized['signatureid'] || '',
     'first name': normalized['first_name'] || normalized['firstname'] || '',
     'last name': normalized['last_name'] || normalized['lastname'] || '',
+    email: normalized['email'] || normalized['signer_email'] || normalized['signeremail'] || findEmailValue(normalized) || '',
     signature_created_at: normalized['signature_created_at'] || normalized['signaturecreatedat'] || '',
     credit_application_id:
       normalized['credit_application_id'] ||
@@ -57,11 +61,24 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
   };
 }
 
+// Find email in unlabeled columns (e.g., __EMPTY, __EMPTY_1)
+function findEmailValue(normalized: Record<string, string>): string {
+  for (const [key, value] of Object.entries(normalized)) {
+    if (key.startsWith('__empty') && value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      return value;
+    }
+  }
+  return '';
+}
+
 function validateFormType(form: string): string {
-  const normalized = form.replace(/\s/g, '').toUpperCase();
+  // Take only the part before the first comma (e.g., "1120-S, tax transcripts" → "1120-S")
+  const formPart = form.split(',')[0].trim();
+  // Strip whitespace, hyphens, and normalize
+  const normalized = formPart.replace(/[\s-]/g, '').toUpperCase();
   const valid = ['1040', '1065', '1120', '1120S'];
   if (valid.includes(normalized)) return normalized;
-  // Try matching with "FORM " prefix
+  // Try matching with "FORM" prefix stripped
   const stripped = normalized.replace('FORM', '');
   if (valid.includes(stripped)) return stripped;
   return '1040'; // default
@@ -76,6 +93,20 @@ function parseYears(years: string): string[] {
     .split(/[,;\s]+/)
     .map((y) => y.trim())
     .filter((y) => /^\d{4}$/.test(y));
+}
+
+function parseSignatureDate(raw: string): string | null {
+  if (!raw) return null;
+  // Handle Excel serial date numbers (e.g., 46063 = 2/10/2026)
+  const num = Number(raw);
+  if (!isNaN(num) && num > 40000 && num < 60000) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const date = new Date(excelEpoch.getTime() + num * 86400000);
+    return date.toISOString();
+  }
+  const parsed = new Date(raw);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString();
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -95,13 +126,21 @@ export async function POST(request: NextRequest) {
     // Get profile
     const { data: profile } = (await supabase
       .from('profiles')
-      .select('client_id')
+      .select('client_id, full_name, role')
       .eq('id', user.id)
-      .single()) as { data: { client_id: string | null } | null; error: unknown };
+      .single()) as { data: { client_id: string | null; full_name: string | null; role: string } | null; error: unknown };
 
     if (!profile?.client_id) {
       return NextResponse.json({ error: 'No client associated' }, { status: 400 });
     }
+
+    // Get client name for notifications
+    const { data: clientRecord } = await supabase
+      .from('clients')
+      .select('name')
+      .eq('id', profile.client_id)
+      .single() as { data: { name: string } | null; error: any };
+    const clientName = clientRecord?.name || 'Unknown';
 
     // Parse multipart form data
     const formData = await request.formData();
@@ -134,14 +173,29 @@ export async function POST(request: NextRequest) {
     const rows = rawRows.map(mapRow);
     const errors: string[] = [];
 
+    const rowsMissingEmail: number[] = [];
     rows.forEach((row, idx) => {
       if (!row.legal_name) errors.push(`Row ${idx + 2}: missing legal_name`);
       if (!row.tid) errors.push(`Row ${idx + 2}: missing tid`);
+      if (!row.email) rowsMissingEmail.push(idx + 2);
     });
 
     if (errors.length > 0) {
       return NextResponse.json(
         { error: 'Validation errors', details: errors.slice(0, 10) },
+        { status: 400 }
+      );
+    }
+
+    // Block CSV uploads missing signer emails — required for 8821 delivery
+    if (rowsMissingEmail.length > 0) {
+      const entityNames = rowsMissingEmail.map((rowNum) => rows[rowNum - 2]?.legal_name || `Row ${rowNum}`);
+      return NextResponse.json(
+        {
+          error: 'Signer email required for all entities',
+          details: `The following entities are missing a signer email address: ${entityNames.join(', ')}. Please add an "email" column to your spreadsheet with each signer\'s email so we can send the 8821 for signature.`,
+          missing_rows: rowsMissingEmail,
+        },
         { status: 400 }
       );
     }
@@ -207,7 +261,7 @@ export async function POST(request: NextRequest) {
       request_id: req.id,
       entity_name: row.legal_name,
       tid: row.tid,
-      tid_kind: row.tid_kind?.toUpperCase() === 'SSN' ? 'SSN' : 'EIN',
+      tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
       address: row.address || null,
       city: row.city || null,
       state: row.state || null,
@@ -216,8 +270,9 @@ export async function POST(request: NextRequest) {
       years: parseYears(row.years),
       signer_first_name: row['first name'] || null,
       signer_last_name: row['last name'] || null,
+      signer_email: row.email || null,
       signature_id: row.signature_id || null,
-      signature_created_at: row.signature_created_at || null,
+      signature_created_at: parseSignatureDate(row.signature_created_at),
       status: row.signature_id ? '8821_signed' : 'pending',
     }));
 
@@ -226,6 +281,80 @@ export async function POST(request: NextRequest) {
 
     if (entError) {
       console.error('Entity creation error:', entError);
+    }
+
+    // Auto-send 8821 via Dropbox Sign for entities with signer email (and no existing signature)
+    if (!entError) {
+      try {
+        const { data: createdEntities } = await supabase
+          .from('request_entities')
+          .select('id, entity_name, form_type, signer_first_name, signer_last_name, signer_email, signature_id, status')
+          .eq('request_id', req.id) as { data: any[] | null; error: any };
+
+        if (createdEntities) {
+          for (const entity of createdEntities) {
+            // Skip if already has a signature_id (pre-signed from CSV)
+            if (entity.signature_id) continue;
+            // Skip employment entities
+            if (entity.form_type === 'W2_INCOME') continue;
+            // Must have signer email
+            if (!entity.signer_email) continue;
+
+            try {
+              const { signatureRequestId } = await sendSignatureRequest(entity, entity.signer_email);
+              await supabase
+                .from('request_entities')
+                .update({ signature_id: signatureRequestId, status: '8821_sent' })
+                .eq('id', entity.id);
+              console.log(`[csv-upload] 8821 sent for ${entity.entity_name} → ${entity.signer_email}`);
+            } catch (sendErr) {
+              console.error(`[csv-upload] Failed to send 8821 for ${entity.entity_name}:`, sendErr);
+            }
+          }
+
+          // Update request status if all entities have been sent
+          const { data: updatedEntities } = await supabase
+            .from('request_entities')
+            .select('status')
+            .eq('request_id', req.id) as { data: any[] | null; error: any };
+
+          if (updatedEntities) {
+            const allSent = updatedEntities.every(
+              (e: any) => ['8821_sent', '8821_signed', 'irs_queue', 'processing', 'completed'].includes(e.status)
+            );
+            if (allSent) {
+              await supabase.from('requests').update({ status: '8821_sent' }).eq('id', req.id);
+            }
+          }
+        }
+      } catch (signError) {
+        console.error('[csv-upload] 8821 auto-send error:', signError);
+      }
+    }
+
+    // Notify all admins about the new request in real-time
+    try {
+      const adminClient = createAdminClient();
+      const { data: admins } = await adminClient
+        .from('profiles')
+        .select('email')
+        .eq('role', 'admin');
+
+      if (admins && admins.length > 0) {
+        for (const admin of admins) {
+          await sendAdminNewRequestNotification(
+            admin.email,
+            profile.full_name || user.email || 'Team Member',
+            profile.role || 'processor',
+            clientName,
+            effectiveLoanNumber,
+            entityCount,
+            req.id
+          );
+        }
+      }
+    } catch (notifyErr) {
+      console.error('[csv-upload] Failed to send admin notification:', notifyErr);
     }
 
     // Audit log: CSV upload completed

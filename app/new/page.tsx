@@ -113,7 +113,9 @@ function CsvUploadTab() {
       const data = await res.json();
 
       if (!res.ok) {
-        const detail = data.details ? '\n' + data.details.join('\n') : '';
+        const detail = data.details
+          ? '\n' + (Array.isArray(data.details) ? data.details.join('\n') : data.details)
+          : '';
         setError(data.error + detail);
         return;
       }
@@ -196,7 +198,7 @@ function CsvUploadTab() {
             type="text"
             value={loanNumber}
             onChange={(e) => setLoanNumber(e.target.value)}
-            placeholder="e.g. 12345 or APP-2024-001"
+            placeholder="e.g. 12345 or APP-2026-001"
             disabled={isLoading}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
           />
@@ -288,7 +290,7 @@ function PdfUploadTab() {
   const [tid, setTid] = useState('');
   const [tidKind, setTidKind] = useState<'EIN' | 'SSN'>('EIN');
   const [formType, setFormType] = useState('1040');
-  const [years, setYears] = useState('2024');
+  const [years, setYears] = useState('2026');
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -472,7 +474,7 @@ function PdfUploadTab() {
               type="text"
               value={years}
               onChange={(e) => setYears(e.target.value)}
-              placeholder="e.g., 2024, 2023, 2022"
+              placeholder="e.g., 2026, 2025, 2024"
               disabled={isLoading}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
             />
@@ -559,17 +561,17 @@ function ManualEntryTab() {
   const [loanNumber, setLoanNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [entities, setEntities] = useState([
-    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[] },
+    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '' },
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const TAX_YEARS = ['2024', '2023', '2022', '2021'];
+  const TAX_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
 
   const addEntity = () => {
     setEntities([
       ...entities,
-      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [] },
+      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [], signerEmail: '', address: '', city: '', state: '', zipCode: '' },
     ]);
   };
 
@@ -599,6 +601,11 @@ function ManualEntryTab() {
     for (const ent of entities) {
       if (!ent.entityName.trim()) { setError('All entities need a name'); return; }
       if (!ent.tid.trim()) { setError('All entities need a Tax ID'); return; }
+      if (!ent.address.trim()) { setError('All entities need an address for the 8821 form'); return; }
+      if (!ent.city.trim()) { setError('All entities need a city'); return; }
+      if (!ent.state.trim()) { setError('All entities need a state'); return; }
+      if (!ent.zipCode.trim()) { setError('All entities need a ZIP code'); return; }
+      if (!ent.signerEmail.trim()) { setError('All entities need a signer email for 8821 delivery'); return; }
       if (ent.years.length === 0) { setError('Select at least one tax year per entity'); return; }
     }
 
@@ -635,8 +642,13 @@ function ManualEntryTab() {
         entity_name: ent.entityName,
         tid: ent.tid,
         tid_kind: ent.tidKind,
+        address: ent.address || null,
+        city: ent.city || null,
+        state: ent.state || null,
+        zip_code: ent.zipCode || null,
         form_type: ent.formType,
         years: ent.years,
+        signer_email: ent.signerEmail || null,
         status: 'pending',
       }));
 
@@ -738,6 +750,49 @@ function ManualEntryTab() {
                     />
                   </div>
                 </div>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-semibold text-mt-dark mb-2">Address <span className="text-red-500">*</span></label>
+                <input type="text" value={entity.address || ''}
+                  onChange={(e) => updateEntity(entity.id, { address: e.target.value })}
+                  placeholder="Street address" disabled={isLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-mt-dark mb-2">City <span className="text-red-500">*</span></label>
+                  <input type="text" value={entity.city || ''}
+                    onChange={(e) => updateEntity(entity.id, { city: e.target.value })}
+                    placeholder="City" disabled={isLoading}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-mt-dark mb-2">State <span className="text-red-500">*</span></label>
+                  <input type="text" value={entity.state || ''}
+                    onChange={(e) => updateEntity(entity.id, { state: e.target.value })}
+                    placeholder="TX" maxLength={2} disabled={isLoading}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-mt-dark mb-2">ZIP <span className="text-red-500">*</span></label>
+                  <input type="text" value={entity.zipCode || ''}
+                    onChange={(e) => updateEntity(entity.id, { zipCode: e.target.value })}
+                    placeholder="77489" maxLength={10} disabled={isLoading}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-mt-dark mb-2">Signer Email <span className="text-red-500">*</span></label>
+                <input type="email" value={entity.signerEmail}
+                  onChange={(e) => updateEntity(entity.id, { signerEmail: e.target.value })}
+                  placeholder="signer@email.com" disabled={isLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
+                />
+                <p className="text-xs text-gray-400 mt-1">Email address of the person who will sign the 8821 form</p>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-mt-dark mb-2">Form Type</label>
