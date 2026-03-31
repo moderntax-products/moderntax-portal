@@ -346,6 +346,18 @@ export async function POST(request: NextRequest) {
       )
     );
 
+    await tryEmail('sendDailyNudge', 'processor', () =>
+      sendDailyNudge(
+        testEmail,
+        {
+          pending_count: 12,
+          completed_count: 5,
+          in_progress_count: 8,
+          oldest_pending_days: 3,
+        }
+      )
+    );
+
     await tryEmail('sendRequestConfirmation', 'processor', () =>
       sendRequestConfirmation(
         testEmail,
