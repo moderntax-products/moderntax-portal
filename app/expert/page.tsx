@@ -237,36 +237,78 @@ export default function ExpertDashboard() {
                   IRS Direct Upload
                 </h2>
                 <p className="text-sm text-indigo-700 mt-1">
-                  Run the bookmarklet on the IRS SOR inbox to upload transcripts directly to the portal — no manual file handling needed.
+                  Upload transcripts directly from the IRS SOR inbox to the portal — no manual file handling needed.
                 </p>
-                <ol className="mt-3 text-sm text-indigo-800 space-y-1">
-                  <li><strong>1.</strong> Open IRS Secure Object Repository (SOR) inbox</li>
-                  <li><strong>2.</strong> Run the bookmarklet below in your browser console</li>
-                  <li><strong>3.</strong> Transcripts auto-match to your assignments and upload instantly</li>
-                </ol>
               </div>
               <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">
                 Recommended
               </span>
             </div>
-            <div className="mt-4 flex items-center gap-3">
-              <a
-                href="https://portal.moderntax.io/irs-batch-v6.js"
-                target="_blank"
-                rel="noopener"
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Download Script (v6)
-              </a>
-              <span className="text-xs text-indigo-600">
-                Or run: <code className="bg-white/60 px-2 py-1 rounded font-mono text-xs">fetch(&apos;https://portal.moderntax.io/irs-batch-v6.js&apos;).then(r=&gt;r.text()).then(eval)</code>
-              </span>
+
+            {/* Step-by-step instructions */}
+            <div className="mt-4 space-y-3">
+              <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">1</span>
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">Open the IRS SOR inbox</p>
+                  <p className="text-xs text-indigo-600 mt-0.5">Log into the IRS Secure Object Repository and navigate to your inbox.</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">2</span>
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">Open the browser console</p>
+                  <p className="text-xs text-indigo-600 mt-0.5">Press <kbd className="px-1.5 py-0.5 bg-indigo-100 rounded text-indigo-800 font-mono font-bold">F12</kbd> on your keyboard, then click the <strong>Console</strong> tab at the top of the panel that opens.</p>
+                  <p className="text-xs text-indigo-500 mt-1 italic">If you see a paste warning, type <code className="bg-indigo-100 px-1 rounded font-mono">allow pasting</code> and press Enter first.</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">3</span>
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">Paste the command and press Enter</p>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <code className="block bg-gray-900 text-green-400 px-3 py-2 rounded font-mono text-xs select-all flex-1">fetch(&apos;https://portal.moderntax.io/irs-batch-v6.js&apos;).then(r=&gt;r.text()).then(eval)</code>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText("fetch('https://portal.moderntax.io/irs-batch-v6.js').then(r=>r.text()).then(eval)"); }}
+                      className="flex-shrink-0 px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700 transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">4</span>
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">Log in when prompted</p>
+                  <p className="text-xs text-indigo-600 mt-0.5">A popup will ask for your ModernTax email and password. Enter the same credentials you use to log into this portal.</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 bg-white/60 rounded-lg p-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">5</span>
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">Wait for the upload to finish</p>
+                  <p className="text-xs text-indigo-600 mt-0.5">A <strong>blue progress panel</strong> will appear in the top-right corner of the page. It shows each transcript being matched and uploaded in real time. When complete, you&apos;ll see a summary popup with the total uploaded.</p>
+                </div>
+              </div>
             </div>
+
+            {/* How you know it worked */}
+            <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+              <p className="text-xs font-semibold text-emerald-800">How you know it worked:</p>
+              <ul className="mt-1 text-xs text-emerald-700 space-y-0.5">
+                <li>The progress panel shows uploaded transcripts with green checkmarks</li>
+                <li>A final popup says &quot;Done! X transcripts uploaded to portal&quot;</li>
+                <li>Your assignments below will show as <strong>Completed</strong> after you refresh this page</li>
+              </ul>
+            </div>
+
             <p className="mt-3 text-xs text-indigo-500">
-              You can still upload files manually using the &quot;Add Files&quot; button on each assignment below.
+              You can also upload files manually using the &quot;Upload Transcripts&quot; button on each assignment below.
             </p>
           </div>
         )}

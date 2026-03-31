@@ -72,15 +72,23 @@ export async function POST(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Look up entity by signature_id
-    const { data: entity, error: entityError } = await supabase
+    // Try multiple strategies to match the entity
+    let entity: { id: string; entity_name: string; request_id: string; status: string } | null = null;
+
+    // Strategy 1: Look up by signature_id
+    const { data: sigEntity } = await supabase
       .from('request_entities')
       .select('id, entity_name, request_id, status')
       .eq('signature_id', signatureRequestId)
       .single();
 
-    if (entityError || !entity) {
-      // Also try metadata entity_id if stored
+    if (sigEntity) {
+      entity = sigEntity;
+      console.log(`[dropbox-sign] Matched by signature_id: ${entity.entity_name}`);
+    }
+
+    // Strategy 2: Try metadata entity_id
+    if (!entity) {
       const metadataEntityId = signatureRequest.metadata?.entity_id;
       if (metadataEntityId) {
         const { data: metaEntity } = await supabase
@@ -88,13 +96,50 @@ export async function POST(request: NextRequest) {
           .select('id, entity_name, request_id, status')
           .eq('id', metadataEntityId)
           .single();
-
         if (metaEntity) {
-          await processSignedEntity(supabase, metaEntity, signatureRequestId, signatureRequest);
-          return new NextResponse('Hello API Event Received', { status: 200 });
+          entity = metaEntity;
+          console.log(`[dropbox-sign] Matched by metadata entity_id: ${entity.entity_name}`);
         }
       }
+    }
 
+    // Strategy 3: Match by signer email from the signature request
+    if (!entity && signatureRequest.signatures?.length) {
+      const signerEmails = signatureRequest.signatures
+        .map((s: any) => s.signer_email_address)
+        .filter(Boolean);
+
+      if (signerEmails.length > 0) {
+        // Find entities in 8821_sent status with matching signer email
+        const { data: emailEntities } = await supabase
+          .from('request_entities')
+          .select('id, entity_name, request_id, status')
+          .in('signer_email', signerEmails)
+          .eq('status', '8821_sent')
+          .is('signed_8821_url', null);
+
+        if (emailEntities && emailEntities.length === 1) {
+          entity = emailEntities[0];
+          console.log(`[dropbox-sign] Matched by signer email: ${entity.entity_name}`);
+        } else if (emailEntities && emailEntities.length > 1) {
+          // Multiple matches — try to narrow by entity name in subject
+          const subject = signatureRequest.subject || signatureRequest.title || '';
+          const match = emailEntities.find((e: any) =>
+            subject.toLowerCase().includes(e.entity_name.toLowerCase())
+          );
+          if (match) {
+            entity = match;
+            console.log(`[dropbox-sign] Matched by signer email + subject: ${entity.entity_name}`);
+          } else {
+            // Take the first one as best guess
+            entity = emailEntities[0];
+            console.log(`[dropbox-sign] Multiple email matches, using first: ${entity.entity_name}`);
+          }
+        }
+      }
+    }
+
+    if (!entity) {
       console.error(`[dropbox-sign] No entity found for signature_request_id: ${signatureRequestId}`);
       return new NextResponse('Hello API Event Received', { status: 200 });
     }
@@ -140,13 +185,14 @@ async function processSignedEntity(
     return;
   }
 
-  // Update entity
+  // Update entity — also backfill signature_id if missing
   const oldStatus = entity.status;
   const { error: updateError } = await supabase
     .from('request_entities')
     .update({
       signed_8821_url: storagePath,
       status: '8821_signed',
+      signature_id: signatureRequestId,
       signature_created_at: new Date().toISOString(),
     })
     .eq('id', entity.id);

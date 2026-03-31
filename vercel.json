@@ -7,9 +7,39 @@
     {
       "path": "/api/cron/sla-warning",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/admin-daily-summary",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/manager-weekly-summary",
+      "schedule": "0 14 * * 1"
+    },
+    {
+      "path": "/api/cron/8821-reminder",
+      "schedule": "0 14 * * *"
     }
   ],
   "headers": [
+    {
+      "source": "/irs-batch-v6.js",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET" },
+        { "key": "Content-Type", "value": "application/javascript" },
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/api/expert/batch-upload",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://la.www4.irs.gov" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" },
+        { "key": "Access-Control-Max-Age", "value": "86400" }
+      ]
+    },
     {
       "source": "/(.*)",
       "headers": [

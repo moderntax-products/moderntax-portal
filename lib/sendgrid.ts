@@ -538,7 +538,7 @@ export async function sendWelcomeEmail(
   role: string,
   tempPassword: string,
   clientName?: string,
-  resetLink?: string
+  _resetLink?: string
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send email');
@@ -550,22 +550,16 @@ export async function sendWelcomeEmail(
     ? `<p>You've been added to the <strong>${clientName}</strong> organization as a <strong>${roleLabel}</strong>.</p>`
     : `<p>You've been added to the ModernTax team as a <strong>${roleLabel}</strong>.</p>`;
 
-  // If we have a reset link, use a cleaner email without plaintext password
-  // (plaintext passwords in emails trigger spam filters on iCloud, Gmail, etc.)
-  const credentialsBlock = resetLink
-    ? `
-<div class="stats">
-  <p style="margin: 0;"><strong>Email:</strong> ${email}</p>
-</div>
-<p>Click the button below to set your password and log in for the first time.</p>
-    `
-    : `
+  // Always include temp password — recovery links expire too quickly and
+  // email scanners/link previewers often consume the single-use token before
+  // the user even opens the email, causing "Invalid or expired link" errors.
+  const credentialsBlock = `
 <div class="stats">
   <p style="margin: 0;"><strong>Email:</strong> ${email}</p>
   <p style="margin: 8px 0 0 0;"><strong>Temporary Password:</strong> <code style="background: #fff3cd; padding: 2px 8px; border-radius: 4px; font-size: 14px;">${tempPassword}</code></p>
 </div>
-<p><strong>Important:</strong> Please change your password after your first login.</p>
-    `;
+<p>Use these credentials to log in. You can change your password after logging in via <strong>Settings</strong>.</p>
+  `;
 
   const content = `
 <p>Welcome to ModernTax, ${fullName}!</p>
@@ -575,8 +569,8 @@ ${credentialsBlock}
   `.trim();
 
   const html = createEmailTemplate('Welcome to ModernTax', content, {
-    text: resetLink ? 'Set Password & Log In' : 'Log In Now',
-    url: resetLink || `${appUrl}/login`,
+    text: 'Log In Now',
+    url: `${appUrl}/login`,
   });
 
   try {

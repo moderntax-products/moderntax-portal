@@ -16,12 +16,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': 'https://la.www4.irs.gov',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Max-Age': '86400',
+};
+
+// Helper to add CORS headers to all responses
+function corsJson(data: any, init?: { status?: number }) {
+  const resp = NextResponse.json(data, init);
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => resp.headers.set(k, v));
+  return resp;
+}
+
+// Handle CORS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Auth via Bearer token (expert's session token from bookmarklet)
     const authHeader = request.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return corsJson({ error: 'Unauthorized' }, { status: 401 });
     }
     const token = authHeader.slice(7);
 
@@ -30,7 +49,7 @@ export async function POST(request: NextRequest) {
     // Verify expert identity from token
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return corsJson({ error: 'Invalid token' }, { status: 401 });
     }
 
     const { data: profile } = await supabase
@@ -40,15 +59,15 @@ export async function POST(request: NextRequest) {
       .single() as { data: { id: string; role: string; full_name: string | null; email: string } | null; error: any };
 
     if (!profile || profile.role !== 'expert') {
-      return NextResponse.json({ error: 'Only experts can upload via this endpoint' }, { status: 403 });
+      return corsJson({ error: 'Only experts can upload via this endpoint' }, { status: 403 });
     }
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const metadataStr = formData.get('metadata') as string | null;
 
-    if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-    if (!metadataStr) return NextResponse.json({ error: 'No metadata provided' }, { status: 400 });
+    if (!file) return corsJson({ error: 'No file provided' }, { status: 400 });
+    if (!metadataStr) return corsJson({ error: 'No metadata provided' }, { status: 400 });
 
     let metadata: {
       tin: string;
@@ -63,7 +82,7 @@ export async function POST(request: NextRequest) {
     try {
       metadata = JSON.parse(metadataStr);
     } catch {
-      return NextResponse.json({ error: 'Invalid metadata JSON' }, { status: 400 });
+      return corsJson({ error: 'Invalid metadata JSON' }, { status: 400 });
     }
 
     // Clean TIN for matching (remove dashes, spaces)
@@ -71,7 +90,7 @@ export async function POST(request: NextRequest) {
     const tinLast4 = cleanTin.slice(-4);
 
     if (!tinLast4 || tinLast4.length < 4) {
-      return NextResponse.json({
+      return corsJson({
         error: 'Cannot match transcript — TIN not found in metadata',
         filename: metadata.filename,
       }, { status: 400 });
@@ -90,7 +109,7 @@ export async function POST(request: NextRequest) {
       .in('status', ['assigned', 'in_progress', 'completed']) as { data: any[] | null; error: any };
 
     if (!assignments || assignments.length === 0) {
-      return NextResponse.json({
+      return corsJson({
         error: 'No assignments found for this expert',
         filename: metadata.filename,
       }, { status: 404 });
@@ -133,7 +152,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!match) {
-      return NextResponse.json({
+      return corsJson({
         error: `No matching entity found for TIN ***${tinLast4} / ${metadata.formType}`,
         filename: metadata.filename,
         searched: assignments.length,
@@ -160,7 +179,7 @@ export async function POST(request: NextRequest) {
       });
 
     if (uploadError) {
-      return NextResponse.json({
+      return corsJson({
         error: 'Failed to upload file to storage',
         details: uploadError.message,
         filename: metadata.filename,
@@ -277,7 +296,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({
+    return corsJson({
       success: true,
       entityId,
       entityName: entity.entity_name,
@@ -289,7 +308,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('[batch-upload] Error:', msg);
-    return NextResponse.json({ error: 'Internal server error', details: msg }, { status: 500 });
+    return corsJson({ error: 'Internal server error', details: msg }, { status: 500 });
   }
 }
 
@@ -301,14 +320,14 @@ export async function GET(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return corsJson({ error: 'Unauthorized' }, { status: 401 });
     }
     const token = authHeader.slice(7);
 
     const supabase = createAdminClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return corsJson({ error: 'Invalid token' }, { status: 401 });
     }
 
     const { data: profile } = await supabase
@@ -318,7 +337,7 @@ export async function GET(request: NextRequest) {
       .single() as { data: any; error: any };
 
     if (!profile || profile.role !== 'expert') {
-      return NextResponse.json({ error: 'Not an expert' }, { status: 403 });
+      return corsJson({ error: 'Not an expert' }, { status: 403 });
     }
 
     // Get active assignments
@@ -344,7 +363,7 @@ export async function GET(request: NextRequest) {
       totalTranscriptsUploaded += (a.request_entities?.transcript_urls?.length || 0);
     });
 
-    return NextResponse.json({
+    return corsJson({
       expert: {
         id: profile.id,
         name: profile.full_name,
@@ -364,6 +383,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json({ error: 'Internal server error', details: msg }, { status: 500 });
+    return corsJson({ error: 'Internal server error', details: msg }, { status: 500 });
   }
 }
