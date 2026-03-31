@@ -39,7 +39,9 @@ export type AuditAction =
   | 'client_created'
   | 'employment_request_received'
   | 'employment_result_retrieved'
-  | 'invite_resent';
+  | 'invite_resent'
+  | 'transcript_request_received'
+  | '8821_data_uploaded';
 
 export interface AuditEvent {
   action: AuditAction;
