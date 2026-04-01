@@ -162,8 +162,14 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
           <div className="flex items-center gap-3">
             <Link
-              href="/admin/email-intake"
+              href="/admin/billing"
               className="px-4 py-2 text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
+            >
+              Billing
+            </Link>
+            <Link
+              href="/admin/email-intake"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Email Intake
             </Link>
