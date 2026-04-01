@@ -4,6 +4,7 @@ import type { RequestEntity } from '@/lib/types';
 import { maskTid } from '@/lib/mask';
 import Link from 'next/link';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
+import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 
 interface Props {
@@ -157,9 +158,19 @@ export default async function RequestDetailPage({ params }: Props) {
 
           {/* Entities */}
           <div className="space-y-6">
-            <h2 className="text-xl font-bold text-mt-dark">
-              Entities ({request.request_entities?.length || 0})
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-mt-dark">
+                Entities ({request.request_entities?.length || 0})
+              </h2>
+              <DownloadAllTranscripts
+                requestId={request.id}
+                loanNumber={request.loan_number}
+                totalFiles={
+                  (request.request_entities || []).reduce((sum: number, e: any) =>
+                    sum + (e.transcript_urls?.length || 0) + (e.signed_8821_url ? 1 : 0), 0)
+                }
+              />
+            </div>
 
             {request.request_entities && request.request_entities.length > 0 ? (
               <div className="grid gap-6">
