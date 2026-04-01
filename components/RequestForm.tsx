@@ -29,6 +29,7 @@ const YEARS = Array.from({ length: 10 }, (_, i) =>
 export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
   const [accountNumber, setAccountNumber] = useState('');
   const [notes, setNotes] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [entities, setEntities] = useState<Entity[]>([
     {
       id: '1',
@@ -92,16 +93,17 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
 
     // Validation
     if (!accountNumber.trim()) {
-      alert('Please enter an account number');
+      setFormError('Please enter an account number');
       return;
     }
 
     const validEntities = entities.filter((e) => e.name.trim() && e.ein.trim() && e.years.length > 0);
     if (validEntities.length === 0) {
-      alert('Please add at least one entity with a name, EIN, and selected years');
+      setFormError('Please add at least one entity with a name, EIN, and selected years');
       return;
     }
 
@@ -113,12 +115,18 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
       });
     } catch (error) {
       console.error('Form submission error:', error);
-      alert('Failed to submit request. Please try again.');
+      setFormError('Failed to submit request. Please try again.');
     }
   };
 
   return (
     <form onSubmit={handleSubmit} className="max-w-4xl mx-auto space-y-8">
+      {formError && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-red-700 text-sm">{formError}</p>
+        </div>
+      )}
+
       {/* Account Number */}
       <div className="bg-white rounded-lg shadow-md p-6">
         <label className="block text-sm font-semibold text-gray-900 mb-2">

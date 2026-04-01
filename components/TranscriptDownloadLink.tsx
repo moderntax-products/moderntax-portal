@@ -9,21 +9,23 @@ interface TranscriptDownloadLinkProps {
 
 export function TranscriptDownloadLink({ storagePath, label }: TranscriptDownloadLinkProps) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/download-transcript?path=${encodeURIComponent(storagePath)}`);
       const data = await res.json();
       if (res.ok && data.url) {
         window.open(data.url, '_blank');
       } else {
-        alert(data.error || 'Failed to download transcript');
+        setError(data.error || 'Failed to download transcript');
       }
     } catch (err) {
       console.error('Download error:', err);
-      alert('Failed to download transcript');
+      setError('Failed to download transcript');
     } finally {
       setLoading(false);
     }
@@ -33,6 +35,7 @@ export function TranscriptDownloadLink({ storagePath, label }: TranscriptDownloa
   const fileName = storagePath.split('/').pop() || label;
 
   return (
+    <>
     <button
       onClick={handleClick}
       disabled={loading}
@@ -48,5 +51,9 @@ export function TranscriptDownloadLink({ storagePath, label }: TranscriptDownloa
         <p className="text-xs text-gray-500 truncate">{decodeURIComponent(fileName)}</p>
       </div>
     </button>
+    {error && (
+      <p className="text-xs text-red-600 mt-1">{error}</p>
+    )}
+    </>
   );
 }

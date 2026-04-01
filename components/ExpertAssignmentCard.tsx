@@ -43,6 +43,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
   const [showUpload, setShowUpload] = useState(false);
   const [showFlag, setShowFlag] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const entity = assignment.request_entities;
   const statusInfo = STATUS_LABELS[assignment.status] || { label: assignment.status, color: 'bg-gray-100 text-gray-800' };
@@ -73,6 +74,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
   const handleDownload8821 = async () => {
     if (!entity.signed_8821_url) return;
     setDownloading8821(true);
+    setDownloadError(null);
     try {
       const res = await fetch(`/api/expert/download-8821?entityId=${entity.id}`);
       const data = await res.json();
@@ -80,11 +82,11 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
         window.open(data.url, '_blank');
       } else {
         console.error('Download failed:', data.error);
-        alert(data.error || 'Failed to download 8821');
+        setDownloadError(data.error || 'Failed to download 8821');
       }
     } catch (err) {
       console.error('Download error:', err);
-      alert('Failed to download 8821');
+      setDownloadError('Failed to download 8821');
     } finally {
       setDownloading8821(false);
     }
@@ -213,6 +215,10 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
             </button>
           )}
         </div>
+
+        {downloadError && (
+          <p className="text-xs text-red-600">{downloadError}</p>
+        )}
 
         {/* Expandable sections */}
         {showUpload && (

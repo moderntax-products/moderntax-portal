@@ -70,6 +70,7 @@ function CsvUploadTab() {
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showColumnRef, setShowColumnRef] = useState(false);
   const [result, setResult] = useState<{
     requests_created: number;
     entities_created: number;
@@ -204,15 +205,69 @@ function CsvUploadTab() {
           />
         </div>
 
-        {/* Expected columns */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-          <p className="text-sm font-semibold text-blue-800 mb-2">Expected Columns:</p>
-          <p className="text-xs text-blue-700 font-mono leading-relaxed">
-            legal_name, tid, tid_kind, address, city, state, zip_code, years, form
-          </p>
-          <p className="text-xs text-blue-600 mt-1">
-            Optional: signature_id, first name, last name, signature_created_at
-          </p>
+        {/* Column Reference & Template */}
+        <div className="mb-6">
+          <div className="flex items-center gap-3 mb-3">
+            <button
+              type="button"
+              onClick={() => setShowColumnRef(!showColumnRef)}
+              className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${showColumnRef ? 'rotate-90' : ''}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              Column Reference
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const headers = 'legal_name,tid,email,years,tid_kind,form,first name,last name,address,city,state,zip_code,signature_id';
+                const example = '"Acme Holdings LLC","12-3456789","owner@acme.com","2023,2024,2025","EIN","1040","Jane","Doe","123 Main St","Houston","TX","77001",""';
+                const csv = headers + '\n' + example + '\n';
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'moderntax-csv-template.csv';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download Template
+            </button>
+          </div>
+
+          {showColumnRef && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-5 space-y-4 text-sm">
+              <div>
+                <p className="font-semibold text-gray-900 mb-2">Required Columns:</p>
+                <ul className="space-y-1.5 text-gray-700">
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">legal_name</span> — Legal entity name (e.g., &quot;Acme Holdings LLC&quot;)</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">tid</span> — Tax ID number (e.g., &quot;12-3456789&quot; for EIN, &quot;123-45-6789&quot; for SSN)</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">email</span> — Signer email for 8821 delivery (e.g., &quot;owner@acme.com&quot;)</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">years</span> — Tax years, comma-separated (e.g., &quot;2023,2024,2025&quot;)</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-semibold text-gray-900 mb-2">Optional Columns:</p>
+                <ul className="space-y-1.5 text-gray-700">
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">tid_kind</span> — &quot;EIN&quot; (default) or &quot;SSN&quot;</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">form</span> — Tax form: 1040, 1065, 1120, or 1120S (default: 1040)</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">first name</span> — Signer first name</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">last name</span> — Signer last name</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">address</span>, <span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">city</span>, <span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">state</span>, <span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">zip_code</span> — Entity address</li>
+                  <li><span className="font-mono text-xs bg-gray-200 px-1.5 py-0.5 rounded">signature_id</span> — Pre-signed Dropbox Sign ID (skips 8821 send)</li>
+                </ul>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* File input */}

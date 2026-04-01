@@ -19,6 +19,26 @@
     {
       "path": "/api/cron/8821-reminder",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/auto-sync-8821",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-assign-experts",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-complete-requests",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/stuck-entity-alert",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/auto-invoice",
+      "schedule": "0 6 1 * *"
     }
   ],
   "headers": [
