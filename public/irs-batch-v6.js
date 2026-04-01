@@ -312,7 +312,8 @@
     }
 
     // ---- HTML to PDF ----
-    async function htmlToPdfBlob(htmlString, filename) {
+    async function htmlToPdfBlob(htmlString, filename, quality) {
+        quality = quality || 0.72;
         renderContainer.innerHTML = htmlString;
         const styleOverride = document.createElement('style');
         styleOverride.textContent = `
@@ -325,7 +326,7 @@
         await delay(300);
 
         const canvas = await html2canvas(renderContainer, {
-            scale: 2, useCORS: true, logging: false, width: 850, windowWidth: 850, backgroundColor: '#ffffff'
+            scale: 1.5, useCORS: true, logging: false, width: 850, windowWidth: 850, backgroundColor: '#ffffff'
         });
 
         const imgWidth = 210;
@@ -337,7 +338,7 @@
         const pdf = new jsPDF('p', 'mm', 'a4');
         let heightLeft = imgHeight;
         let position = margin;
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        const imgData = canvas.toDataURL('image/jpeg', quality);
 
         pdf.addImage(imgData, 'JPEG', margin, position, contentWidth, imgHeight);
         heightLeft -= (pageHeight - margin * 2);
@@ -470,6 +471,17 @@
                     }
                 }
 
+                // Extra TIN fallback: scan full text for SSN/EIN patterns
+                if (!tin) {
+                    const tinMatch = fullText.match(/(?:SSN|EIN|TIN|Taxpayer.*?Number)[:\s]*([*\d][\d*\s-]{6,10}\d)/i);
+                    if (tinMatch) tin = tinMatch[1].trim();
+                }
+                // Fallback: extract TIN from IRS SOR message subject
+                if (!tin && msg.subject) {
+                    const subjectTin = msg.subject.match(/TIN\s*[-–]?\s*(\d{9})/);
+                    if (subjectTin) tin = subjectTin[1];
+                }
+
                 const name = taxpayerName || 'Unknown';
                 const cleanName = name.substring(0, 20).replace(/[^a-zA-Z0-9 &]/g, '').trim().replace(/\s+/g, ' ');
                 const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}`;
@@ -509,7 +521,14 @@
 
                 // ---- CONVERT TO PDF ----
                 addLog(`  🔄 Converting...`, 'info');
-                const pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
+                let pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
+
+                // If PDF is too large, recompress at lower quality
+                if (pdfBlob.size > 3.5 * 1024 * 1024) {
+                    addLog(`  🗜️ Compressing (${(pdfBlob.size / 1024 / 1024).toFixed(1)}MB)...`, 'warn');
+                    pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf', 0.45);
+                    addLog(`  📦 Compressed to ${(pdfBlob.size / 1024 / 1024).toFixed(1)}MB`, 'info');
+                }
 
                 // ---- UPLOAD TO PORTAL (with retry) ----
                 addLog(`  📤 Uploading...`, 'upload');

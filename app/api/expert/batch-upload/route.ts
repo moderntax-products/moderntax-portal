@@ -16,6 +16,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 
+// Allow larger file uploads (IRS Record of Account transcripts can exceed 4MB)
+export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
+
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': 'https://la.www4.irs.gov',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -86,19 +90,12 @@ export async function POST(request: NextRequest) {
       return corsJson({ error: 'Invalid metadata JSON' }, { status: 400 });
     }
 
-    // Clean TIN for matching (remove dashes, spaces)
-    const cleanTin = (metadata.tin || '').replace(/[\s-]/g, '');
-    const tinLast4 = cleanTin.slice(-4);
-
-    if (!tinLast4 || tinLast4.length < 4) {
-      return corsJson({
-        error: 'Cannot match transcript — TIN not found in metadata',
-        filename: metadata.filename,
-      }, { status: 400 });
-    }
+    // Clean TIN for matching (remove dashes, spaces, asterisks from IRS masking)
+    const cleanTin = (metadata.tin || '').replace(/[\s\-*]/g, '');
+    const tinLast4 = cleanTin.length >= 4 ? cleanTin.slice(-4) : '';
 
     // Find matching entity assignment for this expert
-    // Match by: TIN last 4 digits + form type + expert assignment
+    // Match by: TIN last 4 digits + form type + expert assignment (falls back to name match)
     const { data: assignments } = await supabase
       .from('expert_assignments')
       .select(`
@@ -119,42 +116,62 @@ export async function POST(request: NextRequest) {
     // Match by TIN last 4 + form type (IRS masks TINs, only last 4 visible)
     const normalizeForm = (f: string) => f.replace(/[\s-]/g, '').toUpperCase();
     const targetForm = normalizeForm(metadata.formType || '');
-    const namePrefix = (metadata.taxpayerName || '').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase();
+    const cleanName = (s: string) => s.replace(/[^a-zA-Z]/g, '').toUpperCase();
+    const namePrefix = cleanName(metadata.taxpayerName || '').substring(0, 3);
 
-    let match = assignments.find((a: any) => {
-      const entity = a.request_entities;
-      if (!entity) return false;
-      const entityTin = (entity.tid || '').replace(/[\s-]/g, '');
-      const entityTinLast4 = entityTin.slice(-4);
-      const entityForm = normalizeForm(entity.form_type || '');
+    let match: any = null;
 
-      return entityTinLast4 === tinLast4 && entityForm === targetForm;
-    });
-
-    // Fallback: match by TIN last 4 only (ignore form type)
-    if (!match) {
+    // Strategy 1: TIN last 4 + form type (strongest match)
+    if (tinLast4) {
       match = assignments.find((a: any) => {
         const entity = a.request_entities;
         if (!entity) return false;
-        const entityTin = (entity.tid || '').replace(/[\s-]/g, '');
+        const entityTin = (entity.tid || '').replace(/[\s\-*]/g, '');
+        const entityTinLast4 = entityTin.slice(-4);
+        const entityForm = normalizeForm(entity.form_type || '');
+        return entityTinLast4 === tinLast4 && entityForm === targetForm;
+      });
+    }
+
+    // Strategy 2: TIN last 4 only (ignore form type)
+    if (!match && tinLast4) {
+      match = assignments.find((a: any) => {
+        const entity = a.request_entities;
+        if (!entity) return false;
+        const entityTin = (entity.tid || '').replace(/[\s\-*]/g, '');
         const entityTinLast4 = entityTin.slice(-4);
         return entityTinLast4 === tinLast4;
       });
     }
 
-    // Fallback: match by first 3 letters of name (when TIN is fully masked)
+    // Strategy 3: Name prefix match (first 3 letters — handles masked/missing TIN)
     if (!match && namePrefix.length >= 3) {
       match = assignments.find((a: any) => {
         const entity = a.request_entities;
         if (!entity) return false;
-        const entityNamePrefix = (entity.entity_name || '').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase();
+        const entityNamePrefix = cleanName(entity.entity_name || '').substring(0, 3);
         return entityNamePrefix === namePrefix;
       });
     }
 
+    // Strategy 4: Fuzzy name match — check if taxpayer name words appear in entity name
+    if (!match && metadata.taxpayerName) {
+      const nameWords = cleanName(metadata.taxpayerName).split(/\s+/).filter(w => w.length >= 3);
+      if (nameWords.length > 0) {
+        match = assignments.find((a: any) => {
+          const entity = a.request_entities;
+          if (!entity) return false;
+          const entityClean = cleanName(entity.entity_name || '');
+          return nameWords.some((word: string) => entityClean.includes(word));
+        });
+      }
+    }
+
     if (!match) {
       return corsJson({
-        error: `No matching entity found for TIN ***${tinLast4} / ${metadata.formType}`,
+        error: tinLast4
+          ? `No matching entity found for TIN ***${tinLast4} / ${metadata.formType}`
+          : `Cannot match transcript — TIN not found in metadata`,
         filename: metadata.filename,
         searched: assignments.length,
       }, { status: 404 });
