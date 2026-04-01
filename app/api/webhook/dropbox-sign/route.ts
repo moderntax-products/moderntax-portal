@@ -104,25 +104,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Strategy 3: Match by signer email from the signature request
+    // Check both 8821_sent AND pending (for manually-sent 8821s outside portal)
     if (!entity && signatureRequest.signatures?.length) {
       const signerEmails = signatureRequest.signatures
         .map((s: any) => s.signer_email_address)
         .filter(Boolean);
 
       if (signerEmails.length > 0) {
-        // Find entities in 8821_sent status with matching signer email
         const { data: emailEntities } = await supabase
           .from('request_entities')
           .select('id, entity_name, request_id, status')
           .in('signer_email', signerEmails)
-          .eq('status', '8821_sent')
+          .in('status', ['8821_sent', 'pending', 'submitted'])
           .is('signed_8821_url', null);
 
         if (emailEntities && emailEntities.length === 1) {
           entity = emailEntities[0];
           console.log(`[dropbox-sign] Matched by signer email: ${entity.entity_name}`);
         } else if (emailEntities && emailEntities.length > 1) {
-          // Multiple matches — try to narrow by entity name in subject
           const subject = signatureRequest.subject || signatureRequest.title || '';
           const match = emailEntities.find((e: any) =>
             subject.toLowerCase().includes(e.entity_name.toLowerCase())
@@ -131,9 +130,61 @@ export async function POST(request: NextRequest) {
             entity = match;
             console.log(`[dropbox-sign] Matched by signer email + subject: ${entity.entity_name}`);
           } else {
-            // Take the first one as best guess
             entity = emailEntities[0];
             console.log(`[dropbox-sign] Multiple email matches, using first: ${entity.entity_name}`);
+          }
+        }
+      }
+    }
+
+    // Strategy 4: Match by entity name extracted from signature request title
+    // Handles manually-sent 8821s where entity has no signature_id or signer_email
+    // Title format: "8821 Consent Form Request - ENTITY NAME"
+    if (!entity) {
+      const title = signatureRequest.title || signatureRequest.subject || '';
+      const entityName = title.replace(/^8821 Consent Form Request\s*-\s*/i, '').trim();
+
+      if (entityName && entityName !== title) {
+        // Name was actually extracted (title had the expected prefix)
+        const { data: nameEntities } = await supabase
+          .from('request_entities')
+          .select('id, entity_name, request_id, status')
+          .is('signed_8821_url', null)
+          .not('status', 'in', '("completed","failed")');
+
+        if (nameEntities) {
+          // Case-insensitive match
+          const match = nameEntities.find(
+            (e: any) => e.entity_name.toLowerCase().trim() === entityName.toLowerCase()
+          );
+          if (match) {
+            entity = match;
+            console.log(`[dropbox-sign] Matched by entity name in title: ${entity.entity_name}`);
+          }
+        }
+      }
+
+      // Also try matching signer name from signatures against entity name
+      if (!entity && signatureRequest.signatures?.length) {
+        const signerNames = signatureRequest.signatures
+          .map((s: any) => s.signer_name?.toLowerCase().trim())
+          .filter(Boolean);
+
+        if (signerNames.length > 0) {
+          const { data: allPending } = await supabase
+            .from('request_entities')
+            .select('id, entity_name, request_id, status')
+            .is('signed_8821_url', null)
+            .not('status', 'in', '("completed","failed")');
+
+          if (allPending) {
+            const match = allPending.find((e: any) =>
+              signerNames.includes(e.entity_name.toLowerCase().trim())
+            );
+            if (match) {
+              entity = match;
+              console.log(`[dropbox-sign] Matched by signer name: ${entity.entity_name}`);
+            }
           }
         }
       }
@@ -158,7 +209,7 @@ async function processSignedEntity(
   supabase: any,
   entity: { id: string; entity_name: string; request_id: string; status: string },
   signatureRequestId: string,
-  _signatureRequest: any
+  signatureRequest: any
 ) {
   // Download signed PDF
   let pdfBuffer: Buffer;
@@ -185,16 +236,22 @@ async function processSignedEntity(
     return;
   }
 
-  // Update entity — also backfill signature_id if missing
+  // Update entity — backfill signature_id and signer_email if missing
   const oldStatus = entity.status;
+  const signerEmail = signatureRequest?.signatures?.[0]?.signer_email_address || null;
+  const updateData: Record<string, any> = {
+    signed_8821_url: storagePath,
+    status: '8821_signed',
+    signature_id: signatureRequestId,
+    signature_created_at: new Date().toISOString(),
+  };
+  // Backfill signer_email if entity didn't have one
+  if (signerEmail) {
+    updateData.signer_email = signerEmail;
+  }
   const { error: updateError } = await supabase
     .from('request_entities')
-    .update({
-      signed_8821_url: storagePath,
-      status: '8821_signed',
-      signature_id: signatureRequestId,
-      signature_created_at: new Date().toISOString(),
-    })
+    .update(updateData)
     .eq('id', entity.id);
 
   if (updateError) {
@@ -227,7 +284,7 @@ async function processSignedEntity(
         .from('requests')
         .update({ status: '8821_signed' })
         .eq('id', entity.request_id)
-        .in('status', ['submitted', '8821_sent']);
+        .in('status', ['pending', 'submitted', '8821_sent']);
     }
   }
 
