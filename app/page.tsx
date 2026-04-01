@@ -4,7 +4,14 @@ import Link from 'next/link';
 import { LogoutButton } from '@/components/LogoutButton';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ search?: string; status?: string }>;
+}) {
+  const params: { search?: string; status?: string } = searchParams ? await searchParams : {};
+  const searchQuery = (params.search ?? '').trim();
+  const statusFilter = params.status ?? 'all';
   let supabase;
   try {
     supabase = await createServerComponentClient();
@@ -82,11 +89,11 @@ export default async function DashboardPage() {
       query = query.eq('requested_by', user.id);
     }
 
-    const { data: fetchedRequests, error: requestsError } = await query.limit(50) as { data: any[] | null; error: any };
+    const { data: fetchedRequests, error: requestsError } = await query as { data: any[] | null; error: any };
 
     if (!requestsError && fetchedRequests) {
       allClientRequests = fetchedRequests;
-      requests = fetchedRequests.slice(0, 20); // Show up to 20 in the table
+      requests = fetchedRequests;
 
       // Count at entity level (each EIN/SSN is a unique request unit)
       const allEntities = fetchedRequests.flatMap((r: any) => r.request_entities || []);
@@ -208,10 +215,16 @@ export default async function DashboardPage() {
   };
 
   const formatStatus = (status: string) => {
-    return status
-      .split('_')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    switch (status) {
+      case 'irs_queue': return 'IRS Queue';
+      case '8821_sent': return '8821 Sent';
+      case '8821_signed': return '8821 Signed';
+      default:
+        return status
+          .split('_')
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -230,6 +243,23 @@ export default async function DashboardPage() {
       default: return method;
     }
   };
+
+  // Apply search and status filters to the requests shown in the table
+  const pendingStatuses = ['submitted', '8821_sent', '8821_signed', 'irs_queue', 'processing'];
+
+  if (searchQuery) {
+    requests = requests.filter((r: any) =>
+      r.loan_number?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }
+
+  if (statusFilter === 'pending') {
+    requests = requests.filter((r: any) => pendingStatuses.includes(r.status));
+  } else if (statusFilter === 'completed') {
+    requests = requests.filter((r: any) => r.status === 'completed');
+  } else if (statusFilter === 'failed') {
+    requests = requests.filter((r: any) => r.status === 'failed');
+  }
 
   // Check MFA enrollment status
   const { data: mfaFactors } = await supabase.auth.mfa.listFactors();
@@ -477,10 +507,74 @@ export default async function DashboardPage() {
 
         {/* Recent Requests Table */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 space-y-4">
             <h2 className="text-lg font-semibold text-mt-dark">
-              {isProcessor ? 'My Recent Requests' : 'All Recent Requests'}
+              {isProcessor ? 'My Requests' : 'All Requests'}
             </h2>
+
+            {/* Search and Filter Controls */}
+            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+              {/* Search by loan number */}
+              <form method="GET" className="flex gap-2">
+                {statusFilter !== 'all' && (
+                  <input type="hidden" name="status" value={statusFilter} />
+                )}
+                <input
+                  type="text"
+                  name="search"
+                  placeholder="Search by loan number..."
+                  defaultValue={searchQuery}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent w-64"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-mt-green text-white text-sm font-medium rounded-lg hover:bg-opacity-90 transition-colors"
+                >
+                  Search
+                </button>
+                {searchQuery && (
+                  <Link
+                    href={statusFilter !== 'all' ? `/?status=${statusFilter}` : '/'}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Clear
+                  </Link>
+                )}
+              </form>
+
+              {/* Status filter */}
+              <div className="flex gap-1 flex-wrap">
+                {[
+                  { key: 'all', label: 'All' },
+                  { key: 'pending', label: 'Pending' },
+                  { key: 'completed', label: 'Completed' },
+                  { key: 'failed', label: 'Failed' },
+                ].map((opt) => {
+                  const href = opt.key === 'all'
+                    ? (searchQuery ? `/?search=${encodeURIComponent(searchQuery)}` : '/')
+                    : (searchQuery ? `/?search=${encodeURIComponent(searchQuery)}&status=${opt.key}` : `/?status=${opt.key}`);
+                  const isActive = statusFilter === opt.key;
+                  return (
+                    <Link
+                      key={opt.key}
+                      href={href}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                        isActive
+                          ? 'bg-mt-green text-white'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {opt.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Result count */}
+            <p className="text-sm text-gray-500">
+              Showing {requests.length} request{requests.length !== 1 ? 's' : ''}
+            </p>
           </div>
 
           {requests.length > 0 ? (

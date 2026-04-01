@@ -6,11 +6,11 @@ import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { FreeTrialToggle } from '@/components/FreeTrialToggle';
 
 interface PageProps {
-  searchParams: Promise<{ type?: string }>;
+  searchParams: Promise<{ type?: string; search?: string; status?: string }>;
 }
 
 export default async function AdminPage({ searchParams }: PageProps) {
-  const { type: productTypeFilter } = await searchParams;
+  const { type: productTypeFilter, search: searchFilter, status: statusFilter } = await searchParams;
   const supabase = await createServerComponentClient();
 
   // Check authentication
@@ -44,6 +44,43 @@ export default async function AdminPage({ searchParams }: PageProps) {
     .from('requests')
     .select('*, request_entities(id, status), clients(name, slug)')
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
+
+  // Query stuck entities — entities in non-terminal statuses for too long
+  const now = new Date();
+  const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
+  const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString();
+
+  const { data: stuckSentEntities } = await supabase
+    .from('request_entities')
+    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .eq('status', '8821_sent')
+    .lt('updated_at', fiveDaysAgo) as { data: any[] | null; error: any };
+
+  const { data: stuckQueueEntities } = await supabase
+    .from('request_entities')
+    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .eq('status', 'irs_queue')
+    .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
+
+  const { data: stuckProcessingEntities } = await supabase
+    .from('request_entities')
+    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .eq('status', 'processing')
+    .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
+
+  const stuckEntities = [
+    ...(stuckSentEntities || []),
+    ...(stuckQueueEntities || []),
+    ...(stuckProcessingEntities || []),
+  ];
+
+  const getStuckDuration = (updatedAt: string) => {
+    const diff = now.getTime() - new Date(updatedAt).getTime();
+    const days = Math.floor(diff / (24 * 60 * 60 * 1000));
+    const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    if (days > 0) return `${days}d ${hours}h`;
+    return `${hours}h`;
+  };
 
   // Calculate stats per client — count at entity (EIN/SSN) level, not request level
   const clientStats: Record<
@@ -98,10 +135,20 @@ export default async function AdminPage({ searchParams }: PageProps) {
     });
   }
 
-  // Filter requests by product type if filter is active
-  const filteredRequests = productTypeFilter && productTypeFilter !== 'all'
-    ? allRequests?.filter((r: any) => r.product_type === productTypeFilter) || []
-    : allRequests || [];
+  // Filter requests by product type, search, and status
+  let filteredRequests = allRequests || [];
+  if (productTypeFilter && productTypeFilter !== 'all') {
+    filteredRequests = filteredRequests.filter((r: any) => r.product_type === productTypeFilter);
+  }
+  if (searchFilter) {
+    const searchLower = searchFilter.toLowerCase();
+    filteredRequests = filteredRequests.filter((r: any) =>
+      r.loan_number?.toLowerCase().includes(searchLower)
+    );
+  }
+  if (statusFilter && statusFilter !== 'all') {
+    filteredRequests = filteredRequests.filter((r: any) => r.status === statusFilter);
+  }
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
@@ -123,6 +170,12 @@ export default async function AdminPage({ searchParams }: PageProps) {
   };
 
   const formatStatus = (status: string) => {
+    const statusLabels: Record<string, string> = {
+      'irs_queue': 'IRS Queue',
+      '8821_sent': '8821 Sent',
+      '8821_signed': '8821 Signed',
+    };
+    if (statusLabels[status]) return statusLabels[status];
     return status
       .split('_')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -262,6 +315,53 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         </div>
 
+        {/* Stuck Entities Warning */}
+        {stuckEntities.length > 0 && (
+          <div className="mb-12 bg-amber-50 border border-amber-300 rounded-lg p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <h3 className="text-lg font-bold text-amber-800">Stuck Entities ({stuckEntities.length})</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-amber-200">
+                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Entity</th>
+                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Client</th>
+                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Status</th>
+                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Stuck For</th>
+                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Request</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-100">
+                  {stuckEntities.map((entity: any) => (
+                    <tr key={entity.id}>
+                      <td className="px-4 py-2 font-medium text-amber-900">{entity.entity_name}</td>
+                      <td className="px-4 py-2 text-amber-800">{entity.requests?.clients?.name || '—'}</td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadgeColor(entity.status)}`}>
+                          {formatStatus(entity.status)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-amber-800 font-mono">{getStuckDuration(entity.updated_at)}</td>
+                      <td className="px-4 py-2">
+                        <Link
+                          href={`/admin/requests/${entity.request_id}`}
+                          className="text-amber-700 hover:text-amber-900 underline font-medium"
+                        >
+                          {entity.requests?.loan_number || 'View'}
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Client Stats */}
         <div className="mb-12">
           <h2 className="text-2xl font-bold text-mt-dark mb-6">Client Overview</h2>
@@ -356,41 +456,127 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
         {/* All Requests */}
         <div>
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold text-mt-dark">All Requests</h2>
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-              <Link
-                href="/admin"
-                className={`px-4 py-2 font-medium transition-colors ${
-                  !productTypeFilter || productTypeFilter === 'all'
-                    ? 'bg-mt-dark text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                All
-              </Link>
-              <Link
-                href="/admin?type=transcript"
-                className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
-                  productTypeFilter === 'transcript'
-                    ? 'bg-mt-dark text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Transcripts
-              </Link>
-              <Link
-                href="/admin?type=employment"
-                className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
-                  productTypeFilter === 'employment'
-                    ? 'bg-mt-dark text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Employment
-              </Link>
+              {(() => {
+                const baseParams = new URLSearchParams();
+                if (searchFilter) baseParams.set('search', searchFilter);
+                if (statusFilter && statusFilter !== 'all') baseParams.set('status', statusFilter);
+                const allHref = baseParams.toString() ? `/admin?${baseParams.toString()}` : '/admin';
+
+                const transcriptParams = new URLSearchParams(baseParams);
+                transcriptParams.set('type', 'transcript');
+
+                const employmentParams = new URLSearchParams(baseParams);
+                employmentParams.set('type', 'employment');
+
+                return (
+                  <>
+                    <Link
+                      href={allHref}
+                      className={`px-4 py-2 font-medium transition-colors ${
+                        !productTypeFilter || productTypeFilter === 'all'
+                          ? 'bg-mt-dark text-white'
+                          : 'bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      All
+                    </Link>
+                    <Link
+                      href={`/admin?${transcriptParams.toString()}`}
+                      className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
+                        productTypeFilter === 'transcript'
+                          ? 'bg-mt-dark text-white'
+                          : 'bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      Transcripts
+                    </Link>
+                    <Link
+                      href={`/admin?${employmentParams.toString()}`}
+                      className={`px-4 py-2 font-medium border-l border-gray-300 transition-colors ${
+                        productTypeFilter === 'employment'
+                          ? 'bg-mt-dark text-white'
+                          : 'bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      Employment
+                    </Link>
+                  </>
+                );
+              })()}
             </div>
           </div>
+
+          {/* Search and Status Filter */}
+          <div className="flex items-center gap-4 mb-6">
+            <form className="flex items-center gap-4 flex-1">
+              {productTypeFilter && productTypeFilter !== 'all' && (
+                <input type="hidden" name="type" value={productTypeFilter} />
+              )}
+              {statusFilter && statusFilter !== 'all' && (
+                <input type="hidden" name="status" value={statusFilter} />
+              )}
+              <div className="relative flex-1 max-w-sm">
+                <input
+                  type="text"
+                  name="search"
+                  defaultValue={searchFilter || ''}
+                  placeholder="Search by loan number..."
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent"
+                />
+                <svg className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors">
+                Search
+              </button>
+            </form>
+            <form>
+              {productTypeFilter && productTypeFilter !== 'all' && (
+                <input type="hidden" name="type" value={productTypeFilter} />
+              )}
+              {searchFilter && (
+                <input type="hidden" name="search" value={searchFilter} />
+              )}
+              <select
+                name="status"
+                defaultValue={statusFilter || 'all'}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent"
+                // Use form submission via noscript-friendly approach
+                // The onchange below won't work in a Server Component, so users submit the form
+              >
+                <option value="all">All Statuses</option>
+                <option value="submitted">Submitted</option>
+                <option value="8821_sent">8821 Sent</option>
+                <option value="8821_signed">8821 Signed</option>
+                <option value="irs_queue">IRS Queue</option>
+                <option value="processing">Processing</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+              <button type="submit" className="ml-2 px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                Filter
+              </button>
+            </form>
+            {(searchFilter || (statusFilter && statusFilter !== 'all')) && (
+              <Link
+                href={productTypeFilter && productTypeFilter !== 'all' ? `/admin?type=${productTypeFilter}` : '/admin'}
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Clear filters
+              </Link>
+            )}
+          </div>
+
+          {/* Result count */}
+          <p className="text-sm text-gray-500 mb-4">
+            Showing {filteredRequests.length} request{filteredRequests.length !== 1 ? 's' : ''}
+            {searchFilter && <span> matching &ldquo;{searchFilter}&rdquo;</span>}
+            {statusFilter && statusFilter !== 'all' && <span> with status {formatStatus(statusFilter)}</span>}
+          </p>
           <div className="bg-white rounded-lg shadow overflow-hidden">
             {filteredRequests.length > 0 ? (
               <div className="overflow-x-auto">

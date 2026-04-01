@@ -59,8 +59,15 @@ export default async function RequestDetailPage({ params }: Props) {
     }
   };
 
-  const formatStatus = (status: string) =>
-    status.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  const formatStatus = (status: string) => {
+    const labels: Record<string, string> = {
+      irs_queue: 'IRS Queue',
+      '8821_sent': '8821 Sent',
+      '8821_signed': '8821 Signed',
+    };
+    if (labels[status]) return labels[status];
+    return status.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  };
 
   const formatDate = (dateString: string) =>
     new Date(dateString).toLocaleDateString('en-US', {

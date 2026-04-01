@@ -345,7 +345,7 @@ function PdfUploadTab() {
   const [tid, setTid] = useState('');
   const [tidKind, setTidKind] = useState<'EIN' | 'SSN'>('EIN');
   const [formType, setFormType] = useState('1040');
-  const [years, setYears] = useState('2026');
+  const [years, setYears] = useState(String(new Date().getFullYear()));
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -529,7 +529,7 @@ function PdfUploadTab() {
               type="text"
               value={years}
               onChange={(e) => setYears(e.target.value)}
-              placeholder="e.g., 2026, 2025, 2024"
+              placeholder={`e.g., ${new Date().getFullYear()}, ${new Date().getFullYear() - 1}, ${new Date().getFullYear() - 2}`}
               disabled={isLoading}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50"
             />
@@ -621,7 +621,8 @@ function ManualEntryTab() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const TAX_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
+  const currentYear = new Date().getFullYear();
+  const TAX_YEARS = Array.from({ length: 6 }, (_, i) => String(currentYear - i));
 
   const addEntity = () => {
     setEntities([
