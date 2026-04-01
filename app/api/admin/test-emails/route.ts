@@ -143,8 +143,8 @@ export async function POST(request: NextRequest) {
         'Centerstone SBA Lending',
         'LOAN-TEST-001',
         [
-          { entity_name: 'Acme Holdings LLC', signer_email: 'owner@acme.com' },
-          { entity_name: 'Smith & Partners', signer_email: 'smith@partners.com' },
+          { entity_name: 'Acme Holdings LLC', signer_email: 'owner@acme.com', form_type: '1120S' },
+          { entity_name: 'Smith & Partners', signer_email: 'smith@partners.com', form_type: '1065' },
         ],
         TEST_REQUEST_ID
       )
