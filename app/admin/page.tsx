@@ -37,13 +37,20 @@ export default async function AdminPage({ searchParams }: PageProps) {
   const { data: clients, error: clientsError } = await supabase
     .from('clients')
     .select('*')
-    .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null; api_key: string | null; api_request_limit: number | null; billing_payment_method: string | null; billing_ap_email: string | null; billing_ap_phone: string | null }[] | null; error: any };
+    .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null; api_key: string | null; api_request_limit: number | null; billing_payment_method: string | null; billing_ap_email: string | null; billing_ap_phone: string | null; billing_rate_pdf: number; billing_rate_csv: number }[] | null; error: any };
 
-  // Fetch all requests with entities and client info
+  // Fetch all requests with entities (include completed_at for revenue calc) and client info
   const { data: allRequests, error: requestsError } = await supabase
     .from('requests')
-    .select('*, request_entities(id, status), clients(name, slug)')
+    .select('*, request_entities(id, status, completed_at), clients(name, slug)')
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
+
+  // Fetch invoices for billing overview
+  const { data: allInvoices } = await supabase
+    .from('invoices')
+    .select('*, clients(name, slug)')
+    .order('billing_period_start', { ascending: false })
+    .limit(10) as { data: any[] | null; error: any };
 
   // Query stuck entities — entities in non-terminal statuses for too long
   const now = new Date();
@@ -199,6 +206,66 @@ export default async function AdminPage({ searchParams }: PageProps) {
     failed: allEntities.filter((e: any) => e.status === 'failed').length,
   };
 
+  // --- Billing & Revenue Calculations ---
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+  // Per-client revenue this month
+  const clientRevenue: Record<string, number> = {};
+  const clientRevenueEntities: Record<string, number> = {};
+  (clients || []).forEach((c) => { clientRevenue[c.id] = 0; clientRevenueEntities[c.id] = 0; });
+
+  // Build free trial sets (first 3 completed entities per client)
+  const freeTrialSets: Record<string, Set<string>> = {};
+  (clients || []).forEach((c) => {
+    if (c.free_trial) {
+      const sorted = (allRequests || [])
+        .filter((r: any) => r.client_id === c.id)
+        .flatMap((r: any) => (r.request_entities || []).filter((e: any) => e.status === 'completed' && e.completed_at))
+        .sort((a: any, b: any) => new Date(a.completed_at).getTime() - new Date(b.completed_at).getTime());
+      freeTrialSets[c.id] = new Set(sorted.slice(0, 3).map((e: any) => e.id));
+    } else {
+      freeTrialSets[c.id] = new Set();
+    }
+  });
+
+  (allRequests || []).forEach((req: any) => {
+    const clientId = req.client_id;
+    if (!clientRevenue.hasOwnProperty(clientId)) return;
+    const clientObj = (clients || []).find((c) => c.id === clientId);
+    if (!clientObj) return;
+
+    (req.request_entities || []).forEach((entity: any) => {
+      if (entity.status !== 'completed' || !entity.completed_at) return;
+      const completedDate = new Date(entity.completed_at);
+      if (completedDate < currentMonthStart || completedDate > currentMonthEnd) return;
+      if (freeTrialSets[clientId]?.has(entity.id)) return;
+
+      clientRevenueEntities[clientId] = (clientRevenueEntities[clientId] || 0) + 1;
+      const rate = req.intake_method === 'csv' ? (clientObj.billing_rate_csv || 69.98) : (clientObj.billing_rate_pdf || 59.98);
+      clientRevenue[clientId] = (clientRevenue[clientId] || 0) + rate;
+    });
+  });
+
+  const totalRevenueThisMonth = Object.values(clientRevenue).reduce((sum, v) => sum + v, 0);
+  const totalBillableEntitiesThisMonth = Object.values(clientRevenueEntities).reduce((sum, v) => sum + v, 0);
+
+  // Invoice stats
+  const outstandingAR = (allInvoices || [])
+    .filter((i: any) => i.status === 'sent' || i.status === 'overdue')
+    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
+  const overdueAR = (allInvoices || [])
+    .filter((i: any) => i.status === 'overdue')
+    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
+  const collectedAR = (allInvoices || [])
+    .filter((i: any) => i.status === 'paid')
+    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
+  const draftInvoices = (allInvoices || []).filter((i: any) => i.status === 'draft').length;
+  const overdueInvoices = (allInvoices || []).filter((i: any) => i.status === 'overdue').length;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* SOC 2 Data Classification Banner */}
@@ -315,6 +382,30 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         </div>
 
+        {/* Billing & Revenue Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-mt-green">
+            <p className="text-gray-600 text-sm font-medium">Revenue This Month</p>
+            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueThisMonth)}</p>
+            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesThisMonth} billable entities</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-yellow-400">
+            <p className="text-gray-600 text-sm font-medium">Outstanding AR</p>
+            <p className="text-3xl font-bold text-yellow-600 mt-2">{formatCurrency(outstandingAR)}</p>
+            <p className="text-xs text-gray-400 mt-1">Sent &amp; awaiting payment</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-400">
+            <p className="text-gray-600 text-sm font-medium">Overdue</p>
+            <p className={`text-3xl font-bold mt-2 ${overdueAR > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(overdueAR)}</p>
+            <p className="text-xs text-gray-400 mt-1">{overdueInvoices} overdue invoice{overdueInvoices !== 1 ? 's' : ''}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-400">
+            <p className="text-gray-600 text-sm font-medium">Collected</p>
+            <p className="text-3xl font-bold text-green-600 mt-2">{formatCurrency(collectedAR)}</p>
+            <p className="text-xs text-gray-400 mt-1">{draftInvoices > 0 ? `${draftInvoices} draft invoice${draftInvoices !== 1 ? 's' : ''} pending` : 'All invoices processed'}</p>
+          </div>
+        </div>
+
         {/* Stuck Entities Warning */}
         {stuckEntities.length > 0 && (
           <div className="mb-12 bg-amber-50 border border-amber-300 rounded-lg p-6">
@@ -377,7 +468,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Failed</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">API Usage</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Billing</th>
+                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Revenue (MTD)</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Payment</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completion Rate</th>
                   </tr>
                 </thead>
@@ -418,18 +510,21 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             <span className="text-xs text-gray-400">—</span>
                           )}
                         </td>
+                        <td className="px-6 py-4 text-right">
+                          {(clientRevenue[clientId] || 0) > 0 ? (
+                            <div>
+                              <span className="text-sm font-bold text-mt-dark">{formatCurrency(clientRevenue[clientId] || 0)}</span>
+                              <p className="text-xs text-gray-400">{clientRevenueEntities[clientId] || 0} entities</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">$0.00</span>
+                          )}
+                        </td>
                         <td className="px-6 py-4">
                           {clientObj?.billing_payment_method ? (
-                            <div>
-                              <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
-                                {clientObj.billing_payment_method.toUpperCase()}
-                              </span>
-                              {clientObj.billing_ap_email && (
-                                <p className="text-xs text-gray-400 mt-0.5 truncate max-w-[140px]" title={clientObj.billing_ap_email}>
-                                  {clientObj.billing_ap_email}
-                                </p>
-                              )}
-                            </div>
+                            <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
+                              {clientObj.billing_payment_method.toUpperCase()}
+                            </span>
                           ) : (
                             <span className="text-xs text-gray-400">Not set</span>
                           )}
@@ -453,6 +548,66 @@ export default async function AdminPage({ searchParams }: PageProps) {
             </div>
           </div>
         </div>
+
+        {/* Recent Invoices */}
+        {(allInvoices || []).length > 0 && (
+          <div className="mb-12">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold text-mt-dark">Recent Invoices</h2>
+              <Link
+                href="/admin/billing"
+                className="text-sm font-medium text-mt-green hover:underline"
+              >
+                View Full Billing Dashboard →
+              </Link>
+            </div>
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Invoice #</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Client</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Period</th>
+                      <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Entities</th>
+                      <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Amount</th>
+                      <th className="px-6 py-3 text-center text-sm font-semibold text-gray-700">Status</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Due Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {(allInvoices || []).map((inv: any) => (
+                      <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-3">
+                          <code className="text-sm font-mono text-mt-dark">{inv.invoice_number}</code>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{inv.clients?.name || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-600">
+                          {new Date(inv.billing_period_start).toLocaleDateString('en-US', { year: 'numeric', month: 'short' })}
+                        </td>
+                        <td className="px-6 py-3 text-right text-sm text-gray-700">{inv.total_entities}</td>
+                        <td className="px-6 py-3 text-right text-sm font-bold text-mt-dark">{formatCurrency(inv.total_amount)}</td>
+                        <td className="px-6 py-3 text-center">
+                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
+                            inv.status === 'paid' ? 'bg-green-100 text-green-700' :
+                            inv.status === 'overdue' ? 'bg-red-100 text-red-700' :
+                            inv.status === 'sent' ? 'bg-blue-100 text-blue-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {inv.status.charAt(0).toUpperCase() + inv.status.slice(1)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-gray-600">
+                          {inv.due_date ? formatDate(inv.due_date) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* All Requests */}
         <div>
