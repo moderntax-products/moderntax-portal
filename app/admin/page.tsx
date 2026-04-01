@@ -210,13 +210,26 @@ export default async function AdminPage({ searchParams }: PageProps) {
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
 
+  // Current month (April) + Previous month (March)
   const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+  const prevMonthLabel = prevMonthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const currentMonthLabel = currentMonthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
-  // Per-client revenue this month
-  const clientRevenue: Record<string, number> = {};
-  const clientRevenueEntities: Record<string, number> = {};
-  (clients || []).forEach((c) => { clientRevenue[c.id] = 0; clientRevenueEntities[c.id] = 0; });
+  // Per-client revenue: current month + previous month + all-time
+  const clientRevenueCurrent: Record<string, number> = {};
+  const clientRevenueEntitiesCurrent: Record<string, number> = {};
+  const clientRevenuePrev: Record<string, number> = {};
+  const clientRevenueEntitiesPrev: Record<string, number> = {};
+  const clientRevenueAllTime: Record<string, number> = {};
+  const clientRevenueEntitiesAllTime: Record<string, number> = {};
+  (clients || []).forEach((c) => {
+    clientRevenueCurrent[c.id] = 0; clientRevenueEntitiesCurrent[c.id] = 0;
+    clientRevenuePrev[c.id] = 0; clientRevenueEntitiesPrev[c.id] = 0;
+    clientRevenueAllTime[c.id] = 0; clientRevenueEntitiesAllTime[c.id] = 0;
+  });
 
   // Build free trial sets (first 3 completed entities per client)
   const freeTrialSets: Record<string, Set<string>> = {};
@@ -234,24 +247,41 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
   (allRequests || []).forEach((req: any) => {
     const clientId = req.client_id;
-    if (!clientRevenue.hasOwnProperty(clientId)) return;
+    if (!clientRevenueCurrent.hasOwnProperty(clientId)) return;
     const clientObj = (clients || []).find((c) => c.id === clientId);
     if (!clientObj) return;
 
     (req.request_entities || []).forEach((entity: any) => {
       if (entity.status !== 'completed' || !entity.completed_at) return;
-      const completedDate = new Date(entity.completed_at);
-      if (completedDate < currentMonthStart || completedDate > currentMonthEnd) return;
       if (freeTrialSets[clientId]?.has(entity.id)) return;
 
-      clientRevenueEntities[clientId] = (clientRevenueEntities[clientId] || 0) + 1;
+      const completedDate = new Date(entity.completed_at);
       const rate = req.intake_method === 'csv' ? (clientObj.billing_rate_csv || 69.98) : (clientObj.billing_rate_pdf || 59.98);
-      clientRevenue[clientId] = (clientRevenue[clientId] || 0) + rate;
+
+      // All-time
+      clientRevenueAllTime[clientId] += rate;
+      clientRevenueEntitiesAllTime[clientId] += 1;
+
+      // Current month
+      if (completedDate >= currentMonthStart && completedDate <= currentMonthEnd) {
+        clientRevenueCurrent[clientId] += rate;
+        clientRevenueEntitiesCurrent[clientId] += 1;
+      }
+
+      // Previous month
+      if (completedDate >= prevMonthStart && completedDate <= prevMonthEnd) {
+        clientRevenuePrev[clientId] += rate;
+        clientRevenueEntitiesPrev[clientId] += 1;
+      }
     });
   });
 
-  const totalRevenueThisMonth = Object.values(clientRevenue).reduce((sum, v) => sum + v, 0);
-  const totalBillableEntitiesThisMonth = Object.values(clientRevenueEntities).reduce((sum, v) => sum + v, 0);
+  const totalRevenueCurrent = Object.values(clientRevenueCurrent).reduce((sum, v) => sum + v, 0);
+  const totalBillableEntitiesCurrent = Object.values(clientRevenueEntitiesCurrent).reduce((sum, v) => sum + v, 0);
+  const totalRevenuePrev = Object.values(clientRevenuePrev).reduce((sum, v) => sum + v, 0);
+  const totalBillableEntitiesPrev = Object.values(clientRevenueEntitiesPrev).reduce((sum, v) => sum + v, 0);
+  const totalRevenueAllTime = Object.values(clientRevenueAllTime).reduce((sum, v) => sum + v, 0);
+  const totalBillableEntitiesAllTime = Object.values(clientRevenueEntitiesAllTime).reduce((sum, v) => sum + v, 0);
 
   // Invoice stats
   const outstandingAR = (allInvoices || [])
@@ -260,10 +290,6 @@ export default async function AdminPage({ searchParams }: PageProps) {
   const overdueAR = (allInvoices || [])
     .filter((i: any) => i.status === 'overdue')
     .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
-  const collectedAR = (allInvoices || [])
-    .filter((i: any) => i.status === 'paid')
-    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
-  const draftInvoices = (allInvoices || []).filter((i: any) => i.status === 'draft').length;
   const overdueInvoices = (allInvoices || []).filter((i: any) => i.status === 'overdue').length;
 
   return (
@@ -383,11 +409,16 @@ export default async function AdminPage({ searchParams }: PageProps) {
         </div>
 
         {/* Billing & Revenue Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-12">
           <div className="bg-white rounded-lg shadow p-6 border-l-4 border-mt-green">
-            <p className="text-gray-600 text-sm font-medium">Revenue This Month</p>
-            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueThisMonth)}</p>
-            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesThisMonth} billable entities</p>
+            <p className="text-gray-600 text-sm font-medium">{prevMonthLabel} Revenue</p>
+            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenuePrev)}</p>
+            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesPrev} billable entities</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-300">
+            <p className="text-gray-600 text-sm font-medium">{currentMonthLabel} Revenue</p>
+            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueCurrent)}</p>
+            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesCurrent} billable entities</p>
           </div>
           <div className="bg-white rounded-lg shadow p-6 border-l-4 border-yellow-400">
             <p className="text-gray-600 text-sm font-medium">Outstanding AR</p>
@@ -400,9 +431,9 @@ export default async function AdminPage({ searchParams }: PageProps) {
             <p className="text-xs text-gray-400 mt-1">{overdueInvoices} overdue invoice{overdueInvoices !== 1 ? 's' : ''}</p>
           </div>
           <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-400">
-            <p className="text-gray-600 text-sm font-medium">Collected</p>
-            <p className="text-3xl font-bold text-green-600 mt-2">{formatCurrency(collectedAR)}</p>
-            <p className="text-xs text-gray-400 mt-1">{draftInvoices > 0 ? `${draftInvoices} draft invoice${draftInvoices !== 1 ? 's' : ''} pending` : 'All invoices processed'}</p>
+            <p className="text-gray-600 text-sm font-medium">All-Time Revenue</p>
+            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueAllTime)}</p>
+            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesAllTime} entities total</p>
           </div>
         </div>
 
@@ -468,7 +499,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Failed</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">API Usage</th>
-                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Revenue (MTD)</th>
+                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Revenue ({prevMonthLabel})</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Payment</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completion Rate</th>
                   </tr>
@@ -511,10 +542,10 @@ export default async function AdminPage({ searchParams }: PageProps) {
                           )}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          {(clientRevenue[clientId] || 0) > 0 ? (
+                          {(clientRevenuePrev[clientId] || 0) > 0 ? (
                             <div>
-                              <span className="text-sm font-bold text-mt-dark">{formatCurrency(clientRevenue[clientId] || 0)}</span>
-                              <p className="text-xs text-gray-400">{clientRevenueEntities[clientId] || 0} entities</p>
+                              <span className="text-sm font-bold text-mt-dark">{formatCurrency(clientRevenuePrev[clientId] || 0)}</span>
+                              <p className="text-xs text-gray-400">{clientRevenueEntitiesPrev[clientId] || 0} entities</p>
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400">$0.00</span>
