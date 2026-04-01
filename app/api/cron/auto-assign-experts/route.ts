@@ -26,11 +26,10 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Find entities with status '8821_signed' or 'irs_queue' that have signed_8821_url set,
-    // or form_type = 'W2_INCOME'
+    // Find entities with status '8821_signed' or 'irs_queue' that are ready for assignment
     const { data: eligibleEntities, error: entitiesError } = await supabase
       .from('request_entities')
-      .select('id, entity_name, status, signed_8821_url, form_type')
+      .select('id, entity_name, status, signed_8821_url, form_type, request_id')
       .in('status', ['8821_signed', 'irs_queue']) as { data: any[] | null; error: any };
 
     if (entitiesError) {
@@ -41,9 +40,32 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Filter to only entities that have signed_8821_url set OR form_type = 'W2_INCOME'
+    // Determine which entities come from API-intake requests (e.g., ClearFirm)
+    // These skip 8821 internally, so they don't need signed_8821_url
+    const entityRequestIds = [...new Set((eligibleEntities || []).map((e: any) => e.request_id))];
+    let apiEntityIds = new Set<string>();
+
+    if (entityRequestIds.length > 0) {
+      const { data: requests } = await supabase
+        .from('requests')
+        .select('id, intake_method')
+        .in('id', entityRequestIds)
+        .eq('intake_method', 'api') as { data: any[] | null; error: any };
+
+      const apiRequestIds = new Set((requests || []).map((r: any) => r.id));
+      apiEntityIds = new Set(
+        (eligibleEntities || [])
+          .filter((e: any) => apiRequestIds.has(e.request_id))
+          .map((e: any) => e.id)
+      );
+    }
+
+    // Filter to entities that are ready:
+    //   1. Has signed_8821_url (internal 8821 flow complete), OR
+    //   2. Is W2_INCOME employment request, OR
+    //   3. Comes from API intake (8821 handled externally, e.g. ClearFirm)
     const readyEntities = (eligibleEntities || []).filter(
-      (e: any) => e.signed_8821_url || e.form_type === 'W2_INCOME'
+      (e: any) => e.signed_8821_url || e.form_type === 'W2_INCOME' || apiEntityIds.has(e.id)
     );
 
     if (readyEntities.length === 0) {

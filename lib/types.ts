@@ -41,6 +41,7 @@ export type NotificationType = 'confirmation' | 'completion' | 'nudge' | 'batch_
 
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 export type PaymentMethod = 'ach' | 'wire';
+export type WebhookDeliveryStatus = 'pending' | 'sending' | 'delivered' | 'failed' | 'dead';
 
 export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'failed' | 'reassigned';
 
@@ -58,6 +59,8 @@ export interface Client {
   intake_methods: IntakeMethod[];
   api_key: string | null;
   api_request_limit: number | null;
+  webhook_url: string | null;
+  webhook_secret: string | null;
   billing_payment_method: PaymentMethod | null;
   billing_ap_email: string | null;
   billing_ap_phone: string | null;
@@ -210,7 +213,29 @@ export interface RequestEntity {
   gross_receipts: Record<string, unknown> | null;
   compliance_score: number | null;
   transcript_urls: string[] | null;
+  transcript_html_urls: string[] | null;
   completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * WebhookDelivery - Tracks outbound webhook delivery attempts
+ */
+export interface WebhookDelivery {
+  id: string;
+  request_id: string;
+  client_id: string;
+  webhook_url: string;
+  payload: Record<string, unknown>;
+  status: WebhookDeliveryStatus;
+  attempts: number;
+  max_attempts: number;
+  last_attempt_at: string | null;
+  last_status_code: number | null;
+  last_error: string | null;
+  next_retry_at: string | null;
+  delivered_at: string | null;
   created_at: string;
   updated_at: string;
 }

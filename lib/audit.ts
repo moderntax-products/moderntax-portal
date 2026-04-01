@@ -41,7 +41,9 @@ export type AuditAction =
   | 'employment_result_retrieved'
   | 'invite_resent'
   | 'transcript_request_received'
-  | '8821_data_uploaded';
+  | '8821_data_uploaded'
+  | 'webhook_delivered'
+  | 'webhook_failed';
 
 export interface AuditEvent {
   action: AuditAction;

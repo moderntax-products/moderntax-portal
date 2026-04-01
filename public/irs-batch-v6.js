@@ -523,6 +523,15 @@
                     compliance: finding,
                 }));
 
+                // Also include raw HTML for webhook delivery to API clients (e.g., ClearFirm)
+                try {
+                    const htmlBlob = new Blob([transcriptHtml], { type: 'text/html' });
+                    formData.append('htmlFile', htmlBlob, baseFilename + '.html');
+                } catch (htmlErr) {
+                    // Non-critical — PDF is the primary artifact
+                    console.warn('Could not attach HTML:', htmlErr);
+                }
+
                 let uploaded = false;
                 for (let attempt = 1; attempt <= 2; attempt++) {
                     try {

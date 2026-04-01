@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendCompletionNotification } from '@/lib/sendgrid';
+import { triggerWebhookForRequest } from '@/lib/webhook';
 
 export async function GET(request: NextRequest) {
   try {
@@ -109,6 +110,14 @@ export async function GET(request: NextRequest) {
           }
         } catch (notifErr) {
           console.error(`[auto-complete] Notification error for request ${req.id}:`, notifErr);
+        }
+
+        // Trigger webhook for API-intake requests (e.g., ClearFirm)
+        // Dedup in enqueueWebhookDelivery prevents double-delivery
+        try {
+          await triggerWebhookForRequest(supabase, req.id);
+        } catch (webhookErr) {
+          console.error(`[auto-complete] Webhook trigger failed for ${req.id}:`, webhookErr);
         }
 
         completed++;

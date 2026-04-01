@@ -16,6 +16,8 @@ export type Database = {
           free_trial: boolean;
           api_key: string | null;
           api_request_limit: number | null;
+          webhook_url: string | null;
+          webhook_secret: string | null;
           billing_payment_method: string | null;
           billing_ap_email: string | null;
           billing_ap_phone: string | null;
@@ -34,6 +36,8 @@ export type Database = {
           free_trial?: boolean;
           api_key?: string | null;
           api_request_limit?: number | null;
+          webhook_url?: string | null;
+          webhook_secret?: string | null;
           billing_payment_method?: string | null;
           billing_ap_email?: string | null;
           billing_ap_phone?: string | null;
@@ -52,6 +56,8 @@ export type Database = {
           free_trial?: boolean;
           api_key?: string | null;
           api_request_limit?: number | null;
+          webhook_url?: string | null;
+          webhook_secret?: string | null;
           billing_payment_method?: string | null;
           billing_ap_email?: string | null;
           billing_ap_phone?: string | null;
@@ -278,6 +284,7 @@ export type Database = {
           gross_receipts: Record<string, unknown> | null;
           compliance_score: number | null;
           transcript_urls: string[] | null;
+          transcript_html_urls: string[] | null;
           completed_at: string | null;
           created_at: string;
           updated_at: string;
@@ -304,6 +311,7 @@ export type Database = {
           gross_receipts?: Record<string, unknown> | null;
           compliance_score?: number | null;
           transcript_urls?: string[] | null;
+          transcript_html_urls?: string[] | null;
           completed_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -330,6 +338,7 @@ export type Database = {
           gross_receipts?: Record<string, unknown> | null;
           compliance_score?: number | null;
           transcript_urls?: string[] | null;
+          transcript_html_urls?: string[] | null;
           completed_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -513,6 +522,75 @@ export type Database = {
             columns: ['user_id'];
             isOneToOne: false;
             referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      webhook_deliveries: {
+        Row: {
+          id: string;
+          request_id: string;
+          client_id: string;
+          webhook_url: string;
+          payload: Record<string, unknown>;
+          status: string;
+          attempts: number;
+          max_attempts: number;
+          last_attempt_at: string | null;
+          last_status_code: number | null;
+          last_error: string | null;
+          next_retry_at: string | null;
+          delivered_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          request_id: string;
+          client_id: string;
+          webhook_url: string;
+          payload: Record<string, unknown>;
+          status?: string;
+          attempts?: number;
+          max_attempts?: number;
+          last_attempt_at?: string | null;
+          last_status_code?: number | null;
+          last_error?: string | null;
+          next_retry_at?: string | null;
+          delivered_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          request_id?: string;
+          client_id?: string;
+          webhook_url?: string;
+          payload?: Record<string, unknown>;
+          status?: string;
+          attempts?: number;
+          max_attempts?: number;
+          last_attempt_at?: string | null;
+          last_status_code?: number | null;
+          last_error?: string | null;
+          next_retry_at?: string | null;
+          delivered_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'webhook_deliveries_request_id_fkey';
+            columns: ['request_id'];
+            isOneToOne: false;
+            referencedRelation: 'requests';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'webhook_deliveries_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
             referencedColumns: ['id'];
           },
         ];

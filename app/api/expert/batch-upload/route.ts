@@ -64,6 +64,7 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
+    const htmlFile = formData.get('htmlFile') as File | null; // Optional HTML for webhook delivery
     const metadataStr = formData.get('metadata') as string | null;
 
     if (!file) return corsJson({ error: 'No file provided' }, { status: 400 });
@@ -102,7 +103,7 @@ export async function POST(request: NextRequest) {
       .from('expert_assignments')
       .select(`
         id, entity_id, status,
-        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls, status, request_id,
+        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls, transcript_html_urls, status, request_id,
           requests(client_id, requested_by, loan_number))
       `)
       .eq('expert_id', profile.id)
@@ -190,9 +191,36 @@ export async function POST(request: NextRequest) {
     const existingUrls: string[] = entity.transcript_urls || [];
     const updatedUrls = [...existingUrls, storagePath];
 
+    const entityUpdate: Record<string, unknown> = { transcript_urls: updatedUrls };
+
+    // Store HTML file alongside PDF for webhook delivery (e.g., ClearFirm)
+    if (htmlFile) {
+      try {
+        const htmlBuffer = Buffer.from(await htmlFile.arrayBuffer());
+        const htmlStoragePath = `transcripts/${entityId}/${Date.now()}-${sanitizedFilename.replace(/\.pdf$/i, '')}.html`;
+
+        const { error: htmlUploadError } = await supabase.storage
+          .from('uploads')
+          .upload(htmlStoragePath, htmlBuffer, {
+            contentType: 'text/html',
+            upsert: false,
+          });
+
+        if (!htmlUploadError) {
+          const existingHtmlUrls: string[] = (entity as any).transcript_html_urls || [];
+          entityUpdate.transcript_html_urls = [...existingHtmlUrls, htmlStoragePath];
+        } else {
+          console.error('[batch-upload] HTML upload error:', htmlUploadError);
+        }
+      } catch (htmlErr) {
+        console.error('[batch-upload] HTML processing error:', htmlErr);
+        // Non-critical — PDF is the primary artifact
+      }
+    }
+
     await supabase
       .from('request_entities')
-      .update({ transcript_urls: updatedUrls })
+      .update(entityUpdate)
       .eq('id', entityId);
 
     // Update assignment status to in_progress if still assigned

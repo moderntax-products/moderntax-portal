@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendStatusChangeNotification } from '@/lib/sendgrid';
+import { triggerWebhookForRequest, triggerErrorWebhookForRequest } from '@/lib/webhook';
 
 export async function POST(request: Request) {
   try {
@@ -82,6 +83,23 @@ export async function POST(request: Request) {
 
         // Request-level status changes don't email processors
         // Processors only get notified on entity-level 8821_signed and completed transitions
+
+        // Trigger webhook for API-intake requests on terminal statuses
+        if (status === 'completed' || status === 'failed') {
+          try {
+            if (status === 'completed') {
+              await triggerWebhookForRequest(adminSupabase, requestId);
+            } else {
+              await triggerErrorWebhookForRequest(
+                adminSupabase,
+                requestId,
+                notes || 'Request marked as failed by admin.'
+              );
+            }
+          } catch (webhookErr) {
+            console.error(`[admin-update] Webhook trigger failed for ${requestId}:`, webhookErr);
+          }
+        }
 
         return NextResponse.json({ success: true });
       }

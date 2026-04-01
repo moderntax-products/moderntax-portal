@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertCompletionNotification, sendCompletionNotification } from '@/lib/sendgrid';
+import { triggerWebhookForRequest } from '@/lib/webhook';
 
 /**
  * Expert transcript upload route.
@@ -240,6 +241,14 @@ export async function POST(request: NextRequest) {
           }
         } catch (procEmailError) {
           console.error('Failed to send processor completion notification:', procEmailError);
+        }
+
+        // Trigger webhook for API-intake requests (e.g., ClearFirm)
+        try {
+          await triggerWebhookForRequest(adminSupabase, entity.request_id);
+        } catch (webhookError) {
+          console.error('Failed to trigger webhook:', webhookError);
+          // Webhook retry cron will handle it
         }
       }
     }

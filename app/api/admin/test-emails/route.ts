@@ -251,6 +251,7 @@ export async function POST(request: NextRequest) {
             gross_receipts: null,
             compliance_score: 94,
             transcript_urls: ['test.pdf'],
+            transcript_html_urls: null,
             completed_at: new Date().toISOString(),
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
