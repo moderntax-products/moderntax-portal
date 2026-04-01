@@ -299,11 +299,22 @@ export default function ExpertDashboard() {
 
             {/* How you know it worked */}
             <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-              <p className="text-xs font-semibold text-emerald-800">How you know it worked:</p>
+              <p className="text-xs font-semibold text-emerald-800">✅ How you know it worked:</p>
               <ul className="mt-1 text-xs text-emerald-700 space-y-0.5">
                 <li>The progress panel shows uploaded transcripts with green checkmarks</li>
                 <li>A final popup says &quot;Done! X transcripts uploaded to portal&quot;</li>
                 <li>Your assignments below will show as <strong>Completed</strong> after you refresh this page</li>
+              </ul>
+            </div>
+
+            {/* Troubleshooting */}
+            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-xs font-semibold text-amber-800">⚠️ If the script doesn&apos;t work:</p>
+              <ul className="mt-1 text-xs text-amber-700 space-y-0.5">
+                <li><strong>Script freezes or nothing happens:</strong> Press Cancel, refresh the IRS page, and paste the command again.</li>
+                <li><strong>&quot;Not yours&quot; on everything:</strong> The script matches by tax ID. Check that the TINs in your assignments match the IRS transcripts.</li>
+                <li><strong>Upload failures:</strong> Failed transcripts are auto-saved to your Downloads folder. Upload them manually using the button below each assignment.</li>
+                <li><strong>Login failed:</strong> Use the same email &amp; password you use to log into this portal.</li>
               </ul>
             </div>
 

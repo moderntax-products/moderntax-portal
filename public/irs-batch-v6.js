@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.1 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -45,15 +45,17 @@
             const loginData = await loginResp.json();
             AUTH_TOKEN = loginData.access_token;
             window.__MT_TOKEN = AUTH_TOKEN;
-            console.log('%c Logged in successfully ', 'background:#38a169;color:white;padding:3px');
+            console.log('%c✅ Logged in successfully ', 'background:#38a169;color:white;padding:3px');
         } catch (e) {
             alert(`Login error: ${e.message}`);
             return;
         }
+    } else {
+        console.log('%c✅ Using cached session ', 'background:#38a169;color:white;padding:3px');
     }
 
     if (!location.href.includes('list_mail')) {
-        alert('Run this on the IRS Inbox page!');
+        alert('⚠️ Run this on the IRS SOR Inbox page!\n\nGo to: Secure Object Repository → Inbox');
         return;
     }
 
@@ -74,7 +76,7 @@
     try {
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'html2canvas');
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'jspdf');
-        console.log('%c Dependencies loaded ', 'background:#38a169;color:white;padding:3px');
+        console.log('%c✅ PDF libraries loaded ', 'background:#38a169;color:white;padding:3px');
     } catch (e) {
         alert('Failed to load PDF libraries.\n' + e.message);
         return;
@@ -90,36 +92,34 @@
         });
         if (!resp.ok) {
             const err = await resp.json();
-            alert(`Auth failed: ${err.error}\n\nTry logging out and back in.`);
+            alert(`Auth failed: ${err.error}\n\nTry closing this tab and running the script again.`);
             window.__MT_TOKEN = '';
             return;
         }
         expertInfo = await resp.json();
     } catch (e) {
-        alert(`Cannot connect to portal: ${e.message}`);
+        alert(`Cannot connect to ModernTax portal: ${e.message}\n\nCheck your internet connection and try again.`);
         return;
     }
 
     if (expertInfo.assignments.length === 0) {
-        alert('You have no active assignments. Check the portal for new assignments.');
+        alert('✅ No active assignments!\n\nCheck the ModernTax portal for new assignments.');
         return;
     }
 
     // Build lookup for fast matching: TIN last 4 + first 3 chars of name
-    // IRS transcripts mask TINs so only last 4 digits are visible
     const assignmentLookup = [];
     expertInfo.assignments.forEach(a => {
         const cleanTin = (a.tin || '').replace(/[\s-]/g, '');
         const tinLast4 = cleanTin.length >= 4 ? cleanTin.slice(-4) : '';
         const namePrefix = (a.entityName || '').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase();
-        assignmentLookup.push({ tinLast4, namePrefix, entityName: a.entityName });
+        assignmentLookup.push({ tinLast4, namePrefix, entityName: a.entityName, formType: a.formType });
     });
     const assignmentTins = new Set(assignmentLookup.map(a => a.tinLast4).filter(Boolean));
 
-    console.log(`%c Expert: ${expertInfo.expert.name} | ${expertInfo.assignments.length} active assignments | Matching: ${assignmentLookup.map(a => a.entityName + ' (***' + a.tinLast4 + ')').join(', ')} | ${expertInfo.expert.totalTranscriptsUploaded} uploaded all-time `, 'background:#1e3a5f;color:white;padding:5px');
+    console.log(`%c👤 Expert: ${expertInfo.expert.name} | ${expertInfo.assignments.length} assignments `, 'background:#1e3a5f;color:white;padding:5px');
 
     // ---- Get all message links ----
-    // Try multiple selectors — IRS SOR uses varying link formats
     let links = document.querySelectorAll('a[href*="read_content"]');
     if (links.length === 0) links = document.querySelectorAll('a[href*="itemId"]');
     if (links.length === 0) links = document.querySelectorAll('a[href*="mailId"]');
@@ -127,7 +127,6 @@
     const messages = [];
 
     links.forEach(link => {
-        // Match itemId or mailId parameter
         const match = link.href.match(/(?:itemId|mailId)=(\d+)/);
         if (match && !seen.has(match[1])) {
             seen.add(match[1]);
@@ -135,11 +134,11 @@
         }
     });
 
-    // Fallback: if no links matched, try getting all table row links in the inbox
+    // Fallback: try all table links
     if (messages.length === 0) {
         const allLinks = document.querySelectorAll('table a[href], .inbox a[href], #mailList a[href]');
         allLinks.forEach(link => {
-            const match = link.href.match(/(\d{5,})/); // Long numeric IDs
+            const match = link.href.match(/(\d{5,})/);
             if (match && !seen.has(match[1]) && link.textContent.trim().length > 3) {
                 seen.add(match[1]);
                 messages.push({ id: match[1], subject: link.textContent.trim() });
@@ -147,17 +146,15 @@
         });
     }
 
-    console.log(`%c Found ${messages.length} transcripts in inbox `, 'background:#1e3a5f;color:white;padding:5px;font-weight:bold');
-    if (links.length > 0) console.log(`%c Link sample: ${links[0]?.href} `, 'background:#2d3748;color:#90cdf4;padding:3px');
-
     if (messages.length === 0) {
-        // Debug: log what's on the page to help troubleshoot
         const allAnchors = document.querySelectorAll('a');
         console.log(`%c DEBUG: ${allAnchors.length} total links on page `, 'background:#e53e3e;color:white;padding:3px');
         allAnchors.forEach((a, i) => { if (i < 20) console.log(`  Link ${i}: ${a.href} — "${a.textContent.trim().substring(0,50)}"`) });
-        alert('No transcripts found in inbox. Check the Console tab for debug info and send a screenshot to your admin.');
+        alert('❌ No transcripts found in inbox.\n\nMake sure you are on the IRS SOR Inbox page with messages visible.\n\nCheck the Console tab (F12) for debug info.');
         return;
     }
+
+    console.log(`%c📬 Found ${messages.length} messages in inbox `, 'background:#1e3a5f;color:white;padding:5px;font-weight:bold');
 
     // ---- Progress panel ----
     document.getElementById('irs-batch')?.remove();
@@ -185,24 +182,24 @@
             #irs-batch .stat { background:#2d3748; padding:8px 12px; border-radius:6px; text-align:center; flex:1; }
             #irs-batch .stat-num { font-size:20px; font-weight:700; color:#68d391; }
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
+            #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6</h3>
-        <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} active assignments • ${expertInfo.expert.totalTranscriptsUploaded} uploaded all-time</div>
+        <h3>📥 ModernTax Transcript Uploader v6.1</h3>
+        <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
-            <div style="color:#a0aec0;margin-bottom:4px;">Active Assignments (matching by TIN):</div>
-            ${expertInfo.assignments.map(a => `<div style="color:#68d391;">• ${a.entityName} — ${a.formType} — ${a.uploadedFiles} files uploaded</div>`).join('')}
+            <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
+            ${expertInfo.assignments.map(a => `<div style="color:#68d391;">• ${a.entityName} — ${a.formType} — TIN ending ***${(a.tin || '').replace(/[\s-]/g, '').slice(-4) || '????'}</div>`).join('')}
         </div>
-        <div>Processing <strong id="irs-curr">0</strong> / <strong>${messages.length}</strong></div>
+        <div>Processing <strong id="irs-curr">0</strong> / <strong>${messages.length}</strong> messages <span id="irs-status" style="color:#f6e05e;"></span></div>
         <div class="progress"><div class="progress-bar" id="irs-pbar" style="width:0%">0%</div></div>
         <div class="stats">
             <div class="stat"><div class="stat-num" id="irs-uploaded">0</div><div class="stat-label">Uploaded</div></div>
-            <div class="stat"><div class="stat-num" id="irs-matched">0</div><div class="stat-label">Matched</div></div>
-            <div class="stat"><div class="stat-num" id="irs-skipped">0</div><div class="stat-label">Skipped</div></div>
-            <div class="stat"><div class="stat-num" id="irs-critical">0</div><div class="stat-label">Critical</div></div>
+            <div class="stat"><div class="stat-num" id="irs-skipped">0</div><div class="stat-label">Not Yours</div></div>
+            <div class="stat"><div class="stat-num" id="irs-failed">0</div><div class="stat-label red">Failed</div></div>
+            <div class="stat"><div class="stat-num" id="irs-critical">0</div><div class="stat-label">Flags</div></div>
         </div>
         <div class="controls">
-            <button class="btn-toggle active" id="irs-local-toggle" onclick="window.irsAlsoLocal=!window.irsAlsoLocal;this.textContent=window.irsAlsoLocal?'💾 +Local ON':'💾 +Local OFF';this.classList.toggle('active')">💾 +Local OFF</button>
-            <button class="btn-toggle active" id="irs-report-toggle" onclick="window.irsReport=!window.irsReport;this.textContent=window.irsReport?'📊 Report ON':'📊 Report OFF';this.classList.toggle('active')">📊 Report ON</button>
+            <button class="btn-toggle" id="irs-local-toggle" onclick="window.irsAlsoLocal=!window.irsAlsoLocal;this.textContent=window.irsAlsoLocal?'💾 +Local ON':'💾 +Local OFF';this.classList.toggle('active')">💾 +Local OFF</button>
             <button class="btn-cancel" onclick="window.irsCancel=true;this.textContent='Cancelling...'">Cancel</button>
         </div>
         <div class="log" id="irs-log"></div>
@@ -217,11 +214,10 @@
 
     window.irsCancel = false;
     window.irsAlsoLocal = false;
-    window.irsReport = true;
 
     let uploadedCount = 0;
-    let matchedCount = 0;
     let skippedCount = 0;
+    let failedCount = 0;
     let criticalCount = 0;
 
     // ---- Hidden render container ----
@@ -231,7 +227,7 @@
     document.body.appendChild(renderContainer);
 
     // ==========================================================
-    // COMPLIANCE SCREENING ENGINE (same as v5)
+    // COMPLIANCE SCREENING ENGINE
     // ==========================================================
 
     function screenTranscript(htmlString, metadata) {
@@ -260,7 +256,6 @@
             transactionCodes: [],
         };
 
-        // Check blank / no record
         if (fullText.match(/No record of return filed/i) || fullText.match(/No transcript available/i)) {
             finding.isBlank = true;
             finding.severity = 'CRITICAL';
@@ -268,7 +263,6 @@
             return finding;
         }
 
-        // Extract financials
         function extractField(text, regex) {
             const m = text.match(regex);
             if (!m) return null;
@@ -284,55 +278,31 @@
         finding.accruedPenalty = extractField(fullText, /ACCRUED PENALTY:\s*\$([\d,.]+)/);
         finding.accountBalancePlusAccruals = extractField(fullText, /ACCOUNT BALANCE PLUS ACCRUALS:\s*\$([\d,.]+)/);
 
-        // Transaction codes
         const tcRegex = /(\d{3})\s+(.+?)\s+(\d{2}-\d{2}-\d{4})\s+(\$[\d,.]+|-?\$[\d,.]+)?/g;
         let tcMatch;
         while ((tcMatch = tcRegex.exec(fullText)) !== null) {
             const code = parseInt(tcMatch[1]);
             finding.transactionCodes.push({
-                code: tcMatch[1],
-                explanation: tcMatch[2].trim(),
-                date: tcMatch[3],
-                amount: tcMatch[4] || ''
+                code: tcMatch[1], explanation: tcMatch[2].trim(), date: tcMatch[3], amount: tcMatch[4] || ''
             });
 
-            // Critical codes
-            if ([582, 583].includes(code)) {
-                finding.flags.push({ type: 'LIEN', severity: 'CRITICAL', message: `Federal tax lien (TC ${code}) filed on ${tcMatch[3]}` });
-            }
-            if (code === 670 && tcMatch[2]?.match(/levy/i)) {
-                finding.flags.push({ type: 'LEVY', severity: 'CRITICAL', message: `Levy action on ${tcMatch[3]}` });
-            }
-            if ([420, 421].includes(code)) {
-                finding.flags.push({ type: 'AUDIT', severity: 'CRITICAL', message: `Examination initiated (TC ${code}) on ${tcMatch[3]}` });
-            }
-            if (code === 150 && tcMatch[2]?.match(/substitute/i)) {
-                finding.flags.push({ type: 'SFR', severity: 'CRITICAL', message: `IRS filed Substitute for Return on ${tcMatch[3]}` });
-            }
-            if ([520, 530].includes(code)) {
-                finding.flags.push({ type: 'COLLECTION', severity: 'CRITICAL', message: `Collection action (TC ${code}) on ${tcMatch[3]}` });
-            }
-
-            // Warning codes
-            if (code === 971 && tcMatch[2]?.match(/installment/i)) {
-                finding.flags.push({ type: 'INSTALLMENT', severity: 'WARNING', message: `Installment agreement on ${tcMatch[3]}` });
-            }
-            if ([480, 481].includes(code)) {
-                finding.flags.push({ type: 'OIC', severity: 'WARNING', message: `Offer in Compromise (TC ${code}) on ${tcMatch[3]}` });
-            }
+            if ([582, 583].includes(code)) finding.flags.push({ type: 'LIEN', severity: 'CRITICAL', message: `Federal tax lien (TC ${code}) filed on ${tcMatch[3]}` });
+            if (code === 670 && tcMatch[2]?.match(/levy/i)) finding.flags.push({ type: 'LEVY', severity: 'CRITICAL', message: `Levy action on ${tcMatch[3]}` });
+            if ([420, 421].includes(code)) finding.flags.push({ type: 'AUDIT', severity: 'CRITICAL', message: `Examination initiated (TC ${code}) on ${tcMatch[3]}` });
+            if (code === 150 && tcMatch[2]?.match(/substitute/i)) finding.flags.push({ type: 'SFR', severity: 'CRITICAL', message: `IRS filed Substitute for Return on ${tcMatch[3]}` });
+            if ([520, 530].includes(code)) finding.flags.push({ type: 'COLLECTION', severity: 'CRITICAL', message: `Collection action (TC ${code}) on ${tcMatch[3]}` });
+            if (code === 971 && tcMatch[2]?.match(/installment/i)) finding.flags.push({ type: 'INSTALLMENT', severity: 'WARNING', message: `Installment agreement on ${tcMatch[3]}` });
+            if ([480, 481].includes(code)) finding.flags.push({ type: 'OIC', severity: 'WARNING', message: `Offer in Compromise (TC ${code}) on ${tcMatch[3]}` });
         }
 
-        // Balance due check
         const effectiveBalance = finding.accountBalancePlusAccruals ?? finding.accountBalance;
         if (effectiveBalance !== null && effectiveBalance > 0) {
             finding.flags.push({
-                type: 'BALANCE_DUE',
-                severity: 'CRITICAL',
+                type: 'BALANCE_DUE', severity: 'CRITICAL',
                 message: `Outstanding balance: $${effectiveBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
             });
         }
 
-        // Set severity
         const severities = finding.flags.map(f => f.severity);
         if (severities.includes('CRITICAL')) finding.severity = 'CRITICAL';
         else if (severities.includes('WARNING')) finding.severity = 'WARNING';
@@ -352,7 +322,7 @@
             #irs-render td, #irs-render th { padding: 2px 4px; border: 1px solid #ccc; font-size: 10px; }
         `;
         renderContainer.appendChild(styleOverride);
-        await delay(500);
+        await delay(300);
 
         const canvas = await html2canvas(renderContainer, {
             scale: 2, useCORS: true, logging: false, width: 850, windowWidth: 850, backgroundColor: '#ffffff'
@@ -379,12 +349,12 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.1' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
 
-    // ---- Download helper (only used if +Local is on) ----
+    // ---- Download helper ----
     function downloadBlob(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -397,45 +367,40 @@
     const results = [];
     const allFindings = [];
 
-    // Name expansions
-    const nameMap = { 'FIL A BAGE': 'Fill A Bagel', 'FILL A BAG': 'Fill A Bagel' };
-
     // ==========================================================
     // MAIN PROCESSING LOOP
     // ==========================================================
 
     for (let i = 0; i < messages.length; i++) {
-        if (window.irsCancel) { addLog('Cancelled', 'error'); break; }
+        if (window.irsCancel) { addLog('🛑 Cancelled by user', 'error'); break; }
 
         const msg = messages[i];
         document.getElementById('irs-curr').textContent = i + 1;
         const pct = Math.round((i + 1) / messages.length * 100);
         document.getElementById('irs-pbar').style.width = pct + '%';
         document.getElementById('irs-pbar').textContent = pct + '%';
+        document.getElementById('irs-status').textContent = '⏳ working...';
 
-        addLog(`[${i+1}/${messages.length}] ${msg.subject.substring(0,50)}...`);
+        addLog(`\n[${i+1}/${messages.length}] ${msg.subject.substring(0,60)}`);
 
         try {
-            // v6 FIX: Initialize session TWICE for first message to avoid stale session bug
-            // Try both .jsp and non-.jsp paths (IRS SOR varies)
+            // Fetch the transcript view page to initialize session
             const viewUrl = location.href.includes('.jsp')
                 ? `/semail/views/view_file.jsp?mailId=${msg.id}&index=0&ext=html&action=view`
                 : `/semail/views/view_file?mailId=${msg.id}&index=0&ext=html&action=view`;
 
             if (i === 0) {
-                addLog(`  ⏳ Initializing session (first message — double init)...`, 'warn');
+                addLog(`  ⏳ Starting IRS session...`, 'warn');
                 await fetch(viewUrl, { credentials: 'include' });
-                await delay(3000);
+                await delay(2000);
                 await fetch(viewUrl, { credentials: 'include' });
-                await delay(5000);
+                await delay(2000);
             } else {
-                addLog(`  ⏳ Initializing session...`, 'warn');
                 await fetch(viewUrl, { credentials: 'include' });
-                await delay(5000);
+                await delay(1500);
             }
 
-            // Fetch transcript
-            addLog(`  📄 Fetching transcript...`, 'info');
+            // Fetch transcript content
             const transcriptResp = await fetch('/semail/servlet/FileDownload', { credentials: 'include' });
             const transcriptHtml = await transcriptResp.text();
 
@@ -458,7 +423,7 @@
                 else if (transcriptType.match(/Record of Account/i)) shortType = 'Record of Account';
                 else if (transcriptType.match(/Wage and Income/i)) shortType = 'Wage and Income';
 
-                // Get form, TIN, year, name
+                // Extract metadata: form, TIN, year, name
                 let formType = '', tin = '', taxYear = '', taxpayerName = '';
 
                 const items = doc.querySelectorAll('.item-container');
@@ -477,7 +442,7 @@
                     }
                 });
 
-                // Old format fallback
+                // Old IRS format fallback
                 if (!formType || !tin || !taxYear) {
                     const allBolds = doc.querySelectorAll('b, strong');
                     allBolds.forEach(b => {
@@ -505,14 +470,12 @@
                     }
                 }
 
-                const name = nameMap[taxpayerName] || taxpayerName || 'Unknown';
+                const name = taxpayerName || 'Unknown';
                 const cleanName = name.substring(0, 20).replace(/[^a-zA-Z0-9 &]/g, '').trim().replace(/\s+/g, ' ');
                 const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}`;
-
                 const metadata = { name, tin, formType, taxYear, shortType };
 
                 // ---- COMPLIANCE SCREENING ----
-                addLog(`  🔍 Screening for compliance...`, 'warn');
                 const finding = screenTranscript(transcriptHtml, metadata);
                 allFindings.push(finding);
 
@@ -522,129 +485,153 @@
                     finding.flags.filter(f => f.severity === 'CRITICAL').forEach(f => addLog(`  🔴 ${f.message}`, 'error'));
                 } else if (finding.severity === 'WARNING') {
                     finding.flags.filter(f => f.severity === 'WARNING').forEach(f => addLog(`  🟡 ${f.message}`, 'warn'));
-                } else {
-                    addLog(`  ✅ Clean`, 'success');
                 }
 
-                // ---- PRE-CHECK: Does this transcript match any assignment? ----
-                // IRS masks TINs — match by last 4 digits + first 3 letters of name
-                const cleanTin = (tin || '').replace(/[\s-]/g, '');
+                // ---- MATCH CHECK ----
+                const cleanTin = (tin || '').replace(/[\s-*]/g, '');
                 const tinLast4 = cleanTin.slice(-4);
                 const transcriptNamePrefix = (name || '').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase();
 
                 const isMatch = assignmentLookup.some(a => {
-                    // Match by TIN last 4 (primary)
                     if (tinLast4 && a.tinLast4 && tinLast4 === a.tinLast4) return true;
-                    // Match by name prefix (fallback when TIN is fully masked)
                     if (transcriptNamePrefix && a.namePrefix && transcriptNamePrefix === a.namePrefix) return true;
                     return false;
                 });
 
                 if (!isMatch) {
-                    addLog(`  ⏭️ Skipped — ${name.substring(0,20)} (***${tinLast4 || '????'}) not in your assignments`, 'warn');
+                    skippedCount++;
+                    document.getElementById('irs-skipped').textContent = skippedCount;
+                    addLog(`  ⏭️ Not yours — ${cleanName} (***${tinLast4 || '????'})`, 'warn');
                     results.push({ success: false, skipped: true, reason: 'not assigned', name, tin });
-                    await delay(500);
+                    await delay(300);
                     continue;
                 }
 
                 // ---- CONVERT TO PDF ----
-                addLog(`  🔄 Converting to PDF...`, 'warn');
+                addLog(`  🔄 Converting...`, 'info');
                 const pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
 
-                // ---- UPLOAD TO PORTAL ----
-                addLog(`  📤 Uploading to portal...`, 'upload');
+                // ---- UPLOAD TO PORTAL (with retry) ----
+                addLog(`  📤 Uploading...`, 'upload');
 
                 const formData = new FormData();
                 formData.append('file', pdfBlob, baseFilename + '.pdf');
                 formData.append('metadata', JSON.stringify({
-                    tin,
-                    formType,
-                    taxYear,
-                    shortType,
+                    tin, formType, taxYear, shortType,
                     taxpayerName: name,
                     filename: baseFilename + '.pdf',
                     compliance: finding,
                 }));
 
-                try {
-                    const uploadResp = await fetch(`${PORTAL_URL}/api/expert/batch-upload`, {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` },
-                        body: formData,
-                    });
+                let uploaded = false;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        const uploadResp = await fetch(`${PORTAL_URL}/api/expert/batch-upload`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${AUTH_TOKEN}` },
+                            body: formData,
+                        });
 
-                    const uploadResult = await uploadResp.json();
+                        const uploadResult = await uploadResp.json();
 
-                    if (uploadResp.ok) {
-                        uploadedCount++;
-                        matchedCount++;
-                        document.getElementById('irs-uploaded').textContent = uploadedCount;
-                        document.getElementById('irs-matched').textContent = matchedCount;
-                        addLog(`  ✅ → ${uploadResult.entityName} (${uploadResult.totalFiles} files)`, 'success');
-                    } else {
-                        unmatchedCount++;
-                        document.getElementById('irs-unmatched').textContent = unmatchedCount;
-                        addLog(`  ⚠️ Portal: ${uploadResult.error}`, 'warn');
-
-                        // Save locally as fallback if unmatched
-                        downloadBlob(pdfBlob, baseFilename + '.pdf');
-                        addLog(`  💾 Saved locally: ${baseFilename}.pdf`, 'info');
+                        if (uploadResp.ok) {
+                            uploadedCount++;
+                            document.getElementById('irs-uploaded').textContent = uploadedCount;
+                            addLog(`  ✅ Uploaded → ${uploadResult.entityName || name} (${uploadResult.totalFiles || '?'} files total)`, 'success');
+                            uploaded = true;
+                            break;
+                        } else {
+                            if (attempt === 1) {
+                                addLog(`  ⚠️ Upload rejected: ${uploadResult.error || 'Unknown'} — retrying...`, 'warn');
+                                await delay(2000);
+                            } else {
+                                addLog(`  ❌ Upload failed: ${uploadResult.error || 'Unknown'}`, 'error');
+                                addLog(`  💾 Saving locally as backup...`, 'info');
+                                downloadBlob(pdfBlob, baseFilename + '.pdf');
+                            }
+                        }
+                    } catch (uploadErr) {
+                        if (attempt === 1) {
+                            addLog(`  ⚠️ Network error — retrying...`, 'warn');
+                            await delay(2000);
+                        } else {
+                            addLog(`  ❌ Upload failed: ${uploadErr.message}`, 'error');
+                            downloadBlob(pdfBlob, baseFilename + '.pdf');
+                            addLog(`  💾 Saved locally as backup`, 'info');
+                        }
                     }
-                } catch (uploadErr) {
-                    skippedCount++;
-                    document.getElementById('irs-skipped').textContent = skippedCount;
-                    addLog(`  ❌ Upload failed: ${uploadErr.message}`, 'error');
-                    downloadBlob(pdfBlob, baseFilename + '.pdf');
-                    addLog(`  💾 Saved locally as fallback`, 'info');
+                }
+
+                if (!uploaded) {
+                    failedCount++;
+                    document.getElementById('irs-failed').textContent = failedCount;
                 }
 
                 // Also save locally if toggle is on
-                if (window.irsAlsoLocal) {
+                if (window.irsAlsoLocal && uploaded) {
                     downloadBlob(pdfBlob, baseFilename + '.pdf');
                 }
 
-                results.push({ success: true, filename: baseFilename, name, tin, formType, taxYear, finding });
+                results.push({ success: uploaded, filename: baseFilename, name, tin, formType, taxYear, finding });
 
             } else {
-                addLog(`  ❌ Did not get transcript content`, 'error');
-                results.push({ success: false, error: 'No transcript content' });
+                addLog(`  ⏭️ Not a transcript (system message)`, 'warn');
+                skippedCount++;
+                document.getElementById('irs-skipped').textContent = skippedCount;
+                results.push({ success: false, skipped: true, reason: 'not transcript' });
             }
 
         } catch (err) {
-            addLog(`  ❌ ${err.message}`, 'error');
+            addLog(`  ❌ Error: ${err.message}`, 'error');
+            failedCount++;
+            document.getElementById('irs-failed').textContent = failedCount;
             results.push({ success: false, error: err.message });
         }
 
-        await delay(1500);
+        await delay(800);
     }
 
     // ---- Cleanup ----
     renderContainer.remove();
+    document.getElementById('irs-status').textContent = '✅ Done!';
 
     // ---- Final Summary ----
     const ok = results.filter(r => r.success).length;
+    const skippedTotal = results.filter(r => r.skipped).length;
     const warnings = allFindings.filter(f => f.severity === 'WARNING').length;
 
-    addLog(`\n${'='.repeat(50)}`, 'info');
-    addLog(`✅ Processed ${ok}/${messages.length} transcripts`, ok > 0 ? 'success' : 'error');
-    const skippedTotal = results.filter(r => r.skipped).length;
-    addLog(`📤 Uploaded: ${uploadedCount} | Matched: ${matchedCount} | Skipped (not yours): ${skippedTotal + skippedCount}`, 'upload');
-    addLog(`📊 Compliance: ${criticalCount} critical, ${warnings} warnings, ${allFindings.length - criticalCount - warnings} clean`,
-        criticalCount > 0 ? 'error' : warnings > 0 ? 'warn' : 'success');
+    addLog(`\n${'═'.repeat(45)}`, 'info');
+    addLog(`RESULTS`, 'info');
+    addLog(`${'═'.repeat(45)}`, 'info');
+    addLog(`📤 Uploaded to portal: ${uploadedCount}`, uploadedCount > 0 ? 'success' : 'warn');
+    addLog(`⏭️ Not your assignments: ${skippedTotal}`, 'warn');
+    addLog(`❌ Failed uploads: ${failedCount}`, failedCount > 0 ? 'error' : 'info');
+    addLog(`🔍 Compliance flags: ${criticalCount} critical, ${warnings} warnings`, criticalCount > 0 ? 'error' : 'info');
 
     if (ok > 0) {
+        addLog(`\n📁 Uploaded transcripts:`, 'info');
         const byName = {};
         results.filter(r => r.success).forEach(r => {
             if (!byName[r.name]) byName[r.name] = [];
             byName[r.name].push(r);
         });
         Object.keys(byName).forEach(n => {
-            addLog(`\n📁 ${n} (TIN: ${byName[n][0].tin})`, 'info');
-            byName[n].forEach(r => addLog(`   • ${r.formType} ${r.taxYear} ${r.finding?.severity === 'CRITICAL' ? '🔴' : r.finding?.severity === 'WARNING' ? '🟡' : '✅'}`, 'success'));
+            addLog(`  ${n}:`, 'success');
+            byName[n].forEach(r => addLog(`    • ${r.formType} ${r.taxYear} ${r.finding?.severity === 'CRITICAL' ? '🔴' : r.finding?.severity === 'WARNING' ? '🟡' : '✅'}`, 'success'));
         });
     }
 
-    const skippedFinal = results.filter(r => r.skipped).length;
-    alert(`Done! ${uploadedCount} transcripts uploaded to portal.\n${skippedFinal > 0 ? skippedFinal + ' skipped (not in your assignments).\n' : ''}\nCompliance: ${criticalCount} critical, ${warnings} warnings.`);
-    return { results, findings: allFindings, uploaded: uploadedCount, unmatched: unmatchedCount };
+    if (failedCount > 0) {
+        addLog(`\n⚠️ ${failedCount} transcripts failed to upload but were saved to your Downloads folder.`, 'warn');
+        addLog(`You can manually upload them in the ModernTax portal.`, 'warn');
+    }
+
+    // Simple, clear final alert
+    let summary = `Done! ${uploadedCount} transcript${uploadedCount !== 1 ? 's' : ''} uploaded to ModernTax.`;
+    if (skippedTotal > 0) summary += `\n${skippedTotal} skipped (not in your assignments).`;
+    if (failedCount > 0) summary += `\n${failedCount} failed (saved to Downloads — upload manually in portal).`;
+    if (criticalCount > 0) summary += `\n\n⚠️ ${criticalCount} compliance flag${criticalCount !== 1 ? 's' : ''} found — check the log.`;
+    alert(summary);
+
+    return { results, findings: allFindings, uploaded: uploadedCount, failed: failedCount, skipped: skippedTotal };
 })();
