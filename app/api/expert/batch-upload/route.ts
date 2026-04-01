@@ -181,6 +181,30 @@ export async function POST(request: NextRequest) {
     const entityId = entity.id;
     const assignmentId = match.id;
 
+    // Dedup check: build a key from formType + shortType + taxYear to detect re-uploads
+    const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}`.toLowerCase();
+    const existingUrls: string[] = entity.transcript_urls || [];
+    const alreadyUploaded = existingUrls.some((url: string) => {
+      // Extract filename from storage path (after the timestamp prefix)
+      const filename = url.split('/').pop() || '';
+      // Remove timestamp prefix (digits followed by dash)
+      const cleanFilename = filename.replace(/^\d+-/, '').toLowerCase();
+      return cleanFilename.includes(transcriptKey.replace(/\s+/g, ' '));
+    });
+
+    if (alreadyUploaded) {
+      return corsJson({
+        success: true,
+        duplicate: true,
+        entityId,
+        entityName: entity.entity_name,
+        assignmentId,
+        totalFiles: existingUrls.length,
+        filename: metadata.filename,
+        message: 'Transcript already uploaded — skipped duplicate',
+      });
+    }
+
     // Upload file to Supabase storage
     const buffer = Buffer.from(await file.arrayBuffer());
     const sanitizedFilename = metadata.filename
@@ -205,7 +229,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Append to entity's transcript_urls
-    const existingUrls: string[] = entity.transcript_urls || [];
     const updatedUrls = [...existingUrls, storagePath];
 
     const entityUpdate: Record<string, unknown> = { transcript_urls: updatedUrls };

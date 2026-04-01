@@ -563,9 +563,16 @@
                         const uploadResult = await uploadResp.json();
 
                         if (uploadResp.ok) {
-                            uploadedCount++;
-                            document.getElementById('irs-uploaded').textContent = uploadedCount;
-                            addLog(`  ✅ Uploaded → ${uploadResult.entityName || name} (${uploadResult.totalFiles || '?'} files total)`, 'success');
+                            if (uploadResult.duplicate) {
+                                addLog(`  ⏭️ Already uploaded — skipped duplicate`, 'info');
+                                uploaded = true;
+                                skippedCount++;
+                                document.getElementById('irs-skipped').textContent = skippedCount;
+                            } else {
+                                uploadedCount++;
+                                document.getElementById('irs-uploaded').textContent = uploadedCount;
+                                addLog(`  ✅ Uploaded → ${uploadResult.entityName || name} (${uploadResult.totalFiles || '?'} files total)`, 'success');
+                            }
                             uploaded = true;
                             break;
                         } else {
