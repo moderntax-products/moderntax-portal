@@ -45,6 +45,9 @@ export type WebhookDeliveryStatus = 'pending' | 'sending' | 'delivered' | 'faile
 
 export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'failed' | 'reassigned';
 
+export type MonitoringFrequency = 'weekly' | 'monthly' | 'quarterly' | 'custom';
+export type MonitoringStatus = 'active' | 'paused' | 'cancelled' | 'expired';
+
 export type BatchStatus = 'processing' | 'completed' | 'failed';
 
 /**
@@ -352,6 +355,34 @@ export interface RequestWithEntities extends Request {
  */
 export interface BatchWithRequests extends Batch {
   requests: Request[];
+}
+
+/**
+ * MonitoringSubscription - Recurring transcript re-pull subscription for an entity
+ */
+export interface MonitoringSubscription {
+  id: string;
+  entity_id: string;
+  request_id: string;
+  client_id: string;
+  enrolled_by: string;
+  frequency: MonitoringFrequency;
+  custom_interval_days: number | null;
+  next_pull_date: string;
+  last_pull_date: string | null;
+  enrolled_at: string;
+  expires_at: string | null;
+  cancelled_at: string | null;
+  status: MonitoringStatus;
+  enrollment_fee: number;
+  per_pull_fee: number;
+  total_pulls_completed: number;
+  total_billed: number;
+  pull_history: { date: string; status: string; transcript_count: number }[];
+  latest_summary: string | null;
+  latest_summary_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /**

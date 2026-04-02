@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
+import { MonitoringPanel } from '@/components/MonitoringPanel';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -305,6 +306,18 @@ export default async function RequestDetailPage({ params }: Props) {
               </div>
             )}
           </div>
+
+          {/* Transcript Monitoring */}
+          <MonitoringPanel
+            requestId={request.id}
+            entities={(request.request_entities || []).map((e: RequestEntity) => ({
+              id: e.id,
+              entity_name: e.entity_name,
+              status: e.status,
+              form_type: e.form_type,
+              signed_8821_url: e.signed_8821_url,
+            }))}
+          />
 
           {/* Notes */}
           {request.notes && (
