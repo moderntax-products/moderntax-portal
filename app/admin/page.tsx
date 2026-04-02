@@ -81,6 +81,25 @@ export default async function AdminPage({ searchParams }: PageProps) {
     ...(stuckProcessingEntities || []),
   ];
 
+  // Fetch entities with compliance flags (gross_receipts JSONB contains severity/flags)
+  const { data: allCompletedEntities } = await supabase
+    .from('request_entities')
+    .select('id, entity_name, status, gross_receipts, request_id, updated_at, requests(loan_number, clients(name))')
+    .eq('status', 'completed')
+    .not('gross_receipts', 'is', null) as { data: any[] | null; error: any };
+
+  const complianceFlaggedEntities = (allCompletedEntities || []).filter((e: any) => {
+    if (!e.gross_receipts || typeof e.gross_receipts !== 'object') return false;
+    return Object.values(e.gross_receipts).some(
+      (val: any) => val && typeof val === 'object' && val.severity && ['CRITICAL', 'WARNING'].includes(val.severity)
+    );
+  }).map((e: any) => {
+    const entries = Object.values(e.gross_receipts) as any[];
+    const hasCritical = entries.some((v: any) => v?.severity === 'CRITICAL');
+    const flagCount = entries.reduce((sum: number, v: any) => sum + (v?.flags?.length || 0), 0);
+    return { ...e, hasCritical, flagCount };
+  }).sort((a: any, b: any) => (a.hasCritical === b.hasCritical ? b.flagCount - a.flagCount : a.hasCritical ? -1 : 1));
+
   const getStuckDuration = (updatedAt: string) => {
     const diff = now.getTime() - new Date(updatedAt).getTime();
     const days = Math.floor(diff / (24 * 60 * 60 * 1000));
@@ -480,6 +499,68 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* Compliance Alerts */}
+        {complianceFlaggedEntities.length > 0 && (
+          <div className="mb-12 bg-red-50 border border-red-300 rounded-lg p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <h3 className="text-lg font-bold text-red-800">
+                Compliance Alerts ({complianceFlaggedEntities.length} entit{complianceFlaggedEntities.length === 1 ? 'y' : 'ies'})
+              </h3>
+              <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-900 text-xs font-bold rounded-full">
+                {complianceFlaggedEntities.filter((e: any) => e.hasCritical).length} Critical
+              </span>
+            </div>
+            <p className="text-sm text-red-700 mb-4">
+              These entities have IRS compliance flags detected during transcript processing. Upsell emails were auto-sent to signers.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-red-200">
+                    <th className="px-4 py-2 text-left font-semibold text-red-900">Entity</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-900">Client</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-900">Severity</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-900">Flags</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-900">Request</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-100">
+                  {complianceFlaggedEntities.slice(0, 20).map((entity: any) => (
+                    <tr key={entity.id}>
+                      <td className="px-4 py-2 font-medium text-red-900">{entity.entity_name}</td>
+                      <td className="px-4 py-2 text-red-800">{entity.requests?.clients?.name || '—'}</td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                          entity.hasCritical ? 'bg-red-200 text-red-900' : 'bg-amber-200 text-amber-900'
+                        }`}>
+                          {entity.hasCritical ? 'CRITICAL' : 'WARNING'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-red-800 font-mono">{entity.flagCount}</td>
+                      <td className="px-4 py-2">
+                        <Link
+                          href={`/admin/requests/${entity.request_id}`}
+                          className="text-red-700 hover:text-red-900 underline font-medium"
+                        >
+                          {entity.requests?.loan_number || 'View'}
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {complianceFlaggedEntities.length > 20 && (
+                <p className="text-xs text-red-600 mt-2 px-4">
+                  Showing 20 of {complianceFlaggedEntities.length} flagged entities
+                </p>
+              )}
             </div>
           </div>
         )}

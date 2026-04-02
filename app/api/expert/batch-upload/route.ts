@@ -329,7 +329,7 @@ export async function POST(request: NextRequest) {
 
             await sgMail.send({
               to: fullEntity.signer_email,
-              from: { email: process.env.SENDGRID_FROM_EMAIL || 'active-accounts@moderntax.io', name: 'ModernTax' },
+              from: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
               subject: `Tax Compliance Alert: ${fullEntity.entity_name} — Action May Be Required`,
               html: `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">

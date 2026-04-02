@@ -342,6 +342,135 @@ export default async function AdminRequestManagePage({ params }: Props) {
                     </div>
                   )}
 
+                  {/* Compliance Alerts — parsed from gross_receipts JSONB */}
+                  {entity.gross_receipts && typeof entity.gross_receipts === 'object' && (() => {
+                    const complianceEntries = Object.entries(entity.gross_receipts as Record<string, any>)
+                      .filter(([, val]) => val && typeof val === 'object' && val.severity && val.flags);
+                    if (complianceEntries.length === 0) return null;
+
+                    const hasCritical = complianceEntries.some(([, v]) => v.severity === 'CRITICAL');
+                    const hasWarning = complianceEntries.some(([, v]) => v.severity === 'WARNING');
+
+                    return (
+                      <div className="mt-4 pt-4 border-t border-gray-100">
+                        <div className={`rounded-lg border p-4 ${
+                          hasCritical ? 'bg-red-50 border-red-300' : hasWarning ? 'bg-amber-50 border-amber-300' : 'bg-blue-50 border-blue-200'
+                        }`}>
+                          <div className="flex items-center gap-2 mb-3">
+                            {hasCritical ? (
+                              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                            <h4 className={`text-sm font-semibold ${hasCritical ? 'text-red-800' : 'text-amber-800'}`}>
+                              Compliance Alerts ({complianceEntries.reduce((sum, [, v]) => sum + (v.flags?.length || 0), 0)} flags)
+                            </h4>
+                            <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-bold ${
+                              hasCritical ? 'bg-red-200 text-red-900' : 'bg-amber-200 text-amber-900'
+                            }`}>
+                              {hasCritical ? 'CRITICAL' : 'WARNING'}
+                            </span>
+                          </div>
+
+                          {complianceEntries.map(([key, data]) => (
+                            <div key={key} className="mb-3 last:mb-0">
+                              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
+                                {key.replace(/_/g, ' ')}
+                                {data.screened_at && (
+                                  <span className="font-normal text-gray-400 ml-2">
+                                    Screened {new Date(data.screened_at).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </p>
+
+                              {/* Critical flags */}
+                              {data.flags?.filter((f: any) => f.severity === 'CRITICAL').length > 0 && (
+                                <div className="bg-red-100 rounded p-2 mb-1">
+                                  {data.flags.filter((f: any) => f.severity === 'CRITICAL').map((f: any, i: number) => (
+                                    <p key={i} className="text-sm text-red-800 flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-red-600 flex-shrink-0" />
+                                      {f.message}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Warning flags */}
+                              {data.flags?.filter((f: any) => f.severity === 'WARNING').length > 0 && (
+                                <div className="bg-amber-100 rounded p-2 mb-1">
+                                  {data.flags.filter((f: any) => f.severity === 'WARNING').map((f: any, i: number) => (
+                                    <p key={i} className="text-sm text-amber-800 flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 flex-shrink-0" />
+                                      {f.message}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Info flags */}
+                              {data.flags?.filter((f: any) => !['CRITICAL', 'WARNING'].includes(f.severity)).length > 0 && (
+                                <div className="bg-blue-100 rounded p-2 mb-1">
+                                  {data.flags.filter((f: any) => !['CRITICAL', 'WARNING'].includes(f.severity)).map((f: any, i: number) => (
+                                    <p key={i} className="text-sm text-blue-800 flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0" />
+                                      {f.message}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Financial summary */}
+                              {data.financials && (
+                                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2">
+                                  {data.financials.grossReceipts != null && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Gross Receipts</p>
+                                      <p className="text-sm font-semibold text-gray-900">${Number(data.financials.grossReceipts).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                  {data.financials.totalIncome != null && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Total Income</p>
+                                      <p className="text-sm font-semibold text-gray-900">${Number(data.financials.totalIncome).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                  {data.financials.totalTax != null && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Total Tax</p>
+                                      <p className="text-sm font-semibold text-gray-900">${Number(data.financials.totalTax).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                  {data.financials.accountBalance != null && Number(data.financials.accountBalance) !== 0 && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Balance Due</p>
+                                      <p className="text-sm font-bold text-red-700">${Number(data.financials.accountBalance).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                  {data.financials.accruedPenalty != null && Number(data.financials.accruedPenalty) !== 0 && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Penalty</p>
+                                      <p className="text-sm font-bold text-red-700">${Number(data.financials.accruedPenalty).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                  {data.financials.accruedInterest != null && Number(data.financials.accruedInterest) !== 0 && (
+                                    <div className="text-center">
+                                      <p className="text-xs text-gray-500">Interest</p>
+                                      <p className="text-sm font-bold text-red-700">${Number(data.financials.accruedInterest).toLocaleString()}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Employment Data Card (for completed employment entities) */}
                   {entity.form_type === 'W2_INCOME' && entity.employment_data && (
                     <div className="mt-4 pt-4 border-t border-gray-100">
