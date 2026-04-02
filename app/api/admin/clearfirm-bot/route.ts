@@ -11,16 +11,38 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import * as DropboxSign from '@dropbox/sign';
 
-// Designee credentials for ALL Clearfirm requests
-const CLEARFIRM_DESIGNEE = {
-  name: 'LaTonya Holmes',
-  address: '8465 Houndstooth Enclave Dr',
-  city: 'New Port Richey',
-  state: 'FL',
-  zip: '34655',
-  ptin: '0316-30210',
-  caf: '0315-23541R',
+// Designee profiles
+const DESIGNEES: Record<string, {
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  ptin: string;
+  caf: string;
+}> = {
+  default: {
+    name: 'LaTonya Holmes',
+    address: '8465 Houndstooth Enclave Dr',
+    city: 'New Port Richey',
+    state: 'FL',
+    zip: '34655',
+    ptin: '0316-30210',
+    caf: '0315-23541R',
+  },
+  parker: {
+    name: 'Matthew Parker C/O ModernTax',
+    address: '2 Embarcadero, 8th Floor',
+    city: 'San Francisco',
+    state: 'CA',
+    zip: '94111',
+    ptin: 'P01809554',
+    caf: '0316-30210R',
+  },
 };
+
+// Default designee for backward compat
+const CLEARFIRM_DESIGNEE = DESIGNEES.default;
 
 // Template IDs (same as dropbox-sign.ts)
 const TEMPLATE_INDIVIDUAL = 'a34ce6060750406fc9464d1d46bf99e053c1c177';
