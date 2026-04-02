@@ -8,6 +8,8 @@ import { AdminExpertAssign } from '@/components/AdminExpertAssign';
 import { Admin8821Upload } from '@/components/Admin8821Upload';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
+import { Processor8821Panel } from '@/components/Processor8821Panel';
+import { MonitoringPanel } from '@/components/MonitoringPanel';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -517,6 +519,21 @@ export default async function AdminRequestManagePage({ params }: Props) {
                     </div>
                   )}
 
+                  {/* Processor 8821 Panel — template downloads + upload */}
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <Processor8821Panel
+                      entity={{
+                        id: entity.id,
+                        entity_name: entity.entity_name,
+                        form_type: entity.form_type,
+                        status: entity.status,
+                        signed_8821_url: entity.signed_8821_url,
+                        signer_email: entity.signer_email,
+                      }}
+                      requestId={request.id}
+                    />
+                  </div>
+
                   {/* 8821 Info Copy Card (for filling out 8821 forms) */}
                   <div className="mt-4 pt-4 border-t border-gray-100">
                     <Entity8821Info entity={entity} />
@@ -543,6 +560,7 @@ export default async function AdminRequestManagePage({ params }: Props) {
                             a.status === 'completed' ? 'bg-green-50' :
                             a.status === 'failed' ? 'bg-red-50' :
                             a.status === 'reassigned' ? 'bg-gray-50' :
+                            a.status === 'cancelled' ? 'bg-orange-50' :
                             'bg-blue-50'
                           }`}>
                             <div>
@@ -552,6 +570,7 @@ export default async function AdminRequestManagePage({ params }: Props) {
                                 a.status === 'completed' ? 'text-green-700' :
                                 a.status === 'failed' ? 'text-red-700' :
                                 a.status === 'reassigned' ? 'text-gray-500' :
+                                a.status === 'cancelled' ? 'text-orange-700' :
                                 'text-blue-700'
                               }`}>
                                 {a.status.charAt(0).toUpperCase() + a.status.slice(1).replace('_', ' ')}
@@ -611,6 +630,18 @@ export default async function AdminRequestManagePage({ params }: Props) {
               <p className="text-gray-500">No entities in this request</p>
             </div>
           )}
+
+          {/* Transcript Monitoring */}
+          <MonitoringPanel
+            requestId={request.id}
+            entities={(request.request_entities || []).map((e: RequestEntity) => ({
+              id: e.id,
+              entity_name: e.entity_name,
+              status: e.status,
+              form_type: e.form_type,
+              signed_8821_url: e.signed_8821_url,
+            }))}
+          />
         </div>
       </div>
     </div>

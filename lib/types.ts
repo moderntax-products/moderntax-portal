@@ -43,7 +43,7 @@ export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 export type PaymentMethod = 'ach' | 'wire';
 export type WebhookDeliveryStatus = 'pending' | 'sending' | 'delivered' | 'failed' | 'dead';
 
-export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'failed' | 'reassigned';
+export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'failed' | 'reassigned' | 'cancelled';
 
 export type MonitoringFrequency = 'weekly' | 'monthly' | 'quarterly' | 'custom';
 export type MonitoringStatus = 'active' | 'paused' | 'cancelled' | 'expired';

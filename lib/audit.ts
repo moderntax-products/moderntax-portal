@@ -44,7 +44,9 @@ export type AuditAction =
   | '8821_data_uploaded'
   | 'webhook_delivered'
   | 'webhook_failed'
-  | 'irs_rejected_auto_fax_email';
+  | 'irs_rejected_auto_fax_email'
+  | 'expert_assignment_cancelled'
+  | 'clearfirm_bot_processed';
 
 export interface AuditEvent {
   action: AuditAction;

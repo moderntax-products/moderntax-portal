@@ -910,6 +910,85 @@ ${entityRows}
 }
 
 /**
+ * Notify admin that Clearfirm 8821s have been auto-sent and are ready for wet signature download
+ */
+export async function sendClearfirmBotNotification(
+  adminEmail: string,
+  entities: { entityName: string; formType: string; loanNumber: string; signatureRequestId: string }[],
+  designeeName: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const entityRows = entities
+    .map(
+      (e) =>
+        `<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;">${e.entityName}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #eee;">${e.formType}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace;">${e.loanNumber}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace;font-size:11px;">${e.signatureRequestId.slice(0, 16)}...</td>
+        </tr>`
+    )
+    .join('\n');
+
+  const content = `
+<p>The Clearfirm 8821 Bot has automatically processed <strong>${entities.length}</strong> new ${entities.length === 1 ? 'entity' : 'entities'}.</p>
+
+<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;margin:16px 0;">
+  <p style="margin:0 0 4px;font-size:12px;color:#1e40af;text-transform:uppercase;font-weight:600;">Designee</p>
+  <p style="margin:0;font-size:16px;font-weight:700;color:#1e3a5f;">${designeeName}</p>
+</div>
+
+<p><strong>8821 signature requests have been sent via Dropbox Sign.</strong> Once signed, download the wet-signature PDFs from Dropbox Sign and upload them to the portal.</p>
+
+<table style="width:100%;border-collapse:collapse;margin:16px 0;">
+  <thead>
+    <tr style="background:#f8fafc;">
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e2e8f0;font-size:12px;color:#64748b;">Entity</th>
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e2e8f0;font-size:12px;color:#64748b;">Form</th>
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e2e8f0;font-size:12px;color:#64748b;">Loan #</th>
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e2e8f0;font-size:12px;color:#64748b;">Signature ID</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${entityRows}
+  </tbody>
+</table>
+
+<p style="font-size:13px;color:#64748b;"><strong>Next steps:</strong></p>
+<ol style="font-size:13px;color:#64748b;">
+  <li>Wait for signer to complete wet signature on the 8821</li>
+  <li>Download signed PDF from <a href="https://app.hellosign.com/home/manage" style="color:#2563eb;">Dropbox Sign</a></li>
+  <li>Upload to portal (auto-synced by cron, or manual upload via Clearfirm Bot page)</li>
+</ol>
+  `.trim();
+
+  const html = createEmailTemplate(
+    `Clearfirm Bot: ${entities.length} 8821${entities.length === 1 ? '' : 's'} Sent`,
+    content,
+    {
+      text: 'Open Clearfirm Bot Dashboard',
+      url: `${appUrl}/admin/clearfirm-bot`,
+    }
+  );
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `Clearfirm Bot: ${entities.length} 8821${entities.length === 1 ? '' : 's'} sent — awaiting wet signatures`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send Clearfirm bot notification:', error);
+  }
+}
+
+/**
  * Send daily summary to admin
  * Includes completions, errors, new requests, expert activity, and SLA compliance
  */

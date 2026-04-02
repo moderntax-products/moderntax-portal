@@ -45,7 +45,7 @@ export async function sendSignatureRequest(entity: {
     templateIds: [templateId],
     signers: [
       {
-        role: 'Signer',
+        role: 'Taxpayer',
         name: signerName,
         emailAddress: signerEmail,
       },

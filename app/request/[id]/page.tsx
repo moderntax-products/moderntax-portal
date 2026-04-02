@@ -7,6 +7,7 @@ import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
+import { Processor8821Panel } from '@/components/Processor8821Panel';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -45,7 +46,10 @@ export default async function RequestDetailPage({ params }: Props) {
     .eq('id', user.id)
     .single() as { data: { client_id: string | null; role: string } | null; error: any };
 
-  if (!profile || profile.client_id !== request.client_id) redirect('/');
+  if (!profile) redirect('/');
+
+  // Admins can access any request; other roles must belong to the same client
+  if (profile.role !== 'admin' && profile.client_id !== request.client_id) redirect('/');
 
   // Processors can only view their own requests
   if (profile.role === 'processor' && request.requested_by !== user.id) redirect('/');
@@ -231,6 +235,19 @@ export default async function RequestDetailPage({ params }: Props) {
                         </span>
                       </div>
                     </div>
+
+                    {/* Processor 8821 Panel — template downloads + upload */}
+                    <Processor8821Panel
+                      entity={{
+                        id: entity.id,
+                        entity_name: entity.entity_name,
+                        form_type: entity.form_type,
+                        status: entity.status,
+                        signed_8821_url: entity.signed_8821_url,
+                        signer_email: entity.signer_email,
+                      }}
+                      requestId={request.id}
+                    />
 
                     {/* Signed 8821 */}
                     {entity.signed_8821_url && (

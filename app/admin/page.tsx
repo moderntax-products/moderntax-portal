@@ -42,7 +42,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
   // Fetch all requests with entities (include completed_at for revenue calc) and client info
   const { data: allRequests, error: requestsError } = await supabase
     .from('requests')
-    .select('*, request_entities(id, status, completed_at), clients(name, slug)')
+    .select('*, request_entities(id, entity_name, status, completed_at), clients(name, slug)')
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
 
   // Fetch invoices for billing overview
@@ -168,9 +168,16 @@ export default async function AdminPage({ searchParams }: PageProps) {
   }
   if (searchFilter) {
     const searchLower = searchFilter.toLowerCase();
-    filteredRequests = filteredRequests.filter((r: any) =>
-      r.loan_number?.toLowerCase().includes(searchLower)
-    );
+    filteredRequests = filteredRequests.filter((r: any) => {
+      // Search by loan number
+      if (r.loan_number?.toLowerCase().includes(searchLower)) return true;
+      // Search by client name
+      if (r.clients?.name?.toLowerCase().includes(searchLower)) return true;
+      // Search by entity name (borrower / taxpayer name)
+      const entities = r.request_entities || [];
+      if (entities.some((e: any) => e.entity_name?.toLowerCase().includes(searchLower))) return true;
+      return false;
+    });
   }
   if (statusFilter && statusFilter !== 'all') {
     filteredRequests = filteredRequests.filter((r: any) => r.status === statusFilter);
@@ -349,6 +356,12 @@ export default async function AdminPage({ searchParams }: PageProps) {
               className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               IRS Experts
+            </Link>
+            <Link
+              href="/admin/clearfirm-bot"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors"
+            >
+              Clearfirm Bot
             </Link>
             <Link
               href="/admin/team"
@@ -790,7 +803,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   type="text"
                   name="search"
                   defaultValue={searchFilter || ''}
-                  placeholder="Search by loan number..."
+                  placeholder="Search by entity name, loan number, or client..."
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent"
                 />
                 <svg className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -854,7 +867,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Type</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Account</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entities</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entity Names</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Progress</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Submitted</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Action</th>
                     </tr>
@@ -890,6 +904,36 @@ export default async function AdminPage({ searchParams }: PageProps) {
                               <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(displayStatus as RequestStatus)}`}>
                                 {formatStatus(displayStatus)}
                               </span>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-6 py-4">
+                          {(() => {
+                            const entities = request.request_entities || [];
+                            if (entities.length === 0) return <span className="text-xs text-gray-400">None</span>;
+                            const searchLower = searchFilter?.toLowerCase();
+                            return (
+                              <div className="flex flex-wrap gap-1 max-w-xs">
+                                {entities.map((e: any) => {
+                                  const isMatch = searchLower && e.entity_name?.toLowerCase().includes(searchLower);
+                                  return (
+                                    <span
+                                      key={e.id}
+                                      className={`inline-block px-2 py-0.5 rounded text-xs ${
+                                        isMatch
+                                          ? 'bg-yellow-100 text-yellow-800 font-semibold ring-1 ring-yellow-300'
+                                          : e.status === 'completed'
+                                          ? 'bg-green-50 text-green-700'
+                                          : e.status === 'failed'
+                                          ? 'bg-red-50 text-red-700'
+                                          : 'bg-gray-100 text-gray-700'
+                                      }`}
+                                    >
+                                      {e.entity_name}
+                                    </span>
+                                  );
+                                })}
+                              </div>
                             );
                           })()}
                         </td>

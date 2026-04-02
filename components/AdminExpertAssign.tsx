@@ -32,6 +32,7 @@ export function AdminExpertAssign({
   const [experts, setExperts] = useState<Expert[]>([]);
   const [selectedExpert, setSelectedExpert] = useState('');
   const [loading, setLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [fetchingExperts, setFetchingExperts] = useState(false);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -92,6 +93,35 @@ export function AdminExpertAssign({
     }
   };
 
+  const handleCancel = async () => {
+    if (!currentAssignment) return;
+    if (!confirm(`Cancel assignment for "${entityName}"? The entity will be reset to 8821 Signed status.`)) return;
+
+    setCancelling(true);
+    setError('');
+
+    try {
+      const res = await fetch('/api/admin/expert/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignmentId: currentAssignment.id }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to cancel');
+        return;
+      }
+
+      if (onAssigned) onAssigned();
+      else window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cancel failed');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   // Show current assignment status
   if (currentAssignment && ['assigned', 'in_progress'].includes(currentAssignment.status)) {
     const expertName = currentAssignment.profiles?.full_name || currentAssignment.profiles?.email || 'Expert';
@@ -113,12 +143,22 @@ export function AdminExpertAssign({
         {currentAssignment.expert_notes && (
           <p className="text-gray-500">Notes: {currentAssignment.expert_notes}</p>
         )}
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="text-blue-600 hover:text-blue-800 font-medium"
-        >
-          Reassign
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="text-blue-600 hover:text-blue-800 font-medium"
+          >
+            Reassign
+          </button>
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
+          >
+            {cancelling ? 'Cancelling...' : 'Cancel Assignment'}
+          </button>
+        </div>
+        {error && <p className="text-red-600 text-xs">{error}</p>}
         {showForm && (
           <div className="mt-2 p-3 bg-gray-50 rounded-lg border space-y-2">
             {fetchingExperts ? (

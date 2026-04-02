@@ -18,11 +18,11 @@ export async function POST(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, client_id')
       .eq('id', user.id)
-      .single();
+      .single() as { data: { role: string; client_id: string | null } | null; error: any };
 
-    if (!profile || profile.role !== 'admin') {
+    if (!profile || !['admin', 'processor', 'manager'].includes(profile.role)) {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
@@ -50,12 +50,25 @@ export async function POST(request: NextRequest) {
     // Verify entity exists
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, request_id')
+      .select('id, entity_name, request_id, status')
       .eq('id', entityId)
-      .single();
+      .single() as { data: any; error: any };
 
     if (!entity) {
       return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+    }
+
+    // For non-admins, verify entity belongs to their client
+    if (profile.role !== 'admin' && profile.client_id) {
+      const { data: req } = await adminSupabase
+        .from('requests')
+        .select('client_id')
+        .eq('id', entity.request_id)
+        .single() as { data: any; error: any };
+
+      if (!req || req.client_id !== profile.client_id) {
+        return NextResponse.json({ error: 'Not authorized for this entity' }, { status: 403 });
+      }
     }
 
     // Upload file to Supabase storage
@@ -77,10 +90,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update entity with signed_8821_url
+    // Update entity with signed_8821_url and auto-advance status
+    const updateFields: Record<string, unknown> = { signed_8821_url: filePath };
+    if (['pending', 'submitted', '8821_sent'].includes(entity.status)) {
+      updateFields.status = '8821_signed';
+    }
+
     const { error: updateError } = await adminSupabase
       .from('request_entities')
-      .update({ signed_8821_url: filePath })
+      .update(updateFields)
       .eq('id', entityId);
 
     if (updateError) {
