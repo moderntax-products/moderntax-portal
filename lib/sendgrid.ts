@@ -4,7 +4,7 @@
  */
 
 import sgMail from '@sendgrid/mail';
-import type { Request, RequestEntity, DailyNudgeStats, AdminDailySummaryStats, ManagerWeeklySummaryStats } from './types';
+import type { Request, RequestEntity, DailyNudgeStats, AdminDailySummaryStats, ManagerWeeklySummaryStats, ProductUpdate } from './types';
 
 // Initialize SendGrid
 const sendGridApiKey = process.env.SENDGRID_API_KEY;
@@ -1070,5 +1070,75 @@ export async function sendProcessorWeeklySummary(
     });
   } catch (error) {
     console.error('Failed to send processor weekly summary:', error);
+  }
+}
+
+/**
+ * Send product feature updates email to processor with a nudge to submit requests
+ * Highlights latest platform improvements and encourages engagement
+ */
+export async function sendProductUpdatesNudge(
+  processorEmail: string,
+  processorName: string,
+  clientName: string,
+  updates: ProductUpdate[],
+  pendingCount: number
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const updateItems = updates
+    .map(
+      (u) => `
+    <tr>
+      <td style="padding: 16px 20px; border-bottom: 1px solid #eee;">
+        ${u.tag ? `<span style="display: inline-block; background-color: #e6fff5; color: #00875a; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">${u.tag}</span><br/>` : ''}
+        <strong style="font-size: 15px; color: #1a1a1a;">${u.title}</strong>
+        <p style="margin: 4px 0 0 0; font-size: 13px; color: #555; line-height: 1.5;">${u.description}</p>
+      </td>
+    </tr>`
+    )
+    .join('');
+
+  const nudgeSection = pendingCount > 0
+    ? `<div class="stats">
+        <div class="stat-item">
+          <div class="stat-number">${pendingCount}</div>
+          <div class="stat-label">Pending Requests</div>
+        </div>
+      </div>
+      <p>You have <strong>${pendingCount} pending request${pendingCount !== 1 ? 's' : ''}</strong> in progress. Check the dashboard for status updates.</p>`
+    : `<p>You don't have any pending requests right now — it's a great time to submit new ones and take advantage of these improvements!</p>`;
+
+  const content = `
+<p>Hi ${processorName},</p>
+<p>We've been busy improving the ModernTax platform for <strong>${clientName}</strong>. Here's what's new:</p>
+
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9f9f9; border-radius: 8px; margin: 24px 0; border: 1px solid #eee;">
+  ${updateItems}
+</table>
+
+${nudgeSection}
+
+<p style="margin-top: 24px;">Ready to submit a new request? Click below to get started.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Product Updates & What\'s New', content, {
+    text: 'Submit a New Request',
+    url: `${appUrl}/new`,
+  });
+
+  try {
+    await sgMail.send({
+      to: processorEmail,
+      from: fromEmail,
+      subject: `What's New at ModernTax — ${clientName}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send product updates nudge email:', error);
   }
 }

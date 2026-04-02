@@ -37,7 +37,7 @@ export type ProductType = 'transcript' | 'employment';
 
 export type UserRole = 'processor' | 'manager' | 'admin' | 'expert';
 
-export type NotificationType = 'confirmation' | 'completion' | 'nudge' | 'batch_complete' | 'expert_assigned' | 'expert_completed' | 'expert_issue' | 'sla_warning' | 'admin_daily_summary' | 'manager_weekly_summary';
+export type NotificationType = 'confirmation' | 'completion' | 'nudge' | 'batch_complete' | 'expert_assigned' | 'expert_completed' | 'expert_issue' | 'sla_warning' | 'admin_daily_summary' | 'manager_weekly_summary' | 'product_updates_nudge';
 
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 export type PaymentMethod = 'ach' | 'wire';
@@ -352,6 +352,15 @@ export interface RequestWithEntities extends Request {
  */
 export interface BatchWithRequests extends Batch {
   requests: Request[];
+}
+
+/**
+ * ProductUpdate - A product feature update for announcements
+ */
+export interface ProductUpdate {
+  title: string;
+  description: string;
+  tag?: string;
 }
 
 /**
