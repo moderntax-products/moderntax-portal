@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendExpertIssueNotification } from '@/lib/sendgrid';
+import { sendExpertIssueNotification, send8821FaxRequest } from '@/lib/sendgrid';
 
 export async function POST(request: Request) {
   try {
@@ -119,12 +119,15 @@ export async function POST(request: Request) {
         }
 
         // Notify admin users about the flagged issue
+        let entityData: { entity_name: string; request_id: string; signer_email: string | null; signer_first_name: string | null; signer_last_name: string | null; form_type: string; signed_8821_url: string | null } | null = null;
         try {
           const { data: entity } = await adminSupabase
             .from('request_entities')
-            .select('entity_name, request_id')
+            .select('entity_name, request_id, signer_email, signer_first_name, signer_last_name, form_type, signed_8821_url')
             .eq('id', assignment.entity_id)
             .single();
+
+          entityData = entity;
 
           const { data: admins } = await adminSupabase
             .from('profiles')
@@ -147,7 +150,66 @@ export async function POST(request: Request) {
           console.error('Failed to send expert issue notification:', emailError);
         }
 
-        return NextResponse.json({ success: true, marked_failed: !!markFailed });
+        // Auto-send fax-back 8821 email when IRS rejects digital signature
+        let faxEmailSent = false;
+        if (missReason === 'irs_rejected' && entityData?.signer_email) {
+          try {
+            const signerName = [entityData.signer_first_name, entityData.signer_last_name]
+              .filter(Boolean)
+              .join(' ') || entityData.entity_name;
+
+            // Generate a download URL for the signed 8821 if available
+            let downloadUrl: string | null = null;
+            if (entityData.signed_8821_url) {
+              const { data: signedUrl } = await adminSupabase.storage
+                .from('documents')
+                .createSignedUrl(entityData.signed_8821_url, 60 * 60 * 24 * 7); // 7 day expiry
+              downloadUrl = signedUrl?.signedUrl || null;
+            }
+
+            await send8821FaxRequest(
+              entityData.signer_email,
+              signerName,
+              entityData.entity_name,
+              entityData.form_type,
+              entityData.request_id,
+              downloadUrl
+            );
+
+            faxEmailSent = true;
+
+            // Revert entity status to pending so it re-enters the 8821 flow
+            // once the wet-signed fax is received and uploaded
+            await adminSupabase
+              .from('request_entities')
+              .update({
+                status: 'pending',
+                signed_8821_url: null,
+                signature_id: null,
+                signature_created_at: null,
+              })
+              .eq('id', assignment.entity_id);
+
+            await logAuditFromRequest(adminSupabase, request, {
+              action: 'irs_rejected_auto_fax_email',
+              userId: user.id,
+              userEmail: user.email || '',
+              resourceType: 'request_entity',
+              resourceId: assignment.entity_id,
+              details: {
+                signer_email: entityData.signer_email,
+                entity_name: entityData.entity_name,
+                fax_email_sent: true,
+              },
+            });
+
+            console.log(`[IRS Rejected] Auto fax-back email sent to ${entityData.signer_email} for entity ${entityData.entity_name}`);
+          } catch (faxEmailError) {
+            console.error('Failed to send 8821 fax request email:', faxEmailError);
+          }
+        }
+
+        return NextResponse.json({ success: true, marked_failed: !!markFailed, fax_email_sent: faxEmailSent });
       }
 
       case 'add_notes': {

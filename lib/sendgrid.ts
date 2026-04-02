@@ -700,6 +700,68 @@ export async function sendExpertIssueNotification(
 }
 
 /**
+ * Send fax-back 8821 request email
+ * Triggered when an IRS agent rejects the digital signature on an 8821.
+ * Sends instructions to the signer to print, wet-sign, and fax back the form.
+ */
+export async function send8821FaxRequest(
+  signerEmail: string,
+  signerName: string,
+  entityName: string,
+  formType: string,
+  _requestId: string,
+  signed8821Url: string | null
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const faxNumber = '+1 (415) 900-4436';
+  const attentionLine = 'ModernTax Expert Team';
+
+  const content = `
+<p>Hi ${signerName},</p>
+<p>We recently submitted your Form 8821 (Tax Information Authorization) for <strong>${entityName}</strong> to the IRS, but the IRS agent has <strong>requested a wet ink signature</strong> instead of the digital signature on file.</p>
+<p>To keep your request moving forward, we need you to:</p>
+<div style="background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 20px; margin: 24px 0;">
+  <p style="font-weight: 700; font-size: 16px; margin: 0 0 12px 0; color: #0369a1;">Fax-Back Instructions</p>
+  <ol style="margin: 0; padding-left: 20px;">
+    <li style="margin-bottom: 8px;"><strong>Print</strong> the attached Form 8821${signed8821Url ? ' (also linked below)' : ''}</li>
+    <li style="margin-bottom: 8px;"><strong>Sign</strong> the form with a <strong>wet ink signature</strong> (pen on paper)</li>
+    <li style="margin-bottom: 8px;"><strong>Fax</strong> the signed form to:</li>
+  </ol>
+  <div style="background-color: #ffffff; border: 2px solid #0369a1; border-radius: 6px; padding: 16px; margin: 12px 0 0 0; text-align: center;">
+    <p style="font-size: 20px; font-weight: 700; color: #0369a1; margin: 0;">${faxNumber}</p>
+    <p style="font-size: 14px; color: #64748b; margin: 4px 0 0 0;">ATTN: ${attentionLine}</p>
+    <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0 0;">Reference: ${entityName} — ${formType}</p>
+  </div>
+</div>
+<p><strong>No fax machine?</strong> You can use a free online fax service like <a href="https://faxzero.com" style="color: #00C48C;">FaxZero</a> or a mobile scanning app (CamScanner, Adobe Scan) to fax from your phone or computer.</p>
+<p style="font-size: 13px; color: #666;">Once we receive your faxed form, our team will resubmit to the IRS and continue processing your request. Typical turnaround after receiving the fax is 1-2 business days.</p>
+<p style="font-size: 13px; color: #666;">If you have questions, reply to this email or contact us at <a href="mailto:support@moderntax.io" style="color: #00C48C;">support@moderntax.io</a>.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Wet Signature Required — Form 8821', content, signed8821Url ? {
+    text: 'Download Form 8821',
+    url: signed8821Url,
+  } : undefined);
+
+  try {
+    await sgMail.send({
+      to: signerEmail,
+      from: fromEmail,
+      subject: `Action Required: Wet Signature Needed for ${entityName} — Form 8821`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send 8821 fax request email:', error);
+    throw error;
+  }
+}
+
+/**
  * Send notification to manager when a team member submits a new request
  */
 export async function sendManagerNewRequestNotification(

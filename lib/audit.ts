@@ -43,7 +43,8 @@ export type AuditAction =
   | 'transcript_request_received'
   | '8821_data_uploaded'
   | 'webhook_delivered'
-  | 'webhook_failed';
+  | 'webhook_failed'
+  | 'irs_rejected_auto_fax_email';
 
 export interface AuditEvent {
   action: AuditAction;
