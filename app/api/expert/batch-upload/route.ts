@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
     const normalizeForm = (f: string) => f.replace(/[\s-]/g, '').toUpperCase();
     const targetForm = normalizeForm(metadata.formType || '');
     const cleanName = (s: string) => s.replace(/[^a-zA-Z]/g, '').toUpperCase();
-    const namePrefix = cleanName(metadata.taxpayerName || '').substring(0, 3);
+    const transcriptName = cleanName(metadata.taxpayerName || '');
 
     // Supplemental transcripts (941, 940, BMF_ENTITY) match by TIN only — they're
     // additional records attached to the entity, not the primary income form
@@ -128,7 +128,30 @@ export async function POST(request: NextRequest) {
       metadata.transcriptCategory === 'payroll' ||
       metadata.transcriptCategory === 'entity';
 
+    // Helper: compute name similarity score (0-1) between transcript name and entity name
+    const nameSimilarity = (entityName: string): number => {
+      const entityClean = cleanName(entityName);
+      if (!transcriptName || !entityClean) return 0;
+      // Check if one contains the other
+      if (entityClean.includes(transcriptName) || transcriptName.includes(entityClean)) return 1.0;
+      // Check prefix match (first N chars)
+      const minLen = Math.min(transcriptName.length, entityClean.length);
+      let prefixMatch = 0;
+      for (let i = 0; i < minLen; i++) {
+        if (transcriptName[i] === entityClean[i]) prefixMatch++;
+        else break;
+      }
+      if (prefixMatch >= 5) return 0.8; // 5+ char prefix match is strong
+      if (prefixMatch >= 3) return 0.5; // 3-4 char prefix is moderate
+      // Check word overlap
+      const tWords = transcriptName.match(/.{3,}/g) || [];
+      const overlap = tWords.filter(w => entityClean.includes(w)).length;
+      if (overlap > 0) return 0.3 + (overlap / Math.max(tWords.length, 1)) * 0.4;
+      return 0;
+    };
+
     let match: any = null;
+    let matchStrategy = '';
 
     // Strategy 1: TIN last 4 + form type (strongest match — skip for supplemental)
     if (tinLast4 && !isSupplemental) {
@@ -140,43 +163,63 @@ export async function POST(request: NextRequest) {
         const entityForm = normalizeForm(entity.form_type || '');
         return entityTinLast4 === tinLast4 && entityForm === targetForm;
       });
+      if (match) matchStrategy = 'tin+form';
     }
 
-    // Strategy 2: TIN last 4 only (primary strategy for supplemental transcripts)
+    // Strategy 2: TIN last 4 + name confirmation (supplemental + fallback)
+    // Prefer TIN match that also has name similarity, to avoid cross-entity mismatches
     if (!match && tinLast4) {
-      match = assignments.find((a: any) => {
+      const tinMatches = assignments.filter((a: any) => {
         const entity = a.request_entities;
         if (!entity) return false;
         const entityTin = (entity.tid || '').replace(/[\s\-*]/g, '');
-        const entityTinLast4 = entityTin.slice(-4);
-        return entityTinLast4 === tinLast4;
+        return entityTin.slice(-4) === tinLast4;
       });
+
+      if (tinMatches.length === 1) {
+        // Only one TIN match — safe to use
+        match = tinMatches[0];
+        matchStrategy = 'tin-only (unique)';
+      } else if (tinMatches.length > 1 && transcriptName) {
+        // Multiple TIN matches — pick the one with best name similarity
+        let bestScore = 0;
+        for (const candidate of tinMatches) {
+          const score = nameSimilarity(candidate.request_entities?.entity_name || '');
+          if (score > bestScore) {
+            bestScore = score;
+            match = candidate;
+          }
+        }
+        if (match) matchStrategy = `tin+name (score=${bestScore.toFixed(2)}, ${tinMatches.length} candidates)`;
+      } else if (tinMatches.length > 1) {
+        // Multiple TIN matches, no name to disambiguate — use first (avoid wrong match)
+        match = tinMatches[0];
+        matchStrategy = `tin-only (first of ${tinMatches.length})`;
+      }
     }
 
-    // Strategy 3: Name prefix match (first 3 letters — handles masked/missing TIN)
-    if (!match && namePrefix.length >= 3) {
-      match = assignments.find((a: any) => {
+    // Strategy 3: Name similarity match (no TIN available — use 5+ char prefix)
+    if (!match && transcriptName.length >= 5) {
+      let bestScore = 0;
+      let bestCandidate: any = null;
+      for (const a of assignments) {
         const entity = a.request_entities;
-        if (!entity) return false;
-        const entityNamePrefix = cleanName(entity.entity_name || '').substring(0, 3);
-        return entityNamePrefix === namePrefix;
-      });
-    }
-
-    // Strategy 4: Fuzzy name match — check if taxpayer name words appear in entity name
-    if (!match && metadata.taxpayerName) {
-      const nameWords = cleanName(metadata.taxpayerName).split(/\s+/).filter(w => w.length >= 3);
-      if (nameWords.length > 0) {
-        match = assignments.find((a: any) => {
-          const entity = a.request_entities;
-          if (!entity) return false;
-          const entityClean = cleanName(entity.entity_name || '');
-          return nameWords.some((word: string) => entityClean.includes(word));
-        });
+        if (!entity) continue;
+        const score = nameSimilarity(entity.entity_name || '');
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = a;
+        }
+      }
+      // Require at least moderate similarity (0.5 = 3+ char prefix)
+      if (bestCandidate && bestScore >= 0.5) {
+        match = bestCandidate;
+        matchStrategy = `name-similarity (score=${bestScore.toFixed(2)})`;
       }
     }
 
     if (!match) {
+      console.log(`[batch-upload] No match: TIN=***${tinLast4}, name="${metadata.taxpayerName}", form=${targetForm}, searched=${assignments.length}`);
       return corsJson({
         error: tinLast4
           ? `No matching entity found for TIN ***${tinLast4} / ${metadata.formType}`
@@ -185,6 +228,8 @@ export async function POST(request: NextRequest) {
         searched: assignments.length,
       }, { status: 404 });
     }
+
+    console.log(`[batch-upload] Matched "${metadata.taxpayerName}" → ${match.request_entities?.entity_name} via ${matchStrategy}`);
 
     const entity = match.request_entities;
     const entityId = entity.id;
