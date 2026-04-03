@@ -1,15 +1,20 @@
 /**
  * Outbound Webhook Delivery Engine
  *
- * Handles building payloads and delivering completed transcript data
- * to API clients (e.g., ClearFirm) via webhook callbacks.
+ * Delivers transcript data to API clients (e.g., ClearFirm) via webhook callbacks.
  *
- * Payload spec follows ClearFirm Integration Spec v1:
- *   Completed: { request_token, status: "completed", reports: [{ type, html }] }
- *   Error:     { request_token, status: "error", error: "..." }
+ * Delivery model: Incremental per-file
+ *   - Each uploaded file triggers a "partial" webhook with raw HTML inline
+ *   - On request completion, a lightweight "complete" signal is sent (empty files[])
+ *   - Errors send { request_token, status: "error", error: "..." }
  *
- * Retry: exponential backoff (2s, 4s, 8s), max 3 attempts.
- * 5xx → retry, 404 → dead (no retry), unreachable → retry.
+ * Payload format (v2 incremental):
+ *   Partial:  { request_token, status: "partial",  files: [{ file_id, type, year, entity_name, html, created_at }] }
+ *   Complete: { request_token, status: "complete", files: [] }
+ *   Error:    { request_token, status: "error",    error: "..." }
+ *
+ * Retry: backoff schedule 10s, 30s, 90s, 5m, 15m. Max 5 attempts.
+ * 5xx → retry, 404/400 → dead (no retry), timeout/unreachable → retry.
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -395,6 +400,7 @@ export async function triggerIncrementalWebhook(
       webhook_url: client.webhook_url,
       payload: payload as any,
       status: 'pending',
+      max_attempts: 5,
     })
     .select('id')
     .single();
@@ -483,9 +489,9 @@ export async function deliverWebhook(
       headers['X-ModernTax-Signature'] = signPayload(payloadString, client.webhook_secret);
     }
 
-    // POST to webhook URL with 30s timeout (Render cold starts can take 15-20s)
+    // POST to webhook URL with 60s timeout (Render cold starts + large payloads)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
     const response = await fetch(delivery.webhook_url, {
       method: 'POST',
@@ -538,8 +544,10 @@ export async function deliverWebhook(
     }
 
     // 5xx or other error — retry with exponential backoff
+    // Schedule: 10s, 30s, 90s, 5m, 15m (5 attempts)
     const responseText = await response.text().catch(() => '');
-    const backoffMs = 2000 * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+    const backoffSchedule = [10_000, 30_000, 90_000, 300_000, 900_000];
+    const backoffMs = backoffSchedule[Math.min(attempt - 1, backoffSchedule.length - 1)];
     const nextRetry = new Date(Date.now() + backoffMs).toISOString();
     const newStatus = attempt >= delivery.max_attempts ? 'dead' : 'failed';
 
@@ -563,7 +571,8 @@ export async function deliverWebhook(
     // Network error, timeout, etc. — retry
     const attempt = delivery.attempts + 1;
     const errorMessage = err instanceof Error ? err.message : 'Network error';
-    const backoffMs = 2000 * Math.pow(2, attempt - 1);
+    const backoffSchedule = [10_000, 30_000, 90_000, 300_000, 900_000];
+    const backoffMs = backoffSchedule[Math.min(attempt - 1, backoffSchedule.length - 1)];
     const nextRetry = new Date(Date.now() + backoffMs).toISOString();
     const newStatus = attempt >= delivery.max_attempts ? 'dead' : 'failed';
 
@@ -633,6 +642,7 @@ export async function enqueueWebhookDelivery(
       webhook_url: webhookUrl,
       payload: payload as any,
       status: 'pending',
+      max_attempts: 5,
     })
     .select('id')
     .single();
@@ -695,47 +705,15 @@ export async function triggerWebhookForRequest(
   let payload: WebhookPayload;
 
   if (req.status === 'completed') {
-    // Check if this client uses incremental (v2) webhooks
-    // If so, send a final "complete" signal with no files (files were sent incrementally)
-    const { data: clientDomain } = await supabase
-      .from('clients')
-      .select('domain')
-      .eq('id', req.client_id)
-      .single();
-
-    let isIncremental = false;
-    if (clientDomain?.domain) {
-      try {
-        const { CLIENT_CONFIG } = await import('@/lib/clients');
-        isIncremental = CLIENT_CONFIG[clientDomain.domain]?.transcript_format === 'html';
-      } catch { /* fall through to legacy */ }
-    }
-
-    if (isIncremental) {
-      // v2: Send "complete" signal — all files were already delivered incrementally
-      payload = {
-        request_token: req.external_request_token,
-        status: 'complete' as const,
-        files: [],
-      } as IncrementalWebhookPayload;
-    } else {
-      // Legacy: Batch all transcripts into a single "completed" payload
-      const { data: entities } = await supabase
-        .from('request_entities')
-        .select('id, entity_name, tid, form_type, years, transcript_html_urls, transcript_urls, gross_receipts')
-        .eq('request_id', requestId);
-
-      if (!entities || entities.length === 0) {
-        console.error(`[webhook] No entities found for request ${requestId}`);
-        return null;
-      }
-
-      payload = await buildCompletedPayload(
-        supabase,
-        req.external_request_token,
-        entities as any
-      );
-    }
+    // All API clients use incremental delivery — files sent per-upload via
+    // triggerIncrementalWebhook(). On completion we send a lightweight
+    // "complete" signal so the client knows no more files are coming.
+    // This avoids bundling large HTML payloads into a single request.
+    payload = {
+      request_token: req.external_request_token,
+      status: 'complete' as const,
+      files: [],
+    } as IncrementalWebhookPayload;
   } else if (req.status === 'failed') {
     const errorMessage = req.notes || 'Transcript retrieval failed. Contact ModernTax support.';
     payload = buildErrorPayload(req.external_request_token, errorMessage);
