@@ -440,7 +440,7 @@ export async function GET(request: NextRequest) {
       .from('expert_assignments')
       .select(`
         id, status,
-        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls)
+        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls, gross_receipts)
       `)
       .eq('expert_id', profile.id)
       .in('status', ['assigned', 'in_progress'])
@@ -474,6 +474,8 @@ export async function GET(request: NextRequest) {
         formType: a.request_entities?.form_type,
         years: a.request_entities?.years,
         uploadedFiles: a.request_entities?.transcript_urls?.length || 0,
+        entityTranscriptRequested: !!(a.request_entities?.gross_receipts as any)?.entity_transcript_order?.requested,
+        filingRequirements: (a.request_entities?.gross_receipts as any)?.entity_transcript?.filingRequirements || null,
       })),
     });
   } catch (error) {

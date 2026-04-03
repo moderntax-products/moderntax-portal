@@ -5,6 +5,9 @@
 
 import type { Client } from './types';
 
+// Billing rates
+export const RATE_ENTITY_TRANSCRIPT = 19.99;
+
 /**
  * Client configuration database
  * Maps email domains to client metadata for auto-provisioning

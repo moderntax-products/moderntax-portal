@@ -188,7 +188,7 @@
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
-            ${expertInfo.assignments.map(a => `<div style="color:#68d391;">• ${a.entityName} — ${a.formType} — TIN ending ***${(a.tin || '').replace(/[\s-]/g, '').slice(-4) || '????'}</div>`).join('')}
+            ${expertInfo.assignments.map(a => `<div style="color:#68d391;">• ${a.entityName} — ${a.formType} — TIN ending ***${(a.tin || '').replace(/[\s-]/g, '').slice(-4) || '????'}${a.entityTranscriptRequested ? ' <span style="color:#90cdf4;font-weight:bold;">[+Entity Transcript]</span>' : ''}${a.filingRequirements ? ` <span style="color:#f6e05e;">[Filing: ${a.filingRequirements}]</span>` : ''}</div>`).join('')}
         </div>
         <div>Processing <strong id="irs-curr">0</strong> / <strong>${messages.length}</strong> messages <span id="irs-status" style="color:#f6e05e;"></span></div>
         <div class="progress"><div class="progress-bar" id="irs-pbar" style="width:0%">0%</div></div>

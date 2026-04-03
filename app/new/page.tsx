@@ -7,6 +7,8 @@ import Link from 'next/link';
 
 type Tab = 'csv' | 'pdf' | 'manual';
 
+const ENTITY_TRANSCRIPT_PRICE = 19.99;
+
 export default function NewRequestPage() {
   const [activeTab, setActiveTab] = useState<Tab>('csv');
 
@@ -347,6 +349,7 @@ function PdfUploadTab() {
   const [formType, setFormType] = useState('1040');
   const [years, setYears] = useState(String(new Date().getFullYear()));
   const [notes, setNotes] = useState('');
+  const [entityTranscript, setEntityTranscript] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -390,6 +393,7 @@ function PdfUploadTab() {
       formData.append('tid_kind', tidKind);
       formData.append('form_type', formType);
       formData.append('years', years);
+      if (entityTranscript) formData.append('entity_transcript', 'true');
       if (notes) formData.append('notes', notes);
 
       const res = await fetch('/api/upload/pdf', {
@@ -537,6 +541,30 @@ function PdfUploadTab() {
           </div>
         </div>
 
+        {/* Entity Transcript Add-on */}
+        {tidKind === 'EIN' && (
+          <div className={`mb-6 border rounded-lg p-4 transition-colors ${entityTranscript ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={entityTranscript}
+                onChange={() => setEntityTranscript(!entityTranscript)}
+                disabled={isLoading}
+                className="w-5 h-5 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-mt-dark text-sm">Add Entity Transcript</span>
+                  <span className="text-blue-600 font-bold text-sm">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type.
+                </p>
+              </div>
+            </label>
+          </div>
+        )}
+
         {/* File input */}
         <div
           className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
@@ -616,7 +644,7 @@ function ManualEntryTab() {
   const [loanNumber, setLoanNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [entities, setEntities] = useState([
-    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '' },
+    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false },
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -627,7 +655,7 @@ function ManualEntryTab() {
   const addEntity = () => {
     setEntities([
       ...entities,
-      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [], signerEmail: '', address: '', city: '', state: '', zipCode: '' },
+      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false },
     ]);
   };
 
@@ -706,6 +734,13 @@ function ManualEntryTab() {
         years: ent.years,
         signer_email: ent.signerEmail || null,
         status: 'pending',
+        gross_receipts: ent.entityTranscript ? {
+          entity_transcript_order: {
+            requested: true,
+            price: ENTITY_TRANSCRIPT_PRICE,
+            ordered_at: new Date().toISOString(),
+          },
+        } : null,
       }));
 
       const { error: entError } = await supabase.from('request_entities').insert(entitiesData);
@@ -876,6 +911,30 @@ function ManualEntryTab() {
                   ))}
                 </div>
               </div>
+
+              {/* Entity Transcript Add-on */}
+              {entity.tidKind === 'EIN' && (
+                <div className={`border rounded-lg p-4 transition-colors ${entity.entityTranscript ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={entity.entityTranscript}
+                      onChange={() => updateEntity(entity.id, { entityTranscript: !entity.entityTranscript })}
+                      disabled={isLoading}
+                      className="w-5 h-5 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-mt-dark text-sm">Add Entity Transcript</span>
+                        <span className="text-blue-600 font-bold text-sm">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type (e.g., ordering 1065 when entity files 1120).
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -888,6 +947,26 @@ function ManualEntryTab() {
           Add Another Entity
         </button>
       </div>
+
+      {/* Order Summary */}
+      {entities.some(e => e.entityTranscript) && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-sm font-semibold text-mt-dark mb-3">Order Summary</h3>
+          <div className="space-y-2 text-sm">
+            {entities.filter(e => e.entityTranscript).map((e, i) => (
+              <div key={e.id} className="flex justify-between text-gray-600">
+                <span>Entity Transcript — {e.entityName || `Entity ${i + 1}`}</span>
+                <span className="font-medium">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+              </div>
+            ))}
+            <div className="border-t pt-2 mt-2 flex justify-between font-bold text-mt-dark">
+              <span>Entity Transcript Add-ons</span>
+              <span>${(entities.filter(e => e.entityTranscript).length * ENTITY_TRANSCRIPT_PRICE).toFixed(2)}</span>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">Standard transcript verification fees apply separately per entity.</p>
+        </div>
+      )}
 
       <button type="submit" disabled={isLoading}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">

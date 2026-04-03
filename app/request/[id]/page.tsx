@@ -270,12 +270,37 @@ export default async function RequestDetailPage({ params }: Props) {
                       </div>
                     )}
 
+                    {/* Entity Transcript Order */}
+                    {entity.gross_receipts && (entity.gross_receipts as any)?.entity_transcript_order?.requested && (
+                      <div className={`rounded-lg p-4 mb-4 border ${(entity.gross_receipts as any)?.entity_transcript?.filingRequirements ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">{(entity.gross_receipts as any)?.entity_transcript?.filingRequirements ? '✅' : '📋'}</span>
+                            <div>
+                              <p className="text-sm font-semibold text-mt-dark">Entity Transcript {(entity.gross_receipts as any)?.entity_transcript?.filingRequirements ? 'Complete' : 'Ordered'}</p>
+                              {(entity.gross_receipts as any)?.entity_transcript?.filingRequirements && (
+                                <p className="text-xs text-gray-600 mt-0.5">
+                                  Filing Requirements: <span className="font-mono font-medium">{(entity.gross_receipts as any).entity_transcript.filingRequirements}</span>
+                                </p>
+                              )}
+                              {(entity.gross_receipts as any)?.entity_transcript?.naicsCode && (
+                                <p className="text-xs text-gray-500">NAICS: {(entity.gross_receipts as any).entity_transcript.naicsCode}</p>
+                              )}
+                            </div>
+                          </div>
+                          <span className="text-sm font-bold text-blue-600">$19.99</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Financial Data */}
-                    {entity.gross_receipts && typeof entity.gross_receipts === 'object' && (
+                    {entity.gross_receipts && typeof entity.gross_receipts === 'object' && !(entity.gross_receipts as any)?.entity_transcript_order && (
                       <div className="bg-gray-50 rounded-lg p-6 mb-4">
                         <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Financial Data</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          {Object.entries(entity.gross_receipts as Record<string, unknown>).map(([key, value]) => (
+                          {Object.entries(entity.gross_receipts as Record<string, unknown>)
+                            .filter(([key]) => !['entity_transcript_order', 'entity_transcript'].includes(key))
+                            .map(([key, value]) => (
                             <div key={key}>
                               <p className="text-xs text-gray-600 uppercase tracking-wide">{key}</p>
                               <p className="text-lg font-semibold text-mt-dark">

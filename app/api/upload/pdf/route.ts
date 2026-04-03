@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
     const formType = (formData.get('form_type') as string) || '1040';
     const years = formData.get('years') as string | null;
     const notes = formData.get('notes') as string | null;
+    const entityTranscriptRequested = formData.get('entity_transcript') === 'true';
 
     // Get all PDF files
     const files: File[] = [];
@@ -140,7 +141,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Create entity
-      const { error: entError } = await supabase.from('request_entities').insert({
+      const entityInsert: Record<string, any> = {
         request_id: req.id,
         entity_name: entityName.trim(),
         tid: tid.trim(),
@@ -149,7 +150,19 @@ export async function POST(request: NextRequest) {
         years: parsedYears,
         signed_8821_url: filePath,
         status: '8821_signed',
-      });
+      };
+
+      if (entityTranscriptRequested) {
+        entityInsert.gross_receipts = {
+          entity_transcript_order: {
+            requested: true,
+            price: 19.99,
+            ordered_at: new Date().toISOString(),
+          },
+        };
+      }
+
+      const { error: entError } = await supabase.from('request_entities').insert(entityInsert as any);
 
       if (entError) {
         console.error('Entity creation error:', entError);
