@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.5 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.6 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -247,7 +247,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.5</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.6</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -413,7 +413,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.5' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.6' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -752,16 +752,31 @@
                     const tinMatch = fullText.match(/(?:SSN|EIN|TIN|Taxpayer.*?Number)[:\s]*([*\d][\d*\s-]{6,10}\d)/i);
                     if (tinMatch) tin = tinMatch[1].trim();
                 }
-                // Fallback: extract TIN from IRS SOR message subject
+
+                // Extract TIN from the message subject (most reliable source — always present)
                 if (!tin && msg.subject) {
                     const subjectTin = msg.subject.match(/TIN\s*[-–]?\s*(\d{9})/);
-                    if (subjectTin) tin = subjectTin[1];
+                    if (subjectTin) {
+                        tin = subjectTin[1];
+                        console.log(`[IRS-DEBUG] Msg ${msg.id}: TIN from subject: ${tin}`);
+                    }
+                    // Also try negative number format: TIN -455511538 (IRS sometimes prefixes with -)
+                    if (!tin) {
+                        const negTin = msg.subject.match(/TIN\s+[-](\d{9})/);
+                        if (negTin) {
+                            tin = negTin[1];
+                            console.log(`[IRS-DEBUG] Msg ${msg.id}: TIN from subject (neg format): ${tin}`);
+                        }
+                    }
                 }
 
                 const name = taxpayerName || 'Unknown';
                 const cleanName = name.substring(0, 20).replace(/[^a-zA-Z0-9 &]/g, '').trim().replace(/\s+/g, ' ');
                 const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}`;
                 const metadata = { name, tin, formType, taxYear, shortType };
+
+                // Debug: log all extracted metadata
+                console.log(`[IRS-DEBUG] Msg ${msg.id} metadata:`, JSON.stringify({ name, tin, formType, taxYear, shortType, titleText: titleText?.substring(0,60) }));
 
                 // ---- COMPLIANCE SCREENING ----
                 const finding = screenTranscript(transcriptHtml, metadata);
@@ -780,6 +795,10 @@
                 const tinLast4 = cleanTin.slice(-4);
                 const transcriptNamePrefix = (name || '').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase();
 
+                console.log(`[IRS-DEBUG] Msg ${msg.id} MATCH CHECK: tinLast4="${tinLast4}" namePrefix="${transcriptNamePrefix}"`);
+                console.log(`[IRS-DEBUG] Msg ${msg.id} assignments:`, assignmentLookup.map(a => `${a.entityName} TIN=***${a.tinLast4} prefix=${a.namePrefix}`));
+
+                // Match by TIN last 4 digits OR by name prefix
                 const isMatch = assignmentLookup.some(a => {
                     if (tinLast4 && a.tinLast4 && tinLast4 === a.tinLast4) return true;
                     if (transcriptNamePrefix && a.namePrefix && transcriptNamePrefix === a.namePrefix) return true;
@@ -787,12 +806,24 @@
                 });
 
                 if (!isMatch) {
-                    skippedCount++;
-                    document.getElementById('irs-skipped').textContent = skippedCount;
-                    addLog(`  ⏭️ Not yours — ${cleanName} (***${tinLast4 || '????'})`, 'warn');
-                    results.push({ success: false, skipped: true, reason: 'not assigned', name, tin });
-                    await delay(300);
-                    continue;
+                    // Also try matching against TIN from subject line directly
+                    const subjectTinMatch = msg.subject.match(/TIN\s*[-–]?\s*(\d+)/);
+                    const subjectTinLast4 = subjectTinMatch ? subjectTinMatch[1].slice(-4) : '';
+                    const subjectMatch = subjectTinLast4 && assignmentLookup.some(a => a.tinLast4 === subjectTinLast4);
+
+                    if (subjectMatch) {
+                        console.log(`[IRS-DEBUG] Msg ${msg.id}: transcript TIN miss but SUBJECT TIN ***${subjectTinLast4} matches!`);
+                        // Override tin with subject TIN for upload
+                        tin = subjectTinMatch[1];
+                    } else {
+                        skippedCount++;
+                        document.getElementById('irs-skipped').textContent = skippedCount;
+                        addLog(`  ⏭️ Not yours — ${cleanName} (***${tinLast4 || '????'}) subject TIN ***${subjectTinLast4 || '????'}`, 'warn');
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} NO MATCH. TIN="${tin}" cleanTin="${cleanTin}" last4="${tinLast4}" subjectLast4="${subjectTinLast4}"`);
+                        results.push({ success: false, skipped: true, reason: 'not assigned', name, tin });
+                        await delay(300);
+                        continue;
+                    }
                 }
 
                 // ---- CONVERT TO PDF ----
