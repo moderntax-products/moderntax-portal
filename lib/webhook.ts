@@ -483,9 +483,9 @@ export async function deliverWebhook(
       headers['X-ModernTax-Signature'] = signPayload(payloadString, client.webhook_secret);
     }
 
-    // POST to webhook URL with 10s timeout
+    // POST to webhook URL with 30s timeout (Render cold starts can take 15-20s)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const response = await fetch(delivery.webhook_url, {
       method: 'POST',
