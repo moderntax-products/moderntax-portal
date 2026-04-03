@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.6 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.7 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -247,7 +247,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.6</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.7</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -413,7 +413,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.6' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.7' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -519,33 +519,43 @@
             }
 
             // ================================================================
-            // STRATEGY 2: Parse the read page for attachment/iframe/download links
-            // The message page embeds the transcript in an iframe or provides
-            // download links. Extract and try each one.
+            // STRATEGY 2: Extract attachment URLs from the read_content page
+            // IRS SOR embeds attachments via onClick=openWin('/semail/views/view_file.jsp?...')
+            // The transcript HTML is served at the view_file URL with action=view or action=download
             // ================================================================
             if (!transcriptHtml && readHtml.length > 200) {
-                // Extract ALL URLs from the page (href, src, onclick, etc.)
-                const linkMatches = readHtml.match(/(?:href|src|action)=["']([^"']+)["']/gi) || [];
-                const allUrls = linkMatches.map(m => m.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, ''));
+                // PRIMARY: Find openWin() calls — this is how IRS SOR links attachments
+                // Pattern: onClick=openWin('/semail/views/view_file.jsp?mailId=0&index=0&ext=html&action=view')
+                const openWinMatches = readHtml.match(/openWin\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
+                const attachUrls = openWinMatches.map(m => m.replace(/^openWin\s*\(\s*['"]/i, '').replace(/['"]\s*\)$/, ''));
 
-                // Also find URLs in onclick/javascript
+                // Also extract href/src URLs as fallback
+                const linkMatches = readHtml.match(/(?:href|src|action)=["']([^"']+)["']/gi) || [];
+                linkMatches.forEach(m => {
+                    const url = m.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, '');
+                    if (url.includes('view_file') || url.includes('FileDownload') || url.includes('download')) {
+                        attachUrls.push(url);
+                    }
+                });
+
+                // Also find window.open / window.location patterns
                 const jsUrlMatches = readHtml.match(/(?:window\.open|location\.href|window\.location)\s*[=(]\s*['"]([^'"]+)['"]/gi) || [];
                 jsUrlMatches.forEach(m => {
                     const url = m.replace(/^.*[=(]\s*['"]/, '').replace(/['"]$/, '');
-                    allUrls.push(url);
+                    attachUrls.push(url);
                 });
 
-                console.log(`[IRS-DEBUG] Msg ${msg.id} found ${allUrls.length} URLs in read page:`, allUrls.filter(u => !u.startsWith('#') && !u.includes('javascript:')).slice(0, 20));
+                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URLs found:`, attachUrls);
 
-                // Try attachment-like URLs
-                const attachUrls = allUrls.filter(url =>
-                    url.includes('FileDownload') || url.includes('view_file') ||
-                    url.includes('attachment') || url.includes('download') ||
-                    url.includes('index=') || (url.endsWith('.html') || url.endsWith('.htm'))
-                );
-                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URLs:`, attachUrls);
+                // Try each attachment URL — prefer "action=view" first (returns HTML)
+                const sortedUrls = attachUrls.sort((a, b) => {
+                    // Prioritize view over download
+                    const aView = a.includes('action=view') ? 0 : 1;
+                    const bView = b.includes('action=view') ? 0 : 1;
+                    return aView - bView;
+                });
 
-                for (const attachUrl of attachUrls) {
+                for (const attachUrl of sortedUrls) {
                     try {
                         const fullUrl = attachUrl.startsWith('http') ? attachUrl
                             : attachUrl.startsWith('/') ? attachUrl
@@ -558,7 +568,9 @@
                             addLog(`  📎 Found transcript in attachment`, 'info');
                             break;
                         }
-                    } catch (e) { /* continue */ }
+                    } catch (e) {
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment fetch error:`, e.message);
+                    }
                     await delay(300);
                 }
             }
