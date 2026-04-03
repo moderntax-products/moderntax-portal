@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.4 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.5 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -120,41 +120,104 @@
     console.log(`%c👤 Expert: ${expertInfo.expert.name} | ${expertInfo.assignments.length} assignments `, 'background:#1e3a5f;color:white;padding:5px');
 
     // ---- Get all message links ----
-    let links = document.querySelectorAll('a[href*="read_content"]');
-    if (links.length === 0) links = document.querySelectorAll('a[href*="itemId"]');
-    if (links.length === 0) links = document.querySelectorAll('a[href*="mailId"]');
+    // Debug: log ALL links on the page so we can understand the IRS SOR structure
+    const allPageLinks = document.querySelectorAll('a');
+    console.log(`[IRS-DEBUG] Page has ${allPageLinks.length} total links. First 40:`);
+    allPageLinks.forEach((a, idx) => {
+        if (idx < 40) console.log(`[IRS-DEBUG]   Link ${idx}: href="${a.href}" text="${a.textContent.trim().substring(0,60)}" onclick="${(a.getAttribute('onclick')||'').substring(0,80)}"`);
+    });
+
     const seen = new Set();
     const messages = [];
+
+    // Strategy A: Find links with read_content, itemId, or mailId in href
+    let links = document.querySelectorAll('a[href*="read_content"], a[href*="itemId"], a[href*="mailId"]');
+    console.log(`[IRS-DEBUG] Strategy A (read_content/itemId/mailId links): ${links.length} found`);
 
     links.forEach(link => {
         const match = link.href.match(/(?:itemId|mailId)=(\d+)/);
         if (match && !seen.has(match[1])) {
             seen.add(match[1]);
-            messages.push({ id: match[1], subject: link.textContent.trim() });
+            // Walk the DOM to find the subject text (might be in a sibling cell)
+            const row = link.closest('tr');
+            const subjectCell = row?.querySelector('td a[href*="read_content"], td a[href*="itemId"]');
+            const subject = subjectCell?.textContent?.trim() || link.textContent.trim();
+            messages.push({ id: match[1], subject, href: link.href });
+            console.log(`[IRS-DEBUG]   Found message: id=${match[1]} subject="${subject.substring(0,60)}" href="${link.href}"`);
         }
     });
 
-    // Fallback: try all table links
+    // Strategy B: Find "Read" action links and extract the actual URL
     if (messages.length === 0) {
+        console.log(`[IRS-DEBUG] Strategy A found 0 messages. Trying Strategy B (action links)...`);
+        const actionLinks = document.querySelectorAll('a');
+        actionLinks.forEach(link => {
+            const text = link.textContent.trim();
+            if (text === 'Read' || text === 'View' || text.includes('Read')) {
+                console.log(`[IRS-DEBUG]   Read link: href="${link.href}" onclick="${link.getAttribute('onclick') || ''}"`);
+                const match = link.href.match(/(?:itemId|mailId|id)=(\d+)/);
+                if (match && !seen.has(match[1])) {
+                    seen.add(match[1]);
+                    // Get subject from the same row
+                    const row = link.closest('tr');
+                    const cells = row?.querySelectorAll('td') || [];
+                    let subject = '';
+                    cells.forEach(cell => {
+                        const t = cell.textContent.trim();
+                        if (t.includes('TDS') || t.includes('Transaction') || t.length > 30) {
+                            subject = subject || t;
+                        }
+                    });
+                    messages.push({ id: match[1], subject: subject || text, href: link.href });
+                }
+            }
+        });
+    }
+
+    // Strategy C: Find subject text links (TDS Transaction...) and extract their row's Read link
+    if (messages.length === 0) {
+        console.log(`[IRS-DEBUG] Strategy B found 0 messages. Trying Strategy C (TDS subject links)...`);
+        const tdsList = document.querySelectorAll('td, a');
+        tdsList.forEach(el => {
+            const text = el.textContent.trim();
+            if (text.includes('TDS Transaction') && !seen.has(text)) {
+                const row = el.closest('tr');
+                if (row) {
+                    const readLink = row.querySelector('a[href*="read"], a[href*="mail"], a[href*="item"]');
+                    if (readLink) {
+                        const idMatch = readLink.href.match(/(\d+)/);
+                        if (idMatch && !seen.has(idMatch[1])) {
+                            seen.add(idMatch[1]);
+                            seen.add(text);
+                            messages.push({ id: idMatch[1], subject: text.substring(0, 80), href: readLink.href });
+                            console.log(`[IRS-DEBUG]   Found via TDS: id=${idMatch[1]} href="${readLink.href}"`);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Strategy D: Fallback — try all table links with numeric IDs
+    if (messages.length === 0) {
+        console.log(`[IRS-DEBUG] Strategy C found 0 messages. Trying Strategy D (all table links)...`);
         const allLinks = document.querySelectorAll('table a[href], .inbox a[href], #mailList a[href]');
         allLinks.forEach(link => {
             const match = link.href.match(/(\d{5,})/);
             if (match && !seen.has(match[1]) && link.textContent.trim().length > 3) {
                 seen.add(match[1]);
-                messages.push({ id: match[1], subject: link.textContent.trim() });
+                messages.push({ id: match[1], subject: link.textContent.trim(), href: link.href });
             }
         });
     }
 
     if (messages.length === 0) {
-        const allAnchors = document.querySelectorAll('a');
-        console.log(`%c DEBUG: ${allAnchors.length} total links on page `, 'background:#e53e3e;color:white;padding:3px');
-        allAnchors.forEach((a, i) => { if (i < 20) console.log(`  Link ${i}: ${a.href} — "${a.textContent.trim().substring(0,50)}"`) });
-        alert('❌ No transcripts found in inbox.\n\nMake sure you are on the IRS SOR Inbox page with messages visible.\n\nCheck the Console tab (F12) for debug info.');
+        alert('❌ No transcripts found in inbox.\n\nMake sure you are on the IRS SOR Inbox page with messages visible.\n\nCheck the Console tab (F12) for [IRS-DEBUG] details.');
         return;
     }
 
     console.log(`%c📬 Found ${messages.length} messages in inbox `, 'background:#1e3a5f;color:white;padding:5px;font-weight:bold');
+    messages.forEach((m, i) => console.log(`[IRS-DEBUG]   [${i}] id=${m.id} href="${m.href}" subject="${m.subject.substring(0,60)}"`));
 
     // ---- Progress panel ----
     document.getElementById('irs-batch')?.remove();
@@ -184,7 +247,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.4</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.5</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -350,7 +413,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.4' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.5' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -409,95 +472,113 @@
             const useJsp = location.href.includes('.jsp');
             const jspExt = useJsp ? '.jsp' : '';
             let transcriptHtml = '';
+            let readHtml = '';
 
             // ================================================================
-            // STRATEGY 1: Open read_content page to discover attachment links
-            // The IRS SOR delivers transcripts as attachments. The read_content
-            // page contains links/iframes pointing to the actual attachment files.
+            // STRATEGY 1: Follow the actual "Read" link from the inbox page
+            // The IRS SOR assigns session-scoped IDs. We must use the exact
+            // href from the inbox link, not construct URLs from mailId alone.
+            // After clicking "Read", the page shows the message + attachment.
             // ================================================================
-            const readUrl = `/semail/views/read_content${jspExt}?mailId=${msg.id}`;
+            const messageHref = msg.href || '';
+            console.log(`[IRS-DEBUG] Msg ${msg.id}: using href="${messageHref}"`);
 
-            if (i === 0) {
-                addLog(`  ⏳ Starting IRS session...`, 'warn');
-                await fetch(readUrl, { credentials: 'include' });
-                await delay(2000);
+            // Navigate to the message's read page (using actual href from inbox)
+            if (messageHref) {
+                if (i === 0) {
+                    addLog(`  ⏳ Starting IRS session...`, 'warn');
+                    await fetch(messageHref, { credentials: 'include' });
+                    await delay(2000);
+                }
+
+                const readResp = await fetch(messageHref, { credentials: 'include' });
+                readHtml = await readResp.text();
+                console.log(`[IRS-DEBUG] Msg ${msg.id} href response (${readHtml.length} chars):`, readHtml.substring(0, 2000));
+                await delay(800);
+
+                // Check if the read page itself is the transcript
+                if (looksLikeTranscript(readHtml)) {
+                    transcriptHtml = readHtml;
+                    console.log(`[IRS-DEBUG] Msg ${msg.id}: read page IS the transcript`);
+                }
             }
 
-            const readResp = await fetch(readUrl, { credentials: 'include' });
-            const readHtml = await readResp.text();
-            console.log(`[IRS-DEBUG] Msg ${msg.id} read_content (${readHtml.length} chars):`, readHtml.substring(0, 2000));
-            await delay(800);
-
-            // Check if read_content page itself is the transcript
-            if (looksLikeTranscript(readHtml)) {
-                transcriptHtml = readHtml;
-                console.log(`[IRS-DEBUG] Msg ${msg.id}: read_content IS the transcript`);
-            }
-
-            // Extract ALL links from the read_content page — any could be the attachment
+            // Also try the standard read_content URL
             if (!transcriptHtml) {
-                const linkMatches = readHtml.match(/(?:href|src)=["']([^"']+)["']/gi) || [];
-                const allUrls = linkMatches.map(m => {
-                    const url = m.replace(/^(?:href|src)=["']/i, '').replace(/["']$/, '');
-                    return url;
-                });
-                // Also find URLs in onclick handlers
-                const onclickMatches = readHtml.match(/(?:window\.open|location\.href)\s*[=(]\s*['"]([^'"]+)['"]/gi) || [];
-                onclickMatches.forEach(m => {
+                const readUrl = `/semail/views/read_content${jspExt}?mailId=${msg.id}`;
+                try {
+                    const readResp2 = await fetch(readUrl, { credentials: 'include' });
+                    const readHtml2 = await readResp2.text();
+                    console.log(`[IRS-DEBUG] Msg ${msg.id} read_content (${readHtml2.length} chars):`, readHtml2.substring(0, 2000));
+                    if (readHtml2.length > readHtml.length) readHtml = readHtml2;
+                    if (looksLikeTranscript(readHtml2)) {
+                        transcriptHtml = readHtml2;
+                    }
+                } catch (e) { /* continue */ }
+                await delay(500);
+            }
+
+            // ================================================================
+            // STRATEGY 2: Parse the read page for attachment/iframe/download links
+            // The message page embeds the transcript in an iframe or provides
+            // download links. Extract and try each one.
+            // ================================================================
+            if (!transcriptHtml && readHtml.length > 200) {
+                // Extract ALL URLs from the page (href, src, onclick, etc.)
+                const linkMatches = readHtml.match(/(?:href|src|action)=["']([^"']+)["']/gi) || [];
+                const allUrls = linkMatches.map(m => m.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, ''));
+
+                // Also find URLs in onclick/javascript
+                const jsUrlMatches = readHtml.match(/(?:window\.open|location\.href|window\.location)\s*[=(]\s*['"]([^'"]+)['"]/gi) || [];
+                jsUrlMatches.forEach(m => {
                     const url = m.replace(/^.*[=(]\s*['"]/, '').replace(/['"]$/, '');
                     allUrls.push(url);
                 });
 
-                console.log(`[IRS-DEBUG] Msg ${msg.id} found ${allUrls.length} URLs in read_content:`, allUrls.slice(0, 15));
+                console.log(`[IRS-DEBUG] Msg ${msg.id} found ${allUrls.length} URLs in read page:`, allUrls.filter(u => !u.startsWith('#') && !u.includes('javascript:')).slice(0, 20));
 
-                // Try URLs that look like file/attachment references
-                const attachmentUrls = allUrls.filter(url =>
+                // Try attachment-like URLs
+                const attachUrls = allUrls.filter(url =>
                     url.includes('FileDownload') || url.includes('view_file') ||
                     url.includes('attachment') || url.includes('download') ||
-                    url.includes('index=') || url.includes('.html') ||
-                    url.includes('.htm')
+                    url.includes('index=') || (url.endsWith('.html') || url.endsWith('.htm'))
                 );
+                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URLs:`, attachUrls);
 
-                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment-like URLs:`, attachmentUrls);
-
-                for (const attachUrl of attachmentUrls) {
+                for (const attachUrl of attachUrls) {
                     try {
-                        const fullUrl = attachUrl.startsWith('/') ? attachUrl
-                            : attachUrl.startsWith('http') ? attachUrl
+                        const fullUrl = attachUrl.startsWith('http') ? attachUrl
+                            : attachUrl.startsWith('/') ? attachUrl
                             : '/' + attachUrl;
                         const resp = await fetch(fullUrl, { credentials: 'include' });
                         const html = await resp.text();
-                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URL "${fullUrl.substring(0,80)}": ${html.length} chars, status ${resp.status}`);
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment "${fullUrl.substring(0,80)}": ${html.length} chars`);
                         if (looksLikeTranscript(html)) {
                             transcriptHtml = html;
                             addLog(`  📎 Found transcript in attachment`, 'info');
                             break;
                         }
-                    } catch (e) {
-                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URL error:`, e.message);
-                    }
+                    } catch (e) { /* continue */ }
                     await delay(300);
                 }
             }
 
             // ================================================================
-            // STRATEGY 2: Try view_file with multiple attachment indices & extensions
-            // Transcripts can be at different indices (0,1,2) and served as
-            // html, htm, xml, or without extension specification
+            // STRATEGY 3: Try view_file with multiple indices & extensions
             // ================================================================
             if (!transcriptHtml) {
-                const indices = [0, 1, 2];
-                const extensions = ['html', 'htm', 'xml', ''];
-                for (const idx of indices) {
+                for (const idx of [0, 1, 2]) {
                     if (transcriptHtml) break;
-                    for (const ext of extensions) {
+                    for (const ext of ['html', 'htm', 'xml', '']) {
                         if (transcriptHtml) break;
                         const extParam = ext ? `&ext=${ext}` : '';
                         const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=${idx}${extParam}&action=view`;
                         try {
                             const resp = await fetch(viewUrl, { credentials: 'include' });
                             const html = await resp.text();
-                            console.log(`[IRS-DEBUG] Msg ${msg.id} view_file idx=${idx} ext=${ext||'none'}: ${html.length} chars`);
+                            if (html.length > 200) {
+                                console.log(`[IRS-DEBUG] Msg ${msg.id} view_file idx=${idx} ext=${ext||'none'}: ${html.length} chars`);
+                            }
                             if (looksLikeTranscript(html)) {
                                 transcriptHtml = html;
                                 addLog(`  📎 Found transcript (attachment ${idx}, ${ext || 'auto'})`, 'info');
@@ -509,21 +590,20 @@
             }
 
             // ================================================================
-            // STRATEGY 3: Classic FileDownload with session re-init
-            // Original approach — set session via view_file, then fetch FileDownload
+            // STRATEGY 4: Classic FileDownload — set session via href, then download
             // ================================================================
             if (!transcriptHtml) {
-                const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=0&ext=html&action=view`;
-                await fetch(viewUrl, { credentials: 'include' });
-                await delay(1500);
+                // Re-navigate to message to set session
+                if (messageHref) {
+                    await fetch(messageHref, { credentials: 'include' });
+                    await delay(1500);
+                }
 
-                const downloadUrls = [
+                for (const dlUrl of [
                     '/semail/servlet/FileDownload',
                     `/semail/servlet/FileDownload?mailId=${msg.id}`,
                     `/semail/servlet/FileDownload?mailId=${msg.id}&index=0`,
-                ];
-
-                for (const dlUrl of downloadUrls) {
+                ]) {
                     try {
                         const resp = await fetch(dlUrl, { credentials: 'include' });
                         const html = await resp.text();
@@ -538,10 +618,10 @@
                 }
             }
 
-            // Log failure details
+            // Log comprehensive failure details
             if (!transcriptHtml) {
-                console.log(`[IRS-DEBUG] Msg ${msg.id} ALL ${3} STRATEGIES FAILED.`);
-                console.log(`[IRS-DEBUG] Msg ${msg.id} read_content HTML:`, readHtml);
+                console.log(`[IRS-DEBUG] Msg ${msg.id} ALL STRATEGIES FAILED.`);
+                console.log(`[IRS-DEBUG] Msg ${msg.id} full read page HTML:`, readHtml);
             }
 
             if (transcriptHtml && looksLikeTranscript(transcriptHtml)) {
@@ -877,10 +957,10 @@
 
     // Simple, clear final alert
     let summary = `Done! ${uploadedCount} transcript${uploadedCount !== 1 ? 's' : ''} uploaded to ModernTax.`;
-    if (skippedTotal > 0) summary += `\n${skippedTotal} skipped (not in your assignments).`;
+    if (skippedCount > 0) summary += `\n${skippedCount} skipped (not in your assignments).`;
     if (failedCount > 0) summary += `\n${failedCount} failed (saved to Downloads — upload manually in portal).`;
     if (criticalCount > 0) summary += `\n\n⚠️ ${criticalCount} compliance flag${criticalCount !== 1 ? 's' : ''} found — check the log.`;
     alert(summary);
 
-    return { results, findings: allFindings, uploaded: uploadedCount, failed: failedCount, skipped: skippedTotal };
+    return { results, findings: allFindings, uploaded: uploadedCount, failed: failedCount, skipped: skippedCount };
 })();
