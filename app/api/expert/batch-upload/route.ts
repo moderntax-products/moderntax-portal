@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
+import { triggerIncrementalWebhook } from '@/lib/webhook';
 
 // Allow larger file uploads (IRS Record of Account transcripts can exceed 4MB)
 export const maxDuration = 30;
@@ -299,6 +300,25 @@ export async function POST(request: NextRequest) {
       .from('request_entities')
       .update(entityUpdate)
       .eq('id', entityId);
+
+    // Trigger incremental webhook for API-intake clients (e.g., ClearFirm)
+    // Send the HTML file path — use whichever path has the HTML content
+    const htmlPathForWebhook = transcriptFormat === 'html' && htmlStoragePath
+      ? htmlStoragePath          // HTML-preferring: HTML is in transcript_urls
+      : htmlStoragePath || null;  // PDF-preferring: HTML is in transcript_html_urls
+
+    if (htmlPathForWebhook && entity.request_id) {
+      triggerIncrementalWebhook(
+        supabase,
+        entity.request_id,
+        entityId,
+        entity.entity_name,
+        metadata.formType || entity.form_type || '',
+        htmlPathForWebhook
+      ).catch((err: any) => {
+        console.error('[batch-upload] Incremental webhook failed:', err);
+      });
+    }
 
     // Update assignment status to in_progress if still assigned
     if (match.status === 'assigned') {

@@ -3,7 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertCompletionNotification, sendCompletionNotification } from '@/lib/sendgrid';
-import { triggerWebhookForRequest } from '@/lib/webhook';
+import { triggerWebhookForRequest, triggerIncrementalWebhook } from '@/lib/webhook';
 
 /**
  * Expert transcript upload route.
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
     // Get existing entity data
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, transcript_urls, request_id')
+      .select('id, entity_name, transcript_urls, request_id, form_type')
       .eq('id', entityId)
       .single();
 
@@ -133,6 +133,22 @@ export async function POST(request: NextRequest) {
         .from('request_entities')
         .update({ transcript_urls: allUrls })
         .eq('id', entityId);
+
+      // Trigger incremental webhook for each HTML file uploaded
+      for (const url of uploadedUrls) {
+        if (url.endsWith('.html') || url.endsWith('.htm')) {
+          triggerIncrementalWebhook(
+            adminSupabase,
+            entity.request_id,
+            entityId,
+            entity.entity_name,
+            (entity as any).form_type || '',
+            url
+          ).catch((err: any) => {
+            console.error('[upload-transcript] Incremental webhook failed:', err);
+          });
+        }
+      }
     }
 
     // If this is the completion call, finalize the assignment

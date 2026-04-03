@@ -283,9 +283,16 @@ export function ExpertTranscriptUpload({
           disabled={loading}
           className="px-4 py-2 text-gray-600 text-sm hover:text-gray-800 disabled:opacity-50"
         >
-          Close
+          {uploadedFiles.length > 0 && uploadedFiles.length < expectedCount ? 'Save & Continue Later' : 'Close'}
         </button>
       </div>
+
+      {/* Multi-session hint */}
+      {uploadedFiles.length > 0 && uploadedFiles.length < expectedCount && (
+        <p className="text-[10px] text-gray-500 italic">
+          Your progress is saved automatically. You can close this panel and return in a new session to upload remaining files.
+        </p>
+      )}
     </div>
   );
 }

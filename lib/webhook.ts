@@ -44,7 +44,24 @@ export interface WebhookErrorPayload {
   error: string;
 }
 
-export type WebhookPayload = WebhookCompletedPayload | WebhookErrorPayload;
+// --- Incremental (v2) Payload Types for ClearFirm ---
+
+export interface IncrementalFile {
+  file_id: string;
+  type: string;         // entity_transcript, 941_account_transcript, 1120_transcript, etc.
+  year: number | null;
+  entity_name: string;
+  html: string;
+  created_at: string;
+}
+
+export interface IncrementalWebhookPayload {
+  request_token: string;
+  status: 'partial' | 'complete' | 'error';
+  files: IncrementalFile[];
+}
+
+export type WebhookPayload = WebhookCompletedPayload | WebhookErrorPayload | IncrementalWebhookPayload;
 
 export interface DeliveryResult {
   success: boolean;
@@ -213,6 +230,188 @@ export function buildErrorPayload(
     status: 'error',
     error: errorMessage,
   };
+}
+
+// --- Incremental Webhook (ClearFirm v2) ---
+
+/**
+ * Map internal form types to ClearFirm's file type identifiers.
+ */
+function mapFileType(formType: string, filename: string): string {
+  const lower = filename.toLowerCase();
+  const form = formType.toUpperCase().replace(/[\s-]/g, '');
+
+  // Entity Transcript
+  if (lower.includes('entity transcript') || form === 'BMF_ENTITY') return 'entity_transcript';
+  // Payroll
+  if (form === '941' || lower.includes('941')) return '941_account_transcript';
+  if (form === '940' || lower.includes('940')) return '940_account_transcript';
+  // Income / Record of Account
+  if (form === '1120S') return '1120s_transcript';
+  if (form === '1120') return '1120_transcript';
+  if (form === '1065') return '1065_transcript';
+  if (form === '1040') return '1040_transcript';
+  // Fallback
+  return `${form.toLowerCase()}_transcript`;
+}
+
+/**
+ * Extract the tax year from a filename.
+ * Handles: "- 2024.html", "- 09-30-2025.html", "2023" embedded anywhere.
+ */
+function extractYear(filename: string): number | null {
+  // Try full period date first (e.g., 09-30-2025)
+  const periodMatch = filename.match(/(\d{2}-\d{2}-(\d{4}))/);
+  if (periodMatch) return parseInt(periodMatch[2], 10);
+  // Try standalone 4-digit year
+  const yearMatch = filename.match(/(20\d{2})/);
+  if (yearMatch) return parseInt(yearMatch[1], 10);
+  return null;
+}
+
+/**
+ * Generate a deterministic file_id for idempotency.
+ * Based on entity_id + filename hash so re-uploads produce the same ID.
+ */
+function generateFileId(entityId: string, storagePath: string): string {
+  const hash = crypto.createHash('md5').update(`${entityId}:${storagePath}`).digest('hex').slice(0, 12);
+  return `mt_${hash}`;
+}
+
+/**
+ * Build an incremental webhook payload for a single newly uploaded file.
+ * Reads the HTML content from Supabase storage and wraps it in ClearFirm's v2 format.
+ */
+export async function buildIncrementalPayload(
+  supabase: SupabaseClient,
+  requestToken: string,
+  entityName: string,
+  formType: string,
+  entityId: string,
+  htmlStoragePath: string,
+  isRequestComplete: boolean
+): Promise<IncrementalWebhookPayload | null> {
+  // Read the HTML file from storage
+  let htmlContent: string;
+  try {
+    const { data, error } = await supabase.storage
+      .from('uploads')
+      .download(htmlStoragePath);
+
+    if (error || !data) {
+      console.error(`[webhook-incremental] Failed to download HTML at ${htmlStoragePath}:`, error);
+      return null;
+    }
+    htmlContent = await data.text();
+  } catch (err) {
+    console.error(`[webhook-incremental] Error reading ${htmlStoragePath}:`, err);
+    return null;
+  }
+
+  const filename = htmlStoragePath.split('/').pop() || '';
+  const cleanFilename = filename.replace(/^\d+-/, ''); // Remove timestamp prefix
+
+  const file: IncrementalFile = {
+    file_id: generateFileId(entityId, htmlStoragePath),
+    type: mapFileType(formType, cleanFilename),
+    year: extractYear(cleanFilename),
+    entity_name: entityName,
+    html: htmlContent,
+    created_at: new Date().toISOString(),
+  };
+
+  return {
+    request_token: requestToken,
+    status: isRequestComplete ? 'complete' : 'partial',
+    files: [file],
+  };
+}
+
+/**
+ * Trigger an incremental webhook delivery for a single file upload.
+ * Called from batch-upload when a new transcript is stored for an API-intake request.
+ * Does NOT deduplicate by request_id — each file gets its own delivery.
+ */
+export async function triggerIncrementalWebhook(
+  supabase: SupabaseClient,
+  requestId: string,
+  entityId: string,
+  entityName: string,
+  formType: string,
+  htmlStoragePath: string
+): Promise<string | null> {
+  // Fetch request with client info
+  const { data: req } = await supabase
+    .from('requests')
+    .select('id, client_id, intake_method, external_request_token, status')
+    .eq('id', requestId)
+    .single();
+
+  if (!req || req.intake_method !== 'api' || !req.external_request_token) {
+    return null;
+  }
+
+  // Check if client has a webhook URL
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, webhook_url, webhook_secret')
+    .eq('id', req.client_id)
+    .single();
+
+  if (!client?.webhook_url) {
+    return null;
+  }
+
+  // Check if all entities in the request are completed
+  const { data: allEntities } = await supabase
+    .from('request_entities')
+    .select('status')
+    .eq('request_id', requestId);
+
+  const isRequestComplete = allEntities?.every((e: any) => e.status === 'completed') || false;
+
+  // Build incremental payload
+  const payload = await buildIncrementalPayload(
+    supabase,
+    req.external_request_token,
+    entityName,
+    formType,
+    entityId,
+    htmlStoragePath,
+    isRequestComplete
+  );
+
+  if (!payload) {
+    console.error(`[webhook-incremental] Failed to build payload for ${htmlStoragePath}`);
+    return null;
+  }
+
+  // Enqueue without deduplication — each file is a separate event
+  const { data: delivery, error: insertError } = await supabase
+    .from('webhook_deliveries')
+    .insert({
+      request_id: requestId,
+      client_id: client.id,
+      webhook_url: client.webhook_url,
+      payload: payload as any,
+      status: 'pending',
+    })
+    .select('id')
+    .single();
+
+  if (insertError || !delivery) {
+    console.error(`[webhook-incremental] Failed to enqueue:`, insertError);
+    return null;
+  }
+
+  console.log(`[webhook-incremental] Enqueued ${delivery.id} for ${entityName} → ${payload.files[0].type} (${payload.status})`);
+
+  // Fire and forget
+  deliverWebhook(supabase, delivery.id).catch((err) => {
+    console.error(`[webhook-incremental] Delivery attempt failed for ${delivery.id}:`, err);
+  });
+
+  return delivery.id;
 }
 
 // --- HMAC Signing ---
@@ -400,18 +599,29 @@ export async function enqueueWebhookDelivery(
   webhookUrl: string,
   payload: WebhookPayload
 ): Promise<string | null> {
-  // Check for existing non-dead delivery for this request
-  const { data: existing } = await supabase
-    .from('webhook_deliveries')
-    .select('id, status')
-    .eq('request_id', requestId)
-    .in('status', ['pending', 'sending', 'delivered', 'failed'])
-    .limit(1)
-    .maybeSingle();
+  // Dedup: Check for existing terminal delivery for this request.
+  // Only block if there's already a "completed" or "complete" status payload delivered
+  // (not incremental "partial" deliveries, which are per-file events).
+  const payloadStatus = (payload as any)?.status;
+  const isTerminalPayload = payloadStatus === 'completed' || payloadStatus === 'complete' || payloadStatus === 'error';
 
-  if (existing) {
-    console.log(`[webhook] Skipping duplicate delivery for request ${requestId} (existing: ${existing.id}, status: ${existing.status})`);
-    return null;
+  if (isTerminalPayload) {
+    const { data: existing } = await supabase
+      .from('webhook_deliveries')
+      .select('id, status, payload')
+      .eq('request_id', requestId)
+      .in('status', ['pending', 'sending', 'delivered', 'failed'])
+      .limit(10);
+
+    const hasDuplicateTerminal = existing?.some((d: any) => {
+      const dStatus = d.payload?.status;
+      return dStatus === 'completed' || dStatus === 'complete' || dStatus === 'error';
+    });
+
+    if (hasDuplicateTerminal) {
+      console.log(`[webhook] Skipping duplicate terminal delivery for request ${requestId}`);
+      return null;
+    }
   }
 
   // Insert new delivery record
@@ -485,22 +695,47 @@ export async function triggerWebhookForRequest(
   let payload: WebhookPayload;
 
   if (req.status === 'completed') {
-    // Fetch entities with transcript data (including entity transcript info)
-    const { data: entities } = await supabase
-      .from('request_entities')
-      .select('id, entity_name, tid, form_type, years, transcript_html_urls, transcript_urls, gross_receipts')
-      .eq('request_id', requestId);
+    // Check if this client uses incremental (v2) webhooks
+    // If so, send a final "complete" signal with no files (files were sent incrementally)
+    const { data: clientDomain } = await supabase
+      .from('clients')
+      .select('domain')
+      .eq('id', req.client_id)
+      .single();
 
-    if (!entities || entities.length === 0) {
-      console.error(`[webhook] No entities found for request ${requestId}`);
-      return null;
+    let isIncremental = false;
+    if (clientDomain?.domain) {
+      try {
+        const { CLIENT_CONFIG } = await import('@/lib/clients');
+        isIncremental = CLIENT_CONFIG[clientDomain.domain]?.transcript_format === 'html';
+      } catch { /* fall through to legacy */ }
     }
 
-    payload = await buildCompletedPayload(
-      supabase,
-      req.external_request_token,
-      entities as any
-    );
+    if (isIncremental) {
+      // v2: Send "complete" signal — all files were already delivered incrementally
+      payload = {
+        request_token: req.external_request_token,
+        status: 'complete' as const,
+        files: [],
+      } as IncrementalWebhookPayload;
+    } else {
+      // Legacy: Batch all transcripts into a single "completed" payload
+      const { data: entities } = await supabase
+        .from('request_entities')
+        .select('id, entity_name, tid, form_type, years, transcript_html_urls, transcript_urls, gross_receipts')
+        .eq('request_id', requestId);
+
+      if (!entities || entities.length === 0) {
+        console.error(`[webhook] No entities found for request ${requestId}`);
+        return null;
+      }
+
+      payload = await buildCompletedPayload(
+        supabase,
+        req.external_request_token,
+        entities as any
+      );
+    }
   } else if (req.status === 'failed') {
     const errorMessage = req.notes || 'Transcript retrieval failed. Contact ModernTax support.';
     payload = buildErrorPayload(req.external_request_token, errorMessage);

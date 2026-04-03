@@ -138,11 +138,11 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
           </div>
         )}
 
-        {/* Uploaded files view (always visible when files exist) */}
-        {assignment.status === 'completed' && entity.transcript_urls && entity.transcript_urls.length > 0 && !showUpload && (
+        {/* Uploaded files view (visible on active AND completed assignments) */}
+        {entity.transcript_urls && entity.transcript_urls.length > 0 && !showUpload && (
           <div className="space-y-1 pt-2 border-t border-gray-100">
-            <p className="text-xs font-medium text-green-700">
-              Uploaded Files ({entity.transcript_urls.length} / {entity.years.length * 2} expected)
+            <p className={`text-xs font-medium ${assignment.status === 'completed' ? 'text-green-700' : 'text-blue-700'}`}>
+              {assignment.status === 'completed' ? 'Uploaded' : 'Progress'} ({entity.transcript_urls.length} / {entity.years.length * 2} expected)
             </p>
             <div className="space-y-1">
               {entity.transcript_urls.map((url: string, i: number) => {
