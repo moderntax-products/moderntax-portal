@@ -18,14 +18,24 @@ import crypto from 'crypto';
 // --- Types ---
 
 export interface WebhookReport {
-  type: string;   // e.g. "1120S", "1065", "1040"
-  html: string;   // Full HTML content of the rendered IRS transcript
+  type: string;             // e.g. "1120S", "1065", "1040", "941", "BMF_ENTITY"
+  transcript_type: string;  // "income" | "payroll" | "entity" — categorizes the report
+  html: string;             // Full HTML content of the rendered IRS transcript
+  tax_period?: string;      // e.g. "2024", "09-30-2025" for quarterly
+  filename?: string;        // Original filename for reference
 }
 
 export interface WebhookCompletedPayload {
   request_token: string;
   status: 'completed';
   reports: WebhookReport[];
+  entity_info?: {
+    entity_name: string;
+    tin: string;
+    filing_requirements?: string;
+    naics_code?: string;
+    establishment_date?: string;
+  };
 }
 
 export interface WebhookErrorPayload {
@@ -54,16 +64,44 @@ export async function buildCompletedPayload(
   requestToken: string,
   entities: Array<{
     id: string;
+    entity_name: string;
+    tid: string;
     form_type: string;
     years: string[];
     transcript_html_urls: string[] | null;
     transcript_urls: string[] | null;
+    gross_receipts: Record<string, any> | null;
   }>
 ): Promise<WebhookCompletedPayload> {
   const reports: WebhookReport[] = [];
 
   for (const entity of entities) {
     const htmlUrls = entity.transcript_html_urls || [];
+
+    // Helper to categorize transcript type from filename/form
+    function categorizeTranscript(filename: string, formType: string): { transcriptType: string; reportType: string; taxPeriod: string } {
+      const lowerName = filename.toLowerCase();
+      const lowerForm = formType.toUpperCase();
+
+      // Entity Transcript
+      if (lowerName.includes('entity transcript') || lowerForm === 'BMF_ENTITY') {
+        return { transcriptType: 'entity', reportType: 'BMF_ENTITY', taxPeriod: '' };
+      }
+      // 941/940 Payroll
+      if (lowerForm === '941' || lowerForm === '940' || lowerName.includes('941') || lowerName.includes('940')) {
+        // Extract quarter period from filename (e.g. "941 Account Transcript - 09-30-2025")
+        const periodMatch = lowerName.match(/(\d{2}-\d{2}-\d{4})/);
+        const yearMatch = lowerName.match(/(\d{4})/);
+        return {
+          transcriptType: 'payroll',
+          reportType: lowerForm === '940' ? '940' : '941',
+          taxPeriod: periodMatch ? periodMatch[1] : yearMatch ? yearMatch[1] : '',
+        };
+      }
+      // Standard income transcript
+      const yearMatch = lowerName.match(/(\d{4})/);
+      return { transcriptType: 'income', reportType: formType, taxPeriod: yearMatch ? yearMatch[1] : '' };
+    }
 
     if (htmlUrls.length > 0) {
       // Read HTML content from Supabase storage
@@ -79,9 +117,15 @@ export async function buildCompletedPayload(
           }
 
           const htmlContent = await data.text();
+          const filename = htmlPath.split('/').pop() || '';
+          const { transcriptType, reportType, taxPeriod } = categorizeTranscript(filename, entity.form_type);
+
           reports.push({
-            type: entity.form_type,
+            type: reportType,
+            transcript_type: transcriptType,
             html: htmlContent,
+            tax_period: taxPeriod || undefined,
+            filename: filename.replace(/^\d+-/, ''), // Remove timestamp prefix
           });
         } catch (err) {
           console.error(`[webhook] Error reading HTML file ${htmlPath}:`, err);
@@ -97,9 +141,15 @@ export async function buildCompletedPayload(
             .createSignedUrl(pdfPath, 3600); // 1 hour expiry
 
           if (signedUrlData?.signedUrl) {
+            const filename = pdfPath.split('/').pop() || '';
+            const { transcriptType, reportType, taxPeriod } = categorizeTranscript(filename, entity.form_type);
+
             reports.push({
-              type: entity.form_type,
-              html: `<!-- PDF transcript: download URL valid for 1 hour -->\n<a href="${signedUrlData.signedUrl}">${pdfPath.split('/').pop()}</a>`,
+              type: reportType,
+              transcript_type: transcriptType,
+              html: `<!-- PDF transcript: download URL valid for 1 hour -->\n<a href="${signedUrlData.signedUrl}">${filename}</a>`,
+              tax_period: taxPeriod || undefined,
+              filename: filename.replace(/^\d+-/, ''),
             });
           }
         } catch (err) {
@@ -109,10 +159,25 @@ export async function buildCompletedPayload(
     }
   }
 
+  // Build entity_info from the first entity's entity transcript data (if available)
+  let entityInfo: WebhookCompletedPayload['entity_info'];
+  if (entities.length > 0) {
+    const primaryEntity = entities[0];
+    const entityTranscriptData = primaryEntity.gross_receipts?.entity_transcript as Record<string, string> | undefined;
+    entityInfo = {
+      entity_name: primaryEntity.entity_name,
+      tin: primaryEntity.tid,
+      filing_requirements: entityTranscriptData?.filingRequirements,
+      naics_code: entityTranscriptData?.naicsCode,
+      establishment_date: entityTranscriptData?.establishmentDate,
+    };
+  }
+
   return {
     request_token: requestToken,
     status: 'completed',
     reports,
+    entity_info: entityInfo,
   };
 }
 
@@ -400,10 +465,10 @@ export async function triggerWebhookForRequest(
   let payload: WebhookPayload;
 
   if (req.status === 'completed') {
-    // Fetch entities with transcript data
+    // Fetch entities with transcript data (including entity transcript info)
     const { data: entities } = await supabase
       .from('request_entities')
-      .select('id, form_type, years, transcript_html_urls, transcript_urls')
+      .select('id, entity_name, tid, form_type, years, transcript_html_urls, transcript_urls, gross_receipts')
       .eq('request_id', requestId);
 
     if (!entities || entities.length === 0) {

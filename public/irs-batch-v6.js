@@ -408,6 +408,7 @@
             if (transcriptHtml.includes('transcript-title') || transcriptHtml.includes('item-container') ||
                 transcriptHtml.includes('Tax Return Transcript') || transcriptHtml.includes('Account Transcript') ||
                 transcriptHtml.includes('Wage and Income') || transcriptHtml.includes('Record of Account') ||
+                transcriptHtml.includes('Entity Transcript') ||
                 transcriptHtml.includes('No record of return filed')) {
 
                 const parser = new DOMParser();
@@ -419,13 +420,19 @@
                 const titleEl = doc.querySelector('h1.transcript-title') || doc.querySelector('h2') || doc.querySelector('h3 b');
                 let transcriptType = titleEl?.textContent?.trim() || titleText || 'Transcript';
                 let shortType = 'Transcript';
-                if (transcriptType.match(/Return Transcript/i)) shortType = 'Return Transcript';
+                let isEntityTranscript = false;
+                if (transcriptType.match(/Entity Transcript/i) || fullText.match(/Entity Transcript for Business/i)) {
+                    shortType = 'Entity Transcript';
+                    isEntityTranscript = true;
+                }
+                else if (transcriptType.match(/Return Transcript/i)) shortType = 'Return Transcript';
                 else if (transcriptType.match(/Account Transcript/i)) shortType = 'Account Transcript';
                 else if (transcriptType.match(/Record of Account/i)) shortType = 'Record of Account';
                 else if (transcriptType.match(/Wage and Income/i)) shortType = 'Wage and Income';
 
                 // Extract metadata: form, TIN, year, name
                 let formType = '', tin = '', taxYear = '', taxpayerName = '';
+                let entityData = null; // Extra data for Entity Transcripts
 
                 const items = doc.querySelectorAll('.item-container');
                 items.forEach(item => {
@@ -442,6 +449,60 @@
                         if (!taxpayerName) taxpayerName = label;
                     }
                 });
+
+                // Entity Transcript special handling
+                if (isEntityTranscript) {
+                    formType = 'BMF_ENTITY';
+                    entityData = {};
+                    // Parse Entity Transcript fields from the IRS HTML
+                    // These use table layout with bold labels and value cells
+                    const allCells = doc.querySelectorAll('td');
+                    for (let c = 0; c < allCells.length; c++) {
+                        const cellText = allCells[c].textContent.trim();
+                        const nextCell = allCells[c + 1];
+                        const nextVal = nextCell?.textContent?.trim() || '';
+                        if (cellText.match(/EIN.*Provided/i) || cellText.match(/Employer Identification/i)) { if (!tin) tin = nextVal; }
+                        if (cellText.match(/^Primary Name/i)) { if (!taxpayerName) taxpayerName = nextVal; entityData.primaryName = nextVal; }
+                        if (cellText.match(/^Filing Requirements/i)) entityData.filingRequirements = nextVal;
+                        if (cellText.match(/^NAICS/i) || cellText.match(/Industry Classification/i)) entityData.naicsCode = nextVal;
+                        if (cellText.match(/^IRS Establishment/i)) entityData.establishmentDate = nextVal;
+                        if (cellText.match(/^Business Operational/i)) entityData.operationalDate = nextVal;
+                        if (cellText.match(/^Business Close/i) && nextVal) entityData.closeDate = nextVal;
+                        if (cellText.match(/^Street Address/i)) entityData.address = nextVal;
+                        if (cellText.match(/^City:/i)) entityData.city = nextVal;
+                        if (cellText.match(/^State:/i)) entityData.state = nextVal;
+                        if (cellText.match(/^ZIP Code/i)) entityData.zipCode = nextVal;
+                        if (cellText.match(/^Fiscal Year Month/i) && !cellText.match(/Prior/i)) entityData.fiscalYearMonth = nextVal;
+                        if (cellText.match(/^Business Operating Division/i)) entityData.division = nextVal;
+                        if (cellText.match(/^Name Control/i)) entityData.nameControl = nextVal;
+                    }
+                    // Entity transcripts don't have a tax year — use current year
+                    if (!taxYear) taxYear = new Date().getFullYear().toString();
+                    // Extract EIN from full text fallback
+                    if (!tin) {
+                        const einMatch = fullText.match(/EIN\)?.*?:\s*([\d-]+)/i);
+                        if (einMatch) tin = einMatch[1];
+                    }
+                }
+
+                // For 941 Account Transcripts, preserve form as "941" (not the entity's primary form)
+                const is941 = formType === '941' || formType === '940';
+                if (is941) {
+                    // Extract period ending for 941 quarterly naming
+                    const periodItems = doc.querySelectorAll('.item-container');
+                    periodItems.forEach(item => {
+                        const label = item.querySelector('.item-label')?.textContent?.trim() || '';
+                        const value = item.querySelector('.item-value')?.textContent?.trim() || '';
+                        if (label.match(/Report for Tax Period/i)) {
+                            // Use full date for quarterly (e.g. "09-30-2025")
+                            if (!taxYear) {
+                                const ym = value.match(/(\d{2}-\d{2}-\d{4})/);
+                                if (ym) taxYear = ym[1];
+                                else { const y = value.match(/(\d{4})/); if (y) taxYear = y[1]; }
+                            }
+                        }
+                    });
+                }
 
                 // Old IRS format fallback
                 if (!formType || !tin || !taxYear) {
@@ -535,12 +596,15 @@
 
                 const formData = new FormData();
                 formData.append('file', pdfBlob, baseFilename + '.pdf');
-                formData.append('metadata', JSON.stringify({
+                const uploadMetadata = {
                     tin, formType, taxYear, shortType,
                     taxpayerName: name,
                     filename: baseFilename + '.pdf',
                     compliance: finding,
-                }));
+                    transcriptCategory: isEntityTranscript ? 'entity' : is941 ? 'payroll' : 'income',
+                };
+                if (entityData) uploadMetadata.entityData = entityData;
+                formData.append('metadata', JSON.stringify(uploadMetadata));
 
                 // Also include raw HTML for webhook delivery to API clients (e.g., ClearFirm)
                 try {

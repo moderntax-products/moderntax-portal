@@ -82,6 +82,8 @@ export async function POST(request: NextRequest) {
       taxpayerName: string;
       filename: string;
       compliance: any;
+      transcriptCategory?: 'income' | 'payroll' | 'entity';
+      entityData?: Record<string, string>;
     };
 
     try {
@@ -119,10 +121,16 @@ export async function POST(request: NextRequest) {
     const cleanName = (s: string) => s.replace(/[^a-zA-Z]/g, '').toUpperCase();
     const namePrefix = cleanName(metadata.taxpayerName || '').substring(0, 3);
 
+    // Supplemental transcripts (941, 940, BMF_ENTITY) match by TIN only — they're
+    // additional records attached to the entity, not the primary income form
+    const isSupplemental = ['941', '940', 'BMF_ENTITY'].includes(targetForm) ||
+      metadata.transcriptCategory === 'payroll' ||
+      metadata.transcriptCategory === 'entity';
+
     let match: any = null;
 
-    // Strategy 1: TIN last 4 + form type (strongest match)
-    if (tinLast4) {
+    // Strategy 1: TIN last 4 + form type (strongest match — skip for supplemental)
+    if (tinLast4 && !isSupplemental) {
       match = assignments.find((a: any) => {
         const entity = a.request_entities;
         if (!entity) return false;
@@ -133,7 +141,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Strategy 2: TIN last 4 only (ignore form type)
+    // Strategy 2: TIN last 4 only (primary strategy for supplemental transcripts)
     if (!match && tinLast4) {
       match = assignments.find((a: any) => {
         const entity = a.request_entities;
@@ -269,6 +277,25 @@ export async function POST(request: NextRequest) {
         .from('expert_assignments')
         .update({ status: 'in_progress' })
         .eq('id', assignmentId);
+    }
+
+    // Store entity transcript data (filing requirements, NAICS, etc.) if provided
+    if (metadata.entityData && metadata.transcriptCategory === 'entity') {
+      const existingCompliance = (entity.gross_receipts as any) || {};
+      const updatedData = {
+        ...existingCompliance,
+        entity_transcript: {
+          ...metadata.entityData,
+          retrieved_at: new Date().toISOString(),
+        },
+      };
+
+      await supabase
+        .from('request_entities')
+        .update({ gross_receipts: updatedData })
+        .eq('id', entityId);
+
+      console.log(`[batch-upload] Stored entity transcript data for ${entity.entity_name}: filing=${metadata.entityData.filingRequirements || 'N/A'}`);
     }
 
     // Store compliance data if provided
