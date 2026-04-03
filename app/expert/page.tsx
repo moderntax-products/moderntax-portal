@@ -269,9 +269,9 @@ export default function ExpertDashboard() {
                 <div>
                   <p className="text-sm font-semibold text-indigo-900">Paste the command and press Enter</p>
                   <div className="mt-1.5 flex items-center gap-2">
-                    <code className="block bg-gray-900 text-green-400 px-3 py-2 rounded font-mono text-xs select-all flex-1">fetch(&apos;https://portal.moderntax.io/irs-batch-v6.js&apos;).then(r=&gt;r.text()).then(eval)</code>
+                    <code className="block bg-gray-900 text-green-400 px-3 py-2 rounded font-mono text-xs select-all flex-1">fetch(&apos;https://portal.moderntax.io/irs-batch-v6.js?v=&apos;+Date.now()).then(r=&gt;r.text()).then(eval)</code>
                     <button
-                      onClick={() => { navigator.clipboard.writeText("fetch('https://portal.moderntax.io/irs-batch-v6.js').then(r=>r.text()).then(eval)"); }}
+                      onClick={() => { navigator.clipboard.writeText("fetch('https://portal.moderntax.io/irs-batch-v6.js?v='+Date.now()).then(r=>r.text()).then(eval)"); }}
                       className="flex-shrink-0 px-3 py-2 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700 transition-colors"
                     >
                       Copy
