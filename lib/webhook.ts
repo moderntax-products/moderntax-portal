@@ -76,8 +76,6 @@ export async function buildCompletedPayload(
   const reports: WebhookReport[] = [];
 
   for (const entity of entities) {
-    const htmlUrls = entity.transcript_html_urls || [];
-
     // Helper to categorize transcript type from filename/form
     function categorizeTranscript(filename: string, formType: string): { transcriptType: string; reportType: string; taxPeriod: string } {
       const lowerName = filename.toLowerCase();
@@ -103,9 +101,31 @@ export async function buildCompletedPayload(
       return { transcriptType: 'income', reportType: formType, taxPeriod: yearMatch ? yearMatch[1] : '' };
     }
 
-    if (htmlUrls.length > 0) {
-      // Read HTML content from Supabase storage
-      for (const htmlPath of htmlUrls) {
+    // Collect all HTML paths from both arrays (transcript_html_urls and .html files in transcript_urls)
+    const htmlPaths: string[] = [];
+    const pdfPaths: string[] = [];
+
+    // Check transcript_html_urls (legacy location for HTML, or secondary storage for HTML-preferring clients)
+    for (const path of (entity.transcript_html_urls || [])) {
+      if (path.endsWith('.html')) {
+        htmlPaths.push(path);
+      } else {
+        pdfPaths.push(path);
+      }
+    }
+
+    // Check transcript_urls — may contain HTML files for HTML-preferring clients
+    for (const path of (entity.transcript_urls || [])) {
+      if (path.endsWith('.html')) {
+        htmlPaths.push(path);
+      } else {
+        pdfPaths.push(path);
+      }
+    }
+
+    // Prefer HTML content for webhook delivery
+    if (htmlPaths.length > 0) {
+      for (const htmlPath of htmlPaths) {
         try {
           const { data, error } = await supabase.storage
             .from('uploads')
@@ -131,10 +151,10 @@ export async function buildCompletedPayload(
           console.error(`[webhook] Error reading HTML file ${htmlPath}:`, err);
         }
       }
-    } else if (entity.transcript_urls && entity.transcript_urls.length > 0) {
+    } else if (pdfPaths.length > 0) {
       // Fallback: generate signed download URLs for PDFs
       // ClearFirm prefers HTML but can handle PDF URLs as interim solution
-      for (const pdfPath of entity.transcript_urls) {
+      for (const pdfPath of pdfPaths) {
         try {
           const { data: signedUrlData } = await supabase.storage
             .from('uploads')

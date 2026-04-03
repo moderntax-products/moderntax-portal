@@ -213,7 +213,23 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Upload file to Supabase storage
+    // Look up client transcript format preference
+    const clientId = entity.requests?.client_id;
+    let transcriptFormat: 'html' | 'pdf' = 'pdf'; // default
+    if (clientId) {
+      const { data: client } = await supabase
+        .from('clients')
+        .select('domain')
+        .eq('id', clientId)
+        .single() as { data: { domain: string } | null; error: any };
+
+      if (client?.domain) {
+        const { CLIENT_CONFIG } = await import('@/lib/clients');
+        transcriptFormat = CLIENT_CONFIG[client.domain]?.transcript_format || 'pdf';
+      }
+    }
+
+    // Upload PDF file to Supabase storage
     const buffer = Buffer.from(await file.arrayBuffer());
     const sanitizedFilename = metadata.filename
       .replace(/[^a-zA-Z0-9._\-\s]/g, '')
@@ -236,16 +252,12 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
 
-    // Append to entity's transcript_urls
-    const updatedUrls = [...existingUrls, storagePath];
-
-    const entityUpdate: Record<string, unknown> = { transcript_urls: updatedUrls };
-
-    // Store HTML file alongside PDF for webhook delivery (e.g., ClearFirm)
+    // Upload HTML file if provided
+    let htmlStoragePath: string | null = null;
     if (htmlFile) {
       try {
         const htmlBuffer = Buffer.from(await htmlFile.arrayBuffer());
-        const htmlStoragePath = `transcripts/${entityId}/${Date.now()}-${sanitizedFilename.replace(/\.pdf$/i, '')}.html`;
+        htmlStoragePath = `transcripts/${entityId}/${Date.now()}-${sanitizedFilename.replace(/\.pdf$/i, '')}.html`;
 
         const { error: htmlUploadError } = await supabase.storage
           .from('uploads')
@@ -254,15 +266,32 @@ export async function POST(request: NextRequest) {
             upsert: false,
           });
 
-        if (!htmlUploadError) {
-          const existingHtmlUrls: string[] = (entity as any).transcript_html_urls || [];
-          entityUpdate.transcript_html_urls = [...existingHtmlUrls, htmlStoragePath];
-        } else {
+        if (htmlUploadError) {
           console.error('[batch-upload] HTML upload error:', htmlUploadError);
+          htmlStoragePath = null;
         }
       } catch (htmlErr) {
         console.error('[batch-upload] HTML processing error:', htmlErr);
-        // Non-critical — PDF is the primary artifact
+        htmlStoragePath = null;
+      }
+    }
+
+    // Determine primary/secondary storage based on client transcript format preference
+    // transcript_urls = primary format (what processors download)
+    // transcript_html_urls = secondary format (fallback)
+    const existingHtmlUrls: string[] = (entity as any).transcript_html_urls || [];
+
+    const entityUpdate: Record<string, unknown> = {};
+
+    if (transcriptFormat === 'html' && htmlStoragePath) {
+      // HTML-preferring client: HTML is primary, PDF is secondary
+      entityUpdate.transcript_urls = [...existingUrls, htmlStoragePath];
+      entityUpdate.transcript_html_urls = [...existingHtmlUrls, storagePath];
+    } else {
+      // PDF-preferring client (default): PDF is primary, HTML is secondary
+      entityUpdate.transcript_urls = [...existingUrls, storagePath];
+      if (htmlStoragePath) {
+        entityUpdate.transcript_html_urls = [...existingHtmlUrls, htmlStoragePath];
       }
     }
 
@@ -397,7 +426,7 @@ export async function POST(request: NextRequest) {
       entityName: entity.entity_name,
       assignmentId,
       storagePath,
-      totalFiles: updatedUrls.length,
+      totalFiles: (entityUpdate.transcript_urls as string[]).length,
       filename: metadata.filename,
     });
   } catch (error) {

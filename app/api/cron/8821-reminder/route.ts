@@ -22,13 +22,16 @@ export async function GET(request: NextRequest) {
     const twentyFourHoursAgo = new Date();
     twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
+    const REMINDER_LIMIT = 100;
     const { data: pendingEntities, error } = await supabase
       .from('request_entities')
       .select('id, entity_name, signature_id, signer_email, created_at')
       .eq('status', '8821_sent')
       .not('signature_id', 'is', null)
       .not('signer_email', 'is', null)
-      .lt('created_at', twentyFourHoursAgo.toISOString());
+      .lt('created_at', twentyFourHoursAgo.toISOString())
+      .order('created_at', { ascending: true })
+      .limit(REMINDER_LIMIT);
 
     if (error) {
       console.error('[8821-reminder] Query error:', error);
@@ -38,6 +41,10 @@ export async function GET(request: NextRequest) {
     if (!pendingEntities || pendingEntities.length === 0) {
       console.log('[8821-reminder] No pending 8821s to remind');
       return NextResponse.json({ reminded: 0 });
+    }
+
+    if (pendingEntities.length === REMINDER_LIMIT) {
+      console.warn(`[8821-reminder] Hit limit of ${REMINDER_LIMIT} entities — pagination may be needed`);
     }
 
     let reminded = 0;

@@ -53,6 +53,8 @@ export type BatchStatus = 'processing' | 'completed' | 'failed';
 /**
  * Client - A lending partner (Centerstone, TMC Financing, Clearfirm) or API client (Employer.com)
  */
+export type TranscriptFormat = 'html' | 'pdf';
+
 export interface Client {
   id: string;
   name: string;
@@ -60,6 +62,7 @@ export interface Client {
   domain: string | null;
   logo_url: string | null;
   intake_methods: IntakeMethod[];
+  transcript_format: TranscriptFormat;
   api_key: string | null;
   api_request_limit: number | null;
   webhook_url: string | null;

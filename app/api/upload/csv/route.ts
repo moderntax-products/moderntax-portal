@@ -3,7 +3,8 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendSignatureRequest } from '@/lib/dropbox-sign';
-import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
+import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
+import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -147,6 +148,17 @@ export async function POST(request: NextRequest) {
     const file = formData.get('file') as File | null;
     const loanNumber = formData.get('loan_number') as string | null;
     const notes = formData.get('notes') as string | null;
+    const entityTranscriptIndicesRaw = formData.get('entity_transcript_indices') as string | null;
+
+    // Parse entity transcript indices (row indices from the preview that the processor selected)
+    let entityTranscriptIndices: number[] = [];
+    if (entityTranscriptIndicesRaw) {
+      try {
+        entityTranscriptIndices = JSON.parse(entityTranscriptIndicesRaw);
+      } catch {
+        console.warn('[csv-upload] Failed to parse entity_transcript_indices');
+      }
+    }
 
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -173,29 +185,22 @@ export async function POST(request: NextRequest) {
     const rows = rawRows.map(mapRow);
     const errors: string[] = [];
 
-    const rowsMissingEmail: number[] = [];
     rows.forEach((row, idx) => {
-      if (!row.legal_name) errors.push(`Row ${idx + 2}: missing legal_name`);
-      if (!row.tid) errors.push(`Row ${idx + 2}: missing tid`);
-      if (!row.email) rowsMissingEmail.push(idx + 2);
+      const rowNum = idx + 2;
+      if (!row.legal_name) errors.push(`Row ${rowNum}: missing legal_name`);
+      if (!row.tid) errors.push(`Row ${rowNum}: missing tid`);
+      if (!row.email) errors.push(`Row ${rowNum}: missing email (required for 8821 delivery)`);
+      if (!row['first name']) errors.push(`Row ${rowNum}: missing first name (required for 8821 form)`);
+      if (!row['last name']) errors.push(`Row ${rowNum}: missing last name (required for 8821 form)`);
+      if (!row.address) errors.push(`Row ${rowNum}: missing address (required for 8821 form)`);
+      if (!row.city) errors.push(`Row ${rowNum}: missing city (required for 8821 form)`);
+      if (!row.state) errors.push(`Row ${rowNum}: missing state (required for 8821 form)`);
+      if (!row.zip_code) errors.push(`Row ${rowNum}: missing zip_code (required for 8821 form)`);
     });
 
     if (errors.length > 0) {
       return NextResponse.json(
-        { error: 'Validation errors', details: errors.slice(0, 10) },
-        { status: 400 }
-      );
-    }
-
-    // Block CSV uploads missing signer emails — required for 8821 delivery
-    if (rowsMissingEmail.length > 0) {
-      const entityNames = rowsMissingEmail.map((rowNum) => rows[rowNum - 2]?.legal_name || `Row ${rowNum}`);
-      return NextResponse.json(
-        {
-          error: 'Signer email required for all entities',
-          details: `The following entities are missing a signer email address: ${entityNames.join(', ')}. Please add an "email" column to your spreadsheet with each signer\'s email so we can send the 8821 for signature.`,
-          missing_rows: rowsMissingEmail,
-        },
+        { error: 'Validation errors — all fields are required to generate 8821 forms', details: errors.slice(0, 20) },
         { status: 400 }
       );
     }
@@ -257,26 +262,41 @@ export async function POST(request: NextRequest) {
     }
 
     // Create entities from CSV rows
-    const entities = rows.map((row) => ({
-      request_id: req.id,
-      entity_name: row.legal_name,
-      tid: row.tid,
-      tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
-      address: row.address || null,
-      city: row.city || null,
-      state: row.state || null,
-      zip_code: row.zip_code || null,
-      form_type: validateFormType(row.form),
-      years: parseYears(row.years),
-      signer_first_name: row['first name'] || null,
-      signer_last_name: row['last name'] || null,
-      signer_email: row.email || null,
-      signature_id: row.signature_id || null,
-      signature_created_at: parseSignatureDate(row.signature_created_at),
-      status: row.signature_id ? '8821_signed' : 'pending',
-    }));
+    const entities = rows.map((row, idx) => {
+      const entityData: Record<string, any> = {
+        request_id: req.id,
+        entity_name: row.legal_name,
+        tid: row.tid,
+        tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
+        address: row.address || null,
+        city: row.city || null,
+        state: row.state || null,
+        zip_code: row.zip_code || null,
+        form_type: validateFormType(row.form),
+        years: parseYears(row.years),
+        signer_first_name: row['first name'] || null,
+        signer_last_name: row['last name'] || null,
+        signer_email: row.email || null,
+        signature_id: row.signature_id || null,
+        signature_created_at: parseSignatureDate(row.signature_created_at),
+        status: row.signature_id ? '8821_signed' : 'pending',
+      };
 
-    const { error: entError } = await supabase.from('request_entities').insert(entities);
+      // Add entity transcript order if this row was selected
+      if (entityTranscriptIndices.includes(idx)) {
+        entityData.gross_receipts = {
+          entity_transcript_order: {
+            requested: true,
+            price: RATE_ENTITY_TRANSCRIPT,
+            ordered_at: new Date().toISOString(),
+          },
+        };
+      }
+
+      return entityData;
+    });
+
+    const { error: entError } = await supabase.from('request_entities').insert(entities as any);
     const entityCount = entError ? 0 : entities.length;
 
     if (entError) {
@@ -355,6 +375,36 @@ export async function POST(request: NextRequest) {
       }
     } catch (notifyErr) {
       console.error('[csv-upload] Failed to send admin notification:', notifyErr);
+    }
+
+    // Notify manager(s) if processor ordered entity transcripts
+    if (entityTranscriptIndices.length > 0) {
+      try {
+        const adminClient = createAdminClient();
+        const { data: managers } = await adminClient
+          .from('profiles')
+          .select('email')
+          .eq('client_id', profile.client_id)
+          .eq('role', 'manager');
+
+        if (managers && managers.length > 0) {
+          const totalCost = entityTranscriptIndices.length * RATE_ENTITY_TRANSCRIPT;
+          for (const manager of managers) {
+            await sendManagerEntityTranscriptNotification(
+              manager.email,
+              profile.full_name || user.email || 'Team Member',
+              clientName,
+              effectiveLoanNumber,
+              entityTranscriptIndices.length,
+              totalCost,
+              req.id
+            );
+          }
+          console.log(`[csv-upload] Notified ${managers.length} manager(s) about entity transcript add-on`);
+        }
+      } catch (managerNotifyErr) {
+        console.error('[csv-upload] Failed to send manager entity transcript notification:', managerNotifyErr);
+      }
     }
 
     // Audit log: CSV upload completed

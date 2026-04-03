@@ -329,13 +329,42 @@ export default async function RequestDetailPage({ params }: Props) {
                       <div className="border-t border-gray-200 pt-6">
                         <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Transcript Downloads</h4>
                         <div className="space-y-2">
-                          {entity.transcript_urls.map((url: string, idx: number) => (
-                            <TranscriptDownloadLink
-                              key={idx}
-                              storagePath={url}
-                              label={`Transcript ${idx + 1}`}
-                            />
-                          ))}
+                          {entity.transcript_urls.map((url: string, idx: number) => {
+                            const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
+                            return (
+                              <div key={idx} className="flex items-center gap-2">
+                                <TranscriptDownloadLink
+                                  storagePath={url}
+                                  label={`Transcript ${idx + 1}`}
+                                />
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                                  {ext}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {/* Secondary format transcripts */}
+                    {entity.transcript_html_urls && entity.transcript_html_urls.length > 0 && (
+                      <div className="border-t border-gray-200 pt-4">
+                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Alternate Format</h4>
+                        <div className="space-y-2">
+                          {entity.transcript_html_urls.map((url: string, idx: number) => {
+                            const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
+                            return (
+                              <div key={idx} className="flex items-center gap-2">
+                                <TranscriptDownloadLink
+                                  storagePath={url}
+                                  label={`Transcript ${idx + 1}`}
+                                />
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                                  {ext}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

@@ -1213,3 +1213,52 @@ export async function sendProcessorWeeklySummary(
     console.error('Failed to send processor weekly summary:', error);
   }
 }
+
+/**
+ * Send manager notification when processor orders Entity Transcript add-on
+ * Alerts manager to the additional cost and entities selected
+ */
+export async function sendManagerEntityTranscriptNotification(
+  managerEmail: string,
+  processorName: string,
+  clientName: string,
+  loanNumber: string,
+  entityCount: number,
+  totalCost: number,
+  requestId: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p><strong>${processorName}</strong> ordered the Entity Transcript add-on for a new request.</p>
+<p><strong>Order Details:</strong></p>
+<ul>
+  <li>Client: ${clientName}</li>
+  <li>Account Number: <code>${loanNumber}</code></li>
+  <li>Entities with Entity Transcript: ${entityCount}</li>
+  <li>Add-on Cost: $${totalCost.toFixed(2)} (${entityCount} × $19.99)</li>
+  <li>Ordered: ${new Date().toLocaleString()}</li>
+</ul>
+<p>Entity Transcripts confirm IRS filing requirements before income transcripts are pulled, reducing blank results.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Entity Transcript Add-On Ordered', content, {
+    text: 'View Request',
+    url: `${appUrl}/request/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: managerEmail,
+      from: fromEmail,
+      subject: `Entity Transcript Add-On: ${loanNumber} by ${processorName}`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send manager entity transcript notification:', error);
+  }
+}

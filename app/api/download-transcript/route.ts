@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     // Verify file path belongs to this entity
     const { data: entityData } = await adminSupabase
       .from('request_entities')
-      .select('transcript_urls, signed_8821_url')
+      .select('transcript_urls, transcript_html_urls, signed_8821_url')
       .eq('id', entityId)
       .single();
 
@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
     // Check if path matches signed 8821 or transcript URLs
     const isValidPath = isSignedDoc
       ? entityData.signed_8821_url === filePath
-      : entityData.transcript_urls?.includes(filePath);
+      : (entityData.transcript_urls?.includes(filePath) || entityData.transcript_html_urls?.includes(filePath));
 
     if (!isValidPath) {
       return NextResponse.json({ error: 'File not found for this entity' }, { status: 404 });

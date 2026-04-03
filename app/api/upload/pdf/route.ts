@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
+import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
+import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 
 export async function POST(request: NextRequest) {
   try {
@@ -194,6 +195,36 @@ export async function POST(request: NextRequest) {
       }
     } catch (notifyErr) {
       console.error('[pdf-upload] Failed to send admin notification:', notifyErr);
+    }
+
+    // Notify manager(s) if processor ordered entity transcript
+    if (entityTranscriptRequested) {
+      try {
+        const notifyAdmin = createAdminClient();
+        const { data: managers } = await notifyAdmin
+          .from('profiles')
+          .select('email')
+          .eq('client_id', profile.client_id)
+          .eq('role', 'manager');
+
+        if (managers && managers.length > 0) {
+          const totalCost = entityCount * RATE_ENTITY_TRANSCRIPT;
+          for (const mgr of managers) {
+            await sendManagerEntityTranscriptNotification(
+              mgr.email,
+              profile.full_name || user.email || 'Team Member',
+              clientName,
+              loanNumber!.trim(),
+              entityCount,
+              totalCost,
+              req.id
+            );
+          }
+          console.log(`[pdf-upload] Notified ${managers.length} manager(s) about entity transcript add-on`);
+        }
+      } catch (managerNotifyErr) {
+        console.error('[pdf-upload] Failed to send manager entity transcript notification:', managerNotifyErr);
+      }
     }
 
     // Audit log: PDF upload completed
