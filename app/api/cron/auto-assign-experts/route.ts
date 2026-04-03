@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all experts (profiles where role='expert')
-    const { data: experts, error: expertsError } = await supabase
+    const { data: allExperts, error: expertsError } = await supabase
       .from('profiles')
       .select('id, email, full_name')
       .eq('role', 'expert') as { data: any[] | null; error: any };
@@ -121,7 +121,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (!experts || experts.length === 0) {
+    // Filter out blocked experts (test accounts, inactive, etc.)
+    const BLOCKED_EXPERT_EMAILS = [
+      'test@moderntax.io',
+      'testexpert@moderntax.io',
+      'test@getclearfirm.com',
+    ];
+    const experts = (allExperts || []).filter(
+      (e: any) => !BLOCKED_EXPERT_EMAILS.includes(e.email?.toLowerCase())
+    );
+
+    if (experts.length === 0) {
       return NextResponse.json({
         success: true,
         assigned: 0,
@@ -164,7 +174,11 @@ export async function GET(request: NextRequest) {
       assignmentCounts.set(a.expert_id, (assignmentCounts.get(a.expert_id) || 0) + 1);
     });
 
+    // Max outstanding assignments per expert before they stop receiving new ones
+    const MAX_ACTIVE_ASSIGNMENTS = 5;
+
     let assigned = 0;
+    let capacityBlocked = 0;
     const errors: { entityId: string; error: string }[] = [];
     // Track assignments per expert for batch notification
     const expertAssignmentMap = new Map<string, { email: string; entityNames: string[]; isEmployment: boolean[] }>();
@@ -173,19 +187,20 @@ export async function GET(request: NextRequest) {
 
     for (const entity of unassignedEntities) {
       try {
-        // Pick expert with fewest active assignments
+        // Pick expert with fewest active assignments, respecting capacity cap
         let minCount = Infinity;
         let bestExpert: any = null;
         for (const expert of experts) {
           const count = assignmentCounts.get(expert.id) || 0;
-          if (count < minCount) {
+          if (count < MAX_ACTIVE_ASSIGNMENTS && count < minCount) {
             minCount = count;
             bestExpert = expert;
           }
         }
 
         if (!bestExpert) {
-          errors.push({ entityId: entity.id, error: 'No expert available' });
+          capacityBlocked++;
+          console.log(`[auto-assign] All experts at capacity (${MAX_ACTIVE_ASSIGNMENTS} max) — skipping ${entity.entity_name}`);
           continue;
         }
 
@@ -258,7 +273,9 @@ export async function GET(request: NextRequest) {
       success: true,
       assigned,
       skipped: readyEntities.length - unassignedEntities.length,
+      capacityBlocked,
       totalEligible: readyEntities.length,
+      maxPerExpert: MAX_ACTIVE_ASSIGNMENTS,
       processedAt: new Date().toISOString(),
       errors: errors.length > 0 ? errors : undefined,
     });
