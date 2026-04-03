@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.3 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.4 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -184,7 +184,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.2</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.4</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -350,7 +350,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.3' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.4' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -401,106 +401,147 @@
                     'Adjusted Gross Income', 'Total Income',
                     'Business Name', 'Principal Business',
                     'transcript_data', 'ENTITY TRANSCRIPT',
+                    'Return Filed', 'INCOME TAX RETURN',
                 ];
                 return markers.some(m => html.includes(m));
             };
 
-            // Build all URL variants for this message
             const useJsp = location.href.includes('.jsp');
-            const viewUrls = [
-                useJsp ? `/semail/views/view_file.jsp?mailId=${msg.id}&index=0&ext=html&action=view`
-                       : `/semail/views/view_file?mailId=${msg.id}&index=0&ext=html&action=view`,
-            ];
-            const downloadUrls = [
-                '/semail/servlet/FileDownload',
-                `/semail/servlet/FileDownload?mailId=${msg.id}`,
-                `/semail/servlet/FileDownload?mailId=${msg.id}&index=0&ext=html`,
-                `/semail/views/view_file${useJsp ? '.jsp' : ''}?mailId=${msg.id}&index=0&ext=html&action=download`,
-            ];
+            const jspExt = useJsp ? '.jsp' : '';
+            let transcriptHtml = '';
 
-            // Step 1: Initialize view session for this message
+            // ================================================================
+            // STRATEGY 1: Open read_content page to discover attachment links
+            // The IRS SOR delivers transcripts as attachments. The read_content
+            // page contains links/iframes pointing to the actual attachment files.
+            // ================================================================
+            const readUrl = `/semail/views/read_content${jspExt}?mailId=${msg.id}`;
+
             if (i === 0) {
                 addLog(`  ⏳ Starting IRS session...`, 'warn');
-                await fetch(viewUrls[0], { credentials: 'include' });
+                await fetch(readUrl, { credentials: 'include' });
                 await delay(2000);
             }
-            // Always re-init view for each message
-            const viewResp = await fetch(viewUrls[0], { credentials: 'include' });
-            const viewHtml = await viewResp.text();
-            await delay(1200);
 
-            // Step 2: Check if the view response itself IS the transcript
-            let transcriptHtml = '';
-            if (looksLikeTranscript(viewHtml)) {
-                transcriptHtml = viewHtml;
-                console.log(`[IRS-DEBUG] Msg ${msg.id}: view_file response IS the transcript (${viewHtml.length} chars)`);
+            const readResp = await fetch(readUrl, { credentials: 'include' });
+            const readHtml = await readResp.text();
+            console.log(`[IRS-DEBUG] Msg ${msg.id} read_content (${readHtml.length} chars):`, readHtml.substring(0, 2000));
+            await delay(800);
+
+            // Check if read_content page itself is the transcript
+            if (looksLikeTranscript(readHtml)) {
+                transcriptHtml = readHtml;
+                console.log(`[IRS-DEBUG] Msg ${msg.id}: read_content IS the transcript`);
             }
 
-            // Step 3: Try each download URL pattern until one works
+            // Extract ALL links from the read_content page — any could be the attachment
             if (!transcriptHtml) {
-                for (let urlIdx = 0; urlIdx < downloadUrls.length; urlIdx++) {
-                    for (let attempt = 1; attempt <= 2; attempt++) {
-                        try {
-                            if (attempt > 1) {
-                                // Re-init session before retry
-                                await fetch(viewUrls[0], { credentials: 'include' });
-                                await delay(1500);
-                            }
-                            const resp = await fetch(downloadUrls[urlIdx], { credentials: 'include' });
-                            const html = await resp.text();
-                            console.log(`[IRS-DEBUG] Msg ${msg.id} URL[${urlIdx}] attempt ${attempt}: ${html.length} chars, status ${resp.status}`);
+                const linkMatches = readHtml.match(/(?:href|src)=["']([^"']+)["']/gi) || [];
+                const allUrls = linkMatches.map(m => {
+                    const url = m.replace(/^(?:href|src)=["']/i, '').replace(/["']$/, '');
+                    return url;
+                });
+                // Also find URLs in onclick handlers
+                const onclickMatches = readHtml.match(/(?:window\.open|location\.href)\s*[=(]\s*['"]([^'"]+)['"]/gi) || [];
+                onclickMatches.forEach(m => {
+                    const url = m.replace(/^.*[=(]\s*['"]/, '').replace(/['"]$/, '');
+                    allUrls.push(url);
+                });
 
+                console.log(`[IRS-DEBUG] Msg ${msg.id} found ${allUrls.length} URLs in read_content:`, allUrls.slice(0, 15));
+
+                // Try URLs that look like file/attachment references
+                const attachmentUrls = allUrls.filter(url =>
+                    url.includes('FileDownload') || url.includes('view_file') ||
+                    url.includes('attachment') || url.includes('download') ||
+                    url.includes('index=') || url.includes('.html') ||
+                    url.includes('.htm')
+                );
+
+                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment-like URLs:`, attachmentUrls);
+
+                for (const attachUrl of attachmentUrls) {
+                    try {
+                        const fullUrl = attachUrl.startsWith('/') ? attachUrl
+                            : attachUrl.startsWith('http') ? attachUrl
+                            : '/' + attachUrl;
+                        const resp = await fetch(fullUrl, { credentials: 'include' });
+                        const html = await resp.text();
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URL "${fullUrl.substring(0,80)}": ${html.length} chars, status ${resp.status}`);
+                        if (looksLikeTranscript(html)) {
+                            transcriptHtml = html;
+                            addLog(`  📎 Found transcript in attachment`, 'info');
+                            break;
+                        }
+                    } catch (e) {
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URL error:`, e.message);
+                    }
+                    await delay(300);
+                }
+            }
+
+            // ================================================================
+            // STRATEGY 2: Try view_file with multiple attachment indices & extensions
+            // Transcripts can be at different indices (0,1,2) and served as
+            // html, htm, xml, or without extension specification
+            // ================================================================
+            if (!transcriptHtml) {
+                const indices = [0, 1, 2];
+                const extensions = ['html', 'htm', 'xml', ''];
+                for (const idx of indices) {
+                    if (transcriptHtml) break;
+                    for (const ext of extensions) {
+                        if (transcriptHtml) break;
+                        const extParam = ext ? `&ext=${ext}` : '';
+                        const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=${idx}${extParam}&action=view`;
+                        try {
+                            const resp = await fetch(viewUrl, { credentials: 'include' });
+                            const html = await resp.text();
+                            console.log(`[IRS-DEBUG] Msg ${msg.id} view_file idx=${idx} ext=${ext||'none'}: ${html.length} chars`);
                             if (looksLikeTranscript(html)) {
                                 transcriptHtml = html;
-                                if (urlIdx > 0 || attempt > 1) {
-                                    addLog(`  🔄 Found transcript via URL pattern ${urlIdx + 1}, attempt ${attempt}`, 'warn');
-                                }
-                                break;
+                                addLog(`  📎 Found transcript (attachment ${idx}, ${ext || 'auto'})`, 'info');
                             }
-                        } catch (e) {
-                            console.log(`[IRS-DEBUG] Msg ${msg.id} URL[${urlIdx}] attempt ${attempt} error:`, e.message);
-                        }
-                        if (attempt < 2) await delay(1000);
+                        } catch (e) { /* continue */ }
+                        await delay(200);
                     }
-                    if (transcriptHtml) break;
                 }
             }
 
-            // Step 4: Last resort — try reading the content via an iframe approach
+            // ================================================================
+            // STRATEGY 3: Classic FileDownload with session re-init
+            // Original approach — set session via view_file, then fetch FileDownload
+            // ================================================================
             if (!transcriptHtml) {
-                try {
-                    // Navigate directly to the read_content page and extract
-                    const readUrl = `/semail/views/read_content${useJsp ? '.jsp' : ''}?mailId=${msg.id}`;
-                    const readResp = await fetch(readUrl, { credentials: 'include' });
-                    const readHtml = await readResp.text();
-                    console.log(`[IRS-DEBUG] Msg ${msg.id} read_content: ${readHtml.length} chars`);
+                const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=0&ext=html&action=view`;
+                await fetch(viewUrl, { credentials: 'include' });
+                await delay(1500);
 
-                    // The read_content page may embed the transcript in an iframe
-                    const iframeSrcMatch = readHtml.match(/src=["']([^"']*FileDownload[^"']*)/);
-                    if (iframeSrcMatch) {
-                        const iframeUrl = iframeSrcMatch[1].startsWith('/') ? iframeSrcMatch[1] : '/' + iframeSrcMatch[1];
-                        console.log(`[IRS-DEBUG] Msg ${msg.id} found iframe src: ${iframeUrl}`);
-                        const iframeResp = await fetch(iframeUrl, { credentials: 'include' });
-                        const iframeHtml = await iframeResp.text();
-                        if (looksLikeTranscript(iframeHtml)) {
-                            transcriptHtml = iframeHtml;
-                            addLog(`  🔄 Found transcript via iframe extraction`, 'warn');
+                const downloadUrls = [
+                    '/semail/servlet/FileDownload',
+                    `/semail/servlet/FileDownload?mailId=${msg.id}`,
+                    `/semail/servlet/FileDownload?mailId=${msg.id}&index=0`,
+                ];
+
+                for (const dlUrl of downloadUrls) {
+                    try {
+                        const resp = await fetch(dlUrl, { credentials: 'include' });
+                        const html = await resp.text();
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} FileDownload "${dlUrl}": ${html.length} chars`);
+                        if (looksLikeTranscript(html)) {
+                            transcriptHtml = html;
+                            addLog(`  📎 Found transcript via FileDownload`, 'info');
+                            break;
                         }
-                    }
-
-                    // Also check if read_content itself has transcript content
-                    if (!transcriptHtml && looksLikeTranscript(readHtml)) {
-                        transcriptHtml = readHtml;
-                        addLog(`  🔄 Found transcript in read_content page`, 'warn');
-                    }
-                } catch (e) {
-                    console.log(`[IRS-DEBUG] Msg ${msg.id} read_content fallback error:`, e.message);
+                    } catch (e) { /* continue */ }
+                    await delay(300);
                 }
             }
 
-            // Log what we got if nothing matched
+            // Log failure details
             if (!transcriptHtml) {
-                console.log(`[IRS-DEBUG] Msg ${msg.id} FAILED all strategies. Last viewHtml (${viewHtml.length} chars):`, viewHtml.substring(0, 1000));
+                console.log(`[IRS-DEBUG] Msg ${msg.id} ALL ${3} STRATEGIES FAILED.`);
+                console.log(`[IRS-DEBUG] Msg ${msg.id} read_content HTML:`, readHtml);
             }
 
             if (transcriptHtml && looksLikeTranscript(transcriptHtml)) {
@@ -768,16 +809,11 @@
                 results.push({ success: uploaded, filename: baseFilename, name, tin, formType, taxYear, finding });
 
             } else {
-                // Debug: log what we got across all strategies
-                const gotContent = transcriptHtml || viewHtml || '';
-                const preview = gotContent.substring(0, 300).replace(/\s+/g, ' ').trim();
-                const contentLen = gotContent.length;
-                addLog(`  ⏭️ Not a transcript (${contentLen} chars)`, 'warn');
-                addLog(`     Preview: "${preview.substring(0, 120)}..."`, 'warn');
-                addLog(`     💡 Open Console (F12) → search [IRS-DEBUG] for full details`, 'warn');
-                console.log(`[IRS-DEBUG] Message ${msg.id} — ALL STRATEGIES FAILED`);
-                console.log(`[IRS-DEBUG]   viewHtml (${viewHtml.length} chars):`, viewHtml.substring(0, 1000));
-                console.log(`[IRS-DEBUG]   transcriptHtml (${(transcriptHtml||'').length} chars):`, (transcriptHtml||'').substring(0, 1000));
+                // Debug: show what we got
+                const preview = readHtml.substring(0, 300).replace(/\s+/g, ' ').trim();
+                addLog(`  ⏭️ Not a transcript — could not extract content`, 'warn');
+                addLog(`     read_content: ${readHtml.length} chars`, 'warn');
+                addLog(`     💡 Open Console (F12) → search [IRS-DEBUG] for full page HTML`, 'warn');
                 skippedCount++;
                 document.getElementById('irs-skipped').textContent = skippedCount;
                 results.push({ success: false, skipped: true, reason: 'not transcript' });
