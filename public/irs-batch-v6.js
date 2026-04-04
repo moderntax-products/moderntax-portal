@@ -1,5 +1,5 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.7 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.8 — DIRECT-TO-PORTAL
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -247,7 +247,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.7</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.8</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -413,7 +413,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.7' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.8' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -519,98 +519,108 @@
             }
 
             // ================================================================
-            // STRATEGY 2: Extract attachment URLs from the read_content page
-            // IRS SOR embeds attachments via onClick=openWin('/semail/views/view_file.jsp?...')
-            // The transcript HTML is served at the view_file URL with action=view or action=download
+            // STRATEGY 2: Load attachment via hidden iframe
+            // IRS SOR requires browser-context navigation to serve attachments.
+            // fetch() alone doesn't work — the view_file.jsp page needs to be
+            // rendered in a real browsing context. We use a same-origin iframe
+            // to load the attachment, then read its document content.
             // ================================================================
             if (!transcriptHtml && readHtml.length > 200) {
-                // PRIMARY: Find openWin() calls — this is how IRS SOR links attachments
-                // Pattern: onClick=openWin('/semail/views/view_file.jsp?mailId=0&index=0&ext=html&action=view')
+                // Extract openWin() attachment URLs from read_content page
                 const openWinMatches = readHtml.match(/openWin\s*\(\s*['"]([^'"]+)['"]\s*\)/gi) || [];
                 const attachUrls = openWinMatches.map(m => m.replace(/^openWin\s*\(\s*['"]/i, '').replace(/['"]\s*\)$/, ''));
+                console.log(`[IRS-DEBUG] Msg ${msg.id} openWin URLs:`, attachUrls);
 
-                // Also extract href/src URLs as fallback
-                const linkMatches = readHtml.match(/(?:href|src|action)=["']([^"']+)["']/gi) || [];
-                linkMatches.forEach(m => {
-                    const url = m.replace(/^(?:href|src|action)=["']/i, '').replace(/["']$/, '');
-                    if (url.includes('view_file') || url.includes('FileDownload') || url.includes('download')) {
-                        attachUrls.push(url);
-                    }
-                });
-
-                // Also find window.open / window.location patterns
-                const jsUrlMatches = readHtml.match(/(?:window\.open|location\.href|window\.location)\s*[=(]\s*['"]([^'"]+)['"]/gi) || [];
-                jsUrlMatches.forEach(m => {
-                    const url = m.replace(/^.*[=(]\s*['"]/, '').replace(/['"]$/, '');
-                    attachUrls.push(url);
-                });
-
-                console.log(`[IRS-DEBUG] Msg ${msg.id} attachment URLs found:`, attachUrls);
-
-                // Try each attachment URL — prefer "action=view" first (returns HTML)
-                const sortedUrls = attachUrls.sort((a, b) => {
-                    // Prioritize view over download
-                    const aView = a.includes('action=view') ? 0 : 1;
-                    const bView = b.includes('action=view') ? 0 : 1;
-                    return aView - bView;
-                });
-
-                for (const attachUrl of sortedUrls) {
-                    try {
-                        const fullUrl = attachUrl.startsWith('http') ? attachUrl
-                            : attachUrl.startsWith('/') ? attachUrl
-                            : '/' + attachUrl;
-                        const resp = await fetch(fullUrl, { credentials: 'include' });
-                        const html = await resp.text();
-                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment "${fullUrl.substring(0,80)}": ${html.length} chars`);
-                        if (looksLikeTranscript(html)) {
-                            transcriptHtml = html;
-                            addLog(`  📎 Found transcript in attachment`, 'info');
-                            break;
-                        }
-                    } catch (e) {
-                        console.log(`[IRS-DEBUG] Msg ${msg.id} attachment fetch error:`, e.message);
-                    }
-                    await delay(300);
+                // Also build view_file URLs from the mailId directly (covers edge cases)
+                if (attachUrls.length === 0) {
+                    attachUrls.push(`/semail/views/view_file${jspExt}?mailId=${msg.id}&index=0&ext=html&action=view`);
                 }
-            }
 
-            // ================================================================
-            // STRATEGY 3: Try view_file with multiple indices & extensions
-            // ================================================================
-            if (!transcriptHtml) {
-                for (const idx of [0, 1, 2]) {
-                    if (transcriptHtml) break;
-                    for (const ext of ['html', 'htm', 'xml', '']) {
-                        if (transcriptHtml) break;
-                        const extParam = ext ? `&ext=${ext}` : '';
-                        const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=${idx}${extParam}&action=view`;
+                // Helper: load URL in a hidden iframe and read its content
+                const loadInIframe = (url) => new Promise((resolve) => {
+                    const iframe = document.createElement('iframe');
+                    iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;visibility:hidden;';
+                    iframe.sandbox = ''; // Remove sandbox to allow same-origin access
+
+                    const timeout = setTimeout(() => {
+                        console.log(`[IRS-DEBUG] Msg ${msg.id} iframe timeout for "${url.substring(0,60)}"`);
+                        try { iframe.remove(); } catch(e) {}
+                        resolve('');
+                    }, 8000);
+
+                    iframe.onload = () => {
+                        clearTimeout(timeout);
                         try {
-                            const resp = await fetch(viewUrl, { credentials: 'include' });
+                            // Same-origin: we can read the iframe's document
+                            const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+                            const html = iframeDoc?.documentElement?.outerHTML || iframeDoc?.body?.innerHTML || '';
+                            console.log(`[IRS-DEBUG] Msg ${msg.id} iframe loaded "${url.substring(0,60)}": ${html.length} chars`);
+                            iframe.remove();
+                            resolve(html);
+                        } catch (e) {
+                            console.log(`[IRS-DEBUG] Msg ${msg.id} iframe read error:`, e.message);
+                            iframe.remove();
+                            resolve('');
+                        }
+                    };
+
+                    iframe.onerror = () => {
+                        clearTimeout(timeout);
+                        iframe.remove();
+                        resolve('');
+                    };
+
+                    document.body.appendChild(iframe);
+                    iframe.src = url;
+                });
+
+                // Try each attachment URL via iframe (view URLs first)
+                const viewUrls = attachUrls.filter(u => u.includes('action=view'));
+                const downloadUrls = attachUrls.filter(u => u.includes('action=download'));
+                const allAttachUrls = [...viewUrls, ...downloadUrls];
+
+                for (const attachUrl of allAttachUrls) {
+                    const fullUrl = attachUrl.startsWith('/') ? attachUrl : '/' + attachUrl;
+                    const html = await loadInIframe(fullUrl);
+                    if (looksLikeTranscript(html)) {
+                        transcriptHtml = html;
+                        addLog(`  📎 Found transcript in attachment`, 'info');
+                        break;
+                    }
+                    await delay(500);
+                }
+
+                // Fallback: also try fetch() in case iframe doesn't work
+                if (!transcriptHtml) {
+                    for (const attachUrl of allAttachUrls) {
+                        try {
+                            const fullUrl = attachUrl.startsWith('/') ? attachUrl : '/' + attachUrl;
+                            const resp = await fetch(fullUrl, { credentials: 'include' });
                             const html = await resp.text();
-                            if (html.length > 200) {
-                                console.log(`[IRS-DEBUG] Msg ${msg.id} view_file idx=${idx} ext=${ext||'none'}: ${html.length} chars`);
-                            }
+                            console.log(`[IRS-DEBUG] Msg ${msg.id} fetch fallback "${fullUrl.substring(0,60)}": ${html.length} chars`);
                             if (looksLikeTranscript(html)) {
                                 transcriptHtml = html;
-                                addLog(`  📎 Found transcript (attachment ${idx}, ${ext || 'auto'})`, 'info');
+                                addLog(`  📎 Found transcript via fetch`, 'info');
+                                break;
                             }
                         } catch (e) { /* continue */ }
-                        await delay(200);
+                        await delay(300);
                     }
                 }
             }
 
             // ================================================================
-            // STRATEGY 4: Classic FileDownload — set session via href, then download
+            // STRATEGY 3: Fetch view_file then FileDownload (session-based)
+            // Initialize the session by visiting view_file, then pull content
+            // from FileDownload which serves the actual file data.
             // ================================================================
             if (!transcriptHtml) {
-                // Re-navigate to message to set session
-                if (messageHref) {
-                    await fetch(messageHref, { credentials: 'include' });
-                    await delay(1500);
-                }
+                // First: visit view_file to set session context
+                const viewUrl = `/semail/views/view_file${jspExt}?mailId=${msg.id}&index=0&ext=html&action=view`;
+                await fetch(viewUrl, { credentials: 'include' });
+                await delay(1500);
 
+                // Then: try FileDownload which returns the file content
                 for (const dlUrl of [
                     '/semail/servlet/FileDownload',
                     `/semail/servlet/FileDownload?mailId=${msg.id}`,
@@ -633,7 +643,7 @@
             // Log comprehensive failure details
             if (!transcriptHtml) {
                 console.log(`[IRS-DEBUG] Msg ${msg.id} ALL STRATEGIES FAILED.`);
-                console.log(`[IRS-DEBUG] Msg ${msg.id} full read page HTML:`, readHtml);
+                console.log(`[IRS-DEBUG] Msg ${msg.id} full read page HTML:`, readHtml.substring(0, 3000));
             }
 
             if (transcriptHtml && looksLikeTranscript(transcriptHtml)) {
