@@ -26,15 +26,19 @@
     },
     {
       "path": "/api/cron/auto-assign-experts",
-      "schedule": "0 9 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/auto-complete-requests",
-      "schedule": "0 11 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/stuck-entity-alert",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/expert-overdue-reminder",
+      "schedule": "0 9,14 * * 1-5"
     },
     {
       "path": "/api/cron/auto-invoice",
@@ -42,7 +46,7 @@
     },
     {
       "path": "/api/cron/webhook-retry",
-      "schedule": "0 13 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/monitoring-repull",

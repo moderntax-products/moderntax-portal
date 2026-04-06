@@ -20,7 +20,11 @@ interface StuckEntity {
   loan_number: string;
   updated_at: string;
   stuckValue: string; // human-readable duration
+  expert_name: string | null;
+  client_name: string | null;
 }
+
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
@@ -83,12 +87,55 @@ export async function GET(request: NextRequest) {
         loan_number: e.requests?.loan_number || 'N/A',
         updated_at: e.updated_at,
         stuckValue: durationFn(e.updated_at),
+        expert_name: expertMap.get(e.id) || null,
+        client_name: clientNameMap.get(e.request_id) || null,
       }));
     };
 
     const unsignedList = mapEntities(unsigned8821s, (d) => `${daysBetween(d)} days`);
     const waitingList = mapEntities(waitingForExpert, (d) => `${hoursBetween(d)} hours`);
     const stalledList = mapEntities(processingStalled, (d) => `${hoursBetween(d)} hours`);
+
+    // Enrich stuck entities with expert assignment + client info
+    const allStuckEntityIds = [
+      ...(unsigned8821s || []),
+      ...(waitingForExpert || []),
+      ...(processingStalled || []),
+    ].map((e: any) => e.id);
+
+    // Fetch expert assignments for stuck entities
+    let expertMap = new Map<string, string>();
+    if (allStuckEntityIds.length > 0) {
+      const { data: assignments } = await supabase
+        .from('expert_assignments')
+        .select('entity_id, expert_profile:profiles!expert_assignments_expert_id_fkey(full_name, email)')
+        .in('entity_id', allStuckEntityIds)
+        .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
+
+      (assignments || []).forEach((a: any) => {
+        const name = a.expert_profile?.full_name || a.expert_profile?.email || 'Unassigned';
+        expertMap.set(a.entity_id, name);
+      });
+    }
+
+    // Fetch client names for stuck entities
+    const allRequestIds = [
+      ...(unsigned8821s || []),
+      ...(waitingForExpert || []),
+      ...(processingStalled || []),
+    ].map((e: any) => e.request_id).filter(Boolean);
+
+    let clientNameMap = new Map<string, string>();
+    if (allRequestIds.length > 0) {
+      const { data: requests } = await supabase
+        .from('requests')
+        .select('id, client_id, clients(name)')
+        .in('id', Array.from(new Set(allRequestIds))) as { data: any[] | null; error: any };
+
+      (requests || []).forEach((r: any) => {
+        clientNameMap.set(r.id, r.clients?.name || 'Unknown');
+      });
+    }
 
     const totalStuck = unsignedList.length + waitingList.length + stalledList.length;
 
@@ -130,7 +177,9 @@ export async function GET(request: NextRequest) {
           (e) =>
             `<tr>
               <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.entity_name}</td>
+              <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.client_name || '—'}</td>
               <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.loan_number}</td>
+              <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 600; color: ${e.expert_name ? '#0369a1' : '#dc2626'};">${e.expert_name || 'Unassigned'}</td>
               <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.stuckValue}</td>
             </tr>`
         )
@@ -143,7 +192,9 @@ export async function GET(request: NextRequest) {
             <thead>
               <tr style="background: #f5f5f5;">
                 <th style="padding: 8px 12px; text-align: left;">Entity</th>
+                <th style="padding: 8px 12px; text-align: left;">Client</th>
                 <th style="padding: 8px 12px; text-align: left;">Loan #</th>
+                <th style="padding: 8px 12px; text-align: left;">Expert</th>
                 <th style="padding: 8px 12px; text-align: left;">${durationLabel}</th>
               </tr>
             </thead>

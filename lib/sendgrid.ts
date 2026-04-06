@@ -700,6 +700,154 @@ export async function sendExpertIssueNotification(
 }
 
 /**
+ * Send expert overdue reminder
+ * Daily reminder to experts with past-due assignments listing each entity
+ */
+export async function sendExpertOverdueReminder(
+  expertEmail: string,
+  expertName: string,
+  overdueEntities: { entityName: string; clientName: string; stuckDays: number; loanNumber: string }[]
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const rows = overdueEntities
+    .sort((a, b) => b.stuckDays - a.stuckDays)
+    .map(
+      (e) =>
+        `<tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-weight: 600;">${e.entityName}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.clientName}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">${e.loanNumber}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #eee; color: ${e.stuckDays >= 5 ? '#dc2626' : e.stuckDays >= 3 ? '#d97706' : '#059669'}; font-weight: 600;">${e.stuckDays}d overdue</td>
+        </tr>`
+    )
+    .join('');
+
+  const content = `
+<p>Hi ${expertName},</p>
+<p>You have <strong>${overdueEntities.length} past-due ${overdueEntities.length === 1 ? 'assignment' : 'assignments'}</strong> that ${overdueEntities.length === 1 ? 'has' : 'have'} exceeded the 24-hour SLA deadline. Please prioritize completing these today:</p>
+<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0;">
+  <thead>
+    <tr style="background: #f5f5f5;">
+      <th style="padding: 8px 12px; text-align: left;">Entity</th>
+      <th style="padding: 8px 12px; text-align: left;">Client</th>
+      <th style="padding: 8px 12px; text-align: left;">Loan #</th>
+      <th style="padding: 8px 12px; text-align: left;">Status</th>
+    </tr>
+  </thead>
+  <tbody>${rows}</tbody>
+</table>
+<p>If you're blocked on any of these (IRS system down, missing 8821, etc.), please <strong>flag the issue</strong> in your Expert Queue so admin can reassign or follow up.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Overdue Assignments', content, {
+    text: 'View My Queue',
+    url: `${appUrl}/expert`,
+  });
+
+  try {
+    await sgMail.send({
+      to: expertEmail,
+      from: fromEmail,
+      subject: `[Overdue] ${overdueEntities.length} ${overdueEntities.length === 1 ? 'assignment' : 'assignments'} past SLA deadline`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert overdue reminder:', error);
+  }
+}
+
+/**
+ * Send admin expert accountability digest
+ * Shows admin which experts have which stuck entities and total overdue counts
+ */
+export async function sendAdminExpertAccountabilityDigest(
+  adminEmail: string,
+  expertSummaries: {
+    expertName: string;
+    expertEmail: string;
+    overdueCount: number;
+    totalAssigned: number;
+    entities: { entityName: string; clientName: string; stuckDays: number; loanNumber: string; status: string }[];
+  }[]
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const totalOverdue = expertSummaries.reduce((sum, e) => sum + e.overdueCount, 0);
+
+  const expertSections = expertSummaries
+    .sort((a, b) => b.overdueCount - a.overdueCount)
+    .map((expert) => {
+      const entityRows = expert.entities
+        .sort((a, b) => b.stuckDays - a.stuckDays)
+        .map(
+          (e) =>
+            `<tr>
+              <td style="padding: 6px 10px; border-bottom: 1px solid #eee;">${e.entityName}</td>
+              <td style="padding: 6px 10px; border-bottom: 1px solid #eee;">${e.clientName}</td>
+              <td style="padding: 6px 10px; border-bottom: 1px solid #eee;">${e.loanNumber}</td>
+              <td style="padding: 6px 10px; border-bottom: 1px solid #eee;">${e.status}</td>
+              <td style="padding: 6px 10px; border-bottom: 1px solid #eee; color: ${e.stuckDays >= 5 ? '#dc2626' : e.stuckDays >= 3 ? '#d97706' : '#059669'}; font-weight: 600;">${e.stuckDays}d</td>
+            </tr>`
+        )
+        .join('');
+
+      return `
+        <div style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+          <div style="background: ${expert.overdueCount >= 5 ? '#fef2f2' : expert.overdueCount >= 3 ? '#fffbeb' : '#f0fdf4'}; padding: 12px 16px; border-bottom: 1px solid #e5e7eb;">
+            <strong>${expert.expertName}</strong> (${expert.expertEmail})
+            <span style="float: right; font-weight: 600; color: ${expert.overdueCount >= 5 ? '#dc2626' : '#d97706'};">
+              ${expert.overdueCount} overdue / ${expert.totalAssigned} total
+            </span>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: #f9fafb;">
+                <th style="padding: 6px 10px; text-align: left;">Entity</th>
+                <th style="padding: 6px 10px; text-align: left;">Client</th>
+                <th style="padding: 6px 10px; text-align: left;">Loan #</th>
+                <th style="padding: 6px 10px; text-align: left;">Status</th>
+                <th style="padding: 6px 10px; text-align: left;">Overdue</th>
+              </tr>
+            </thead>
+            <tbody>${entityRows}</tbody>
+          </table>
+        </div>`;
+    })
+    .join('');
+
+  const content = `
+<p><strong>${totalOverdue} entities</strong> are past their SLA deadline across <strong>${expertSummaries.length} ${expertSummaries.length === 1 ? 'expert' : 'experts'}</strong>.</p>
+${expertSections}
+<p style="margin-top: 16px;">Each expert has been sent an automated reminder. Consider reassigning entities stuck 5+ days.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Expert Accountability Digest', content, {
+    text: 'View Admin Dashboard',
+    url: `${appUrl}/admin`,
+  });
+
+  try {
+    await sgMail.send({
+      to: adminEmail,
+      from: fromEmail,
+      subject: `[Expert Digest] ${totalOverdue} overdue across ${expertSummaries.length} experts`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send admin expert accountability digest:', error);
+  }
+}
+
+/**
  * Send fax-back 8821 request email
  * Triggered when an IRS agent rejects the digital signature on an 8821.
  * Sends instructions to the signer to print, wet-sign, and fax back the form.

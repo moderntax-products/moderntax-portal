@@ -412,10 +412,12 @@ export async function triggerIncrementalWebhook(
 
   console.log(`[webhook-incremental] Enqueued ${delivery.id} for ${entityName} → ${payload.files[0].type} (${payload.status})`);
 
-  // Fire and forget
-  deliverWebhook(supabase, delivery.id).catch((err) => {
+  // Await delivery — in serverless environments fire-and-forget can be killed
+  try {
+    await deliverWebhook(supabase, delivery.id);
+  } catch (err) {
     console.error(`[webhook-incremental] Delivery attempt failed for ${delivery.id}:`, err);
-  });
+  }
 
   return delivery.id;
 }
@@ -654,10 +656,12 @@ export async function enqueueWebhookDelivery(
 
   console.log(`[webhook] Enqueued delivery ${delivery.id} for request ${requestId}`);
 
-  // Attempt immediate delivery (don't await — fire and forget for speed)
-  deliverWebhook(supabase, delivery.id).catch((err) => {
+  // Await delivery — in serverless environments fire-and-forget promises are killed on response
+  try {
+    await deliverWebhook(supabase, delivery.id);
+  } catch (err) {
     console.error(`[webhook] Immediate delivery attempt failed for ${delivery.id}:`, err);
-  });
+  }
 
   return delivery.id;
 }

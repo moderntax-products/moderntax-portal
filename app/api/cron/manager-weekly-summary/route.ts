@@ -12,6 +12,8 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { sendManagerWeeklySummary } from '@/lib/sendgrid';
 import type { ManagerWeeklySummaryStats } from '@/lib/types';
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET

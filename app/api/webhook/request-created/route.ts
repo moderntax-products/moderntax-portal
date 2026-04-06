@@ -74,17 +74,20 @@ export async function POST(request: NextRequest) {
         .eq('role', 'admin');
 
       if (admins && admins.length > 0) {
-        for (const admin of admins) {
-          await sendAdminNewRequestNotification(
-            admin.email,
-            submitterProfile?.full_name || user.email || 'Team Member',
-            submitterProfile?.role || 'processor',
-            clientName,
-            requestData.loan_number || requestId,
-            entityList?.length || 0,
-            requestId
-          );
-        }
+        // Send admin notifications in parallel to avoid serial SendGrid latency
+        await Promise.all(
+          admins.map((admin: any) =>
+            sendAdminNewRequestNotification(
+              admin.email,
+              submitterProfile?.full_name || user.email || 'Team Member',
+              submitterProfile?.role || 'processor',
+              clientName,
+              requestData.loan_number || requestId,
+              entityList?.length || 0,
+              requestId
+            ).catch((err: any) => console.error(`[request-created] Admin email to ${admin.email} failed:`, err))
+          )
+        );
       }
     } catch (adminEmailError) {
       console.error('Failed to send admin notification:', adminEmailError);

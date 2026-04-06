@@ -11,6 +11,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendCompletionNotification } from '@/lib/sendgrid';
 import { triggerWebhookForRequest } from '@/lib/webhook';
+import { triggerV3CompletionWebhook } from '@/lib/webhook-v3';
+
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
@@ -70,19 +73,29 @@ export async function GET(request: NextRequest) {
 
       console.log(`[auto-complete] Processing batch of ${activeRequests.length} requests (total checked: ${checked})`);
 
+      // Bulk-fetch all entities for this batch in a single query (eliminates N+1)
+      const requestIds = activeRequests.map((r: any) => r.id);
+      const { data: allEntities, error: bulkEntitiesError } = await supabase
+        .from('request_entities')
+        .select('id, request_id, entity_name, tid, tid_kind, address, city, state, zip_code, form_type, years, signer_first_name, signer_last_name, signer_email, signature_id, signature_created_at, signed_8821_url, status, employment_data, gross_receipts, compliance_score, transcript_urls, completed_at, created_at, updated_at')
+        .in('request_id', requestIds) as { data: any[] | null; error: any };
+
+      if (bulkEntitiesError) {
+        console.error(`[auto-complete] Failed to bulk-fetch entities:`, bulkEntitiesError);
+        // Fall through — individual requests will be skipped
+      }
+
+      // Group entities by request_id for O(1) lookup
+      const entitiesByRequest = new Map<string, any[]>();
+      for (const entity of (allEntities || [])) {
+        const list = entitiesByRequest.get(entity.request_id) || [];
+        list.push(entity);
+        entitiesByRequest.set(entity.request_id, list);
+      }
+
       for (const req of activeRequests) {
         try {
-          // Get all entities for this request
-          const { data: entities, error: entitiesError } = await supabase
-            .from('request_entities')
-            .select('id, request_id, entity_name, tid, tid_kind, address, city, state, zip_code, form_type, years, signer_first_name, signer_last_name, signer_email, signature_id, signature_created_at, signed_8821_url, status, employment_data, gross_receipts, compliance_score, transcript_urls, completed_at, created_at, updated_at')
-            .eq('request_id', req.id) as { data: any[] | null; error: any };
-
-          if (entitiesError) {
-            console.error(`[auto-complete] Failed to fetch entities for request ${req.id}:`, entitiesError);
-            errors.push({ requestId: req.id, error: 'Failed to fetch entities' });
-            continue;
-          }
+          const entities = entitiesByRequest.get(req.id);
 
           // Skip if no entities (shouldn't happen, but guard)
           if (!entities || entities.length === 0) {
@@ -126,10 +139,14 @@ export async function GET(request: NextRequest) {
             console.error(`[auto-complete] Notification error for request ${req.id}:`, notifErr);
           }
 
-          // Trigger webhook for API-intake requests (e.g., ClearFirm)
-          // Dedup in enqueueWebhookDelivery prevents double-delivery
+          // Trigger webhooks for API-intake requests (e.g., ClearFirm)
+          // v3: structured risk_signals + completion signal
+          // v2: lightweight "complete" signal (backward-compat)
           try {
-            await triggerWebhookForRequest(supabase, req.id);
+            await Promise.all([
+              triggerV3CompletionWebhook(supabase, req.id),
+              triggerWebhookForRequest(supabase, req.id),
+            ]);
           } catch (webhookErr) {
             console.error(`[auto-complete] Webhook trigger failed for ${req.id}:`, webhookErr);
           }

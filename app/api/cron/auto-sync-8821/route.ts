@@ -21,6 +21,8 @@ function getApi(): DropboxSign.SignatureRequestApi {
   return api;
 }
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET

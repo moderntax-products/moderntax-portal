@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { triggerIncrementalWebhook } from '@/lib/webhook';
+import { triggerV3Webhook, type TranscriptUploadContext } from '@/lib/webhook-v3';
 
 // Allow larger file uploads (IRS Record of Account transcripts can exceed 4MB)
 export const maxDuration = 30;
@@ -346,23 +347,74 @@ export async function POST(request: NextRequest) {
       .update(entityUpdate)
       .eq('id', entityId);
 
-    // Trigger incremental webhook for API-intake clients (e.g., ClearFirm)
-    // Send the HTML file path — use whichever path has the HTML content
+    // Trigger webhooks for API-intake clients (e.g., ClearFirm)
     const htmlPathForWebhook = transcriptFormat === 'html' && htmlStoragePath
-      ? htmlStoragePath          // HTML-preferring: HTML is in transcript_urls
-      : htmlStoragePath || null;  // PDF-preferring: HTML is in transcript_html_urls
+      ? htmlStoragePath
+      : htmlStoragePath || null;
 
-    if (htmlPathForWebhook && entity.request_id) {
-      triggerIncrementalWebhook(
-        supabase,
-        entity.request_id,
-        entityId,
-        entity.entity_name,
-        metadata.formType || entity.form_type || '',
-        htmlPathForWebhook
-      ).catch((err: any) => {
-        console.error('[batch-upload] Incremental webhook failed:', err);
+    if (entity.request_id) {
+      // Read raw HTML content for v3 structured webhook
+      let rawHtmlContent: string | undefined;
+      if (htmlPathForWebhook) {
+        try {
+          const { data: htmlBlob } = await supabase.storage
+            .from('uploads')
+            .download(htmlPathForWebhook);
+          if (htmlBlob) rawHtmlContent = await htmlBlob.text();
+        } catch (err) {
+          console.error('[batch-upload] Failed to read HTML for v3 webhook:', err);
+        }
+      }
+
+      // Build compliance data from metadata for v3 payload
+      const v3ComplianceData = metadata.compliance ? {
+        severity: metadata.compliance.severity,
+        flags: metadata.compliance.flags,
+        financials: {
+          grossReceipts: metadata.compliance.grossReceipts ?? null,
+          totalIncome: metadata.compliance.totalIncome ?? null,
+          totalDeductions: metadata.compliance.totalDeductions ?? null,
+          totalTax: metadata.compliance.totalTax ?? null,
+          accountBalance: metadata.compliance.accountBalance ?? null,
+          accruedInterest: metadata.compliance.accruedInterest ?? null,
+          accruedPenalty: metadata.compliance.accruedPenalty ?? null,
+        },
+      } : null;
+
+      // v3 structured webhook (primary — structured JSON + raw HTML)
+      const v3Context: TranscriptUploadContext = {
+        requestToken: '', // will be resolved from DB
+        entity: {
+          ...entity,
+          id: entityId,
+          request_id: entity.request_id,
+          gross_receipts: (entity as any).gross_receipts || null,
+        },
+        formType: metadata.formType || entity.form_type || '',
+        taxYear: metadata.taxYear || '',
+        transcriptCategory: metadata.transcriptCategory,
+        complianceData: v3ComplianceData,
+        entityData: metadata.entityData || null,
+        rawHtml: rawHtmlContent,
+      };
+
+      triggerV3Webhook(supabase, v3Context).catch((err: any) => {
+        console.error('[batch-upload] V3 webhook failed:', err);
       });
+
+      // v2 incremental webhook (backward-compat — raw HTML only)
+      if (htmlPathForWebhook) {
+        triggerIncrementalWebhook(
+          supabase,
+          entity.request_id,
+          entityId,
+          entity.entity_name,
+          metadata.formType || entity.form_type || '',
+          htmlPathForWebhook
+        ).catch((err: any) => {
+          console.error('[batch-upload] V2 incremental webhook failed:', err);
+        });
+      }
     }
 
     // Update assignment status to in_progress if still assigned

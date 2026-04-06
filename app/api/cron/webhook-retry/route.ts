@@ -11,6 +11,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { deliverWebhook } from '@/lib/webhook';
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
       .eq('status', 'failed')
       .lte('next_retry_at', new Date().toISOString())
       .order('next_retry_at', { ascending: true })
-      .limit(20); // Process up to 20 per run to avoid timeout
+      .limit(50); // Process up to 50 per run (runs every 5 min)
 
     if (failedError) {
       console.error('[webhook-retry] Failed to fetch deliveries:', failedError);
@@ -50,7 +52,7 @@ export async function GET(request: NextRequest) {
       .select('id, request_id, webhook_url, attempts, max_attempts, last_error')
       .eq('status', 'pending')
       .lt('created_at', sixtySecondsAgo)
-      .limit(10);
+      .limit(20);
 
     const allDeliveries = [
       ...(failedDeliveries || []),
@@ -73,9 +75,25 @@ export async function GET(request: NextRequest) {
     let dead = 0;
     const errors: { deliveryId: string; error: string }[] = [];
 
-    for (const delivery of allDeliveries) {
-      try {
-        const result = await deliverWebhook(supabase, delivery.id);
+    // Process deliveries in parallel batches of 5 to avoid timeout
+    const BATCH_CONCURRENCY = 5;
+    for (let i = 0; i < allDeliveries.length; i += BATCH_CONCURRENCY) {
+      const batch = allDeliveries.slice(i, i + BATCH_CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map(async (delivery) => {
+          const result = await deliverWebhook(supabase, delivery.id);
+          return { delivery, result };
+        })
+      );
+
+      for (const settled of results) {
+        if (settled.status === 'rejected') {
+          const errorMessage = settled.reason instanceof Error ? settled.reason.message : 'Unknown error';
+          errors.push({ deliveryId: 'unknown', error: errorMessage });
+          continue;
+        }
+
+        const { delivery, result } = settled.value;
         retried++;
 
         if (result.success) {
@@ -91,53 +109,54 @@ export async function GET(request: NextRequest) {
 
           if (updated?.status === 'dead') {
             dead++;
-
-            // Send admin alert for dead deliveries
-            try {
-              const { data: admins } = await supabase
-                .from('profiles')
-                .select('email')
-                .eq('role', 'admin');
-
-              if (admins && admins.length > 0) {
-                const sgMail = require('@sendgrid/mail');
-                sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
-                for (const admin of admins) {
-                  await sgMail.send({
-                    to: admin.email,
-                    from: {
-                      email: process.env.SENDGRID_FROM_EMAIL || 'alerts@moderntax.io',
-                      name: 'ModernTax Alerts',
-                    },
-                    subject: `⚠️ Webhook Delivery Failed — Request ${delivery.request_id}`,
-                    html: `
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <div style="background: #dc2626; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
-    <h2 style="margin: 0;">Webhook Delivery Failed</h2>
-  </div>
-  <div style="padding: 24px; background: white; border: 1px solid #e5e7eb;">
-    <p>A webhook delivery has permanently failed after ${delivery.max_attempts || 3} attempts.</p>
-    <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-      <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">Request ID</td><td style="padding: 8px;">${delivery.request_id}</td></tr>
-      <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">Webhook URL</td><td style="padding: 8px;">${delivery.webhook_url}</td></tr>
-      <tr><td style="padding: 8px; font-weight: bold; color: #6b7280;">Delivery ID</td><td style="padding: 8px;">${delivery.id}</td></tr>
-    </table>
-    <p>Check the <code>webhook_deliveries</code> table for error details. You may need to manually resend this webhook or contact the API client.</p>
-  </div>
-</div>`.trim(),
-                  });
-                }
-              }
-            } catch (alertErr) {
-              console.error(`[webhook-retry] Failed to send admin alert for ${delivery.id}:`, alertErr);
-            }
           }
         }
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        console.error(`[webhook-retry] Error retrying ${delivery.id}:`, errorMessage);
-        errors.push({ deliveryId: delivery.id, error: errorMessage });
+      }
+    }
+
+    // Send a single batched admin alert for all dead deliveries (instead of per-delivery loop)
+    if (dead > 0) {
+      try {
+        const { data: admins } = await supabase
+          .from('profiles')
+          .select('email')
+          .eq('role', 'admin');
+
+        if (admins && admins.length > 0) {
+          const sgMail = require('@sendgrid/mail');
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+          // Build a single summary email
+          const deadDeliveryIds = allDeliveries
+            .slice(0, 10) // Cap at 10 IDs in the email
+            .map((d) => d.id)
+            .join(', ');
+
+          const alertPromises = admins.map((admin: any) =>
+            sgMail.send({
+              to: admin.email,
+              from: {
+                email: process.env.SENDGRID_FROM_EMAIL || 'alerts@moderntax.io',
+                name: 'ModernTax Alerts',
+              },
+              subject: `Webhook Delivery Alert — ${dead} dead delivery(ies)`,
+              html: `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+  <div style="background: #dc2626; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+    <h2 style="margin: 0;">Webhook Deliveries Failed</h2>
+  </div>
+  <div style="padding: 24px; background: white; border: 1px solid #e5e7eb;">
+    <p><strong>${dead}</strong> webhook delivery(ies) permanently failed after max retries.</p>
+    <p style="color: #6b7280; font-size: 14px;">Delivery IDs: ${deadDeliveryIds}</p>
+    <p>Check the <code>webhook_deliveries</code> table for error details. You may need to manually resend or contact the API client.</p>
+  </div>
+</div>`.trim(),
+            }).catch((err: any) => console.error(`[webhook-retry] Alert to ${admin.email} failed:`, err))
+          );
+          await Promise.all(alertPromises);
+        }
+      } catch (alertErr) {
+        console.error(`[webhook-retry] Failed to send admin alerts:`, alertErr);
       }
     }
 

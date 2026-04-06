@@ -11,6 +11,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
@@ -175,7 +177,8 @@ export async function GET(request: NextRequest) {
     });
 
     // Max outstanding assignments per expert before they stop receiving new ones
-    const MAX_ACTIVE_ASSIGNMENTS = 5;
+    // Raised from 5 → 20 to support 50 req/hour throughput at scale
+    const MAX_ACTIVE_ASSIGNMENTS = 20;
 
     let assigned = 0;
     let capacityBlocked = 0;
@@ -254,20 +257,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Send batch notifications per expert
-    for (const [, expertData] of expertAssignmentMap) {
-      try {
-        const hasEmployment = expertData.isEmployment.some((v) => v);
-        await sendExpertAssignmentNotification(
-          expertData.email,
-          expertData.entityNames,
-          expertData.entityNames.length,
-          hasEmployment
-        );
-      } catch (notifErr) {
-        console.error(`[auto-assign] Notification error for ${expertData.email}:`, notifErr);
+    // Send batch notifications per expert (parallelized to avoid timeout)
+    const notificationPromises = Array.from(expertAssignmentMap.values()).map(
+      async (expertData) => {
+        try {
+          const hasEmployment = expertData.isEmployment.some((v) => v);
+          await sendExpertAssignmentNotification(
+            expertData.email,
+            expertData.entityNames,
+            expertData.entityNames.length,
+            hasEmployment
+          );
+        } catch (notifErr) {
+          console.error(`[auto-assign] Notification error for ${expertData.email}:`, notifErr);
+        }
       }
-    }
+    );
+    await Promise.all(notificationPromises);
 
     return NextResponse.json({
       success: true,

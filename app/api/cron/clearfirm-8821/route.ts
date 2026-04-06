@@ -60,6 +60,8 @@ function getDesignee(entity: any): typeof DESIGNEES.default {
   return DESIGNEES.default;
 }
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET

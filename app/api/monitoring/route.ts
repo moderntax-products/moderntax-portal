@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 
 const ENROLLMENT_FEE = 19.99;
 const PER_PULL_FEE = 39.99;
@@ -185,6 +186,94 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create subscription', details: insertError.message }, { status: 500 });
     }
 
+    // --- Trigger immediate first pull ---
+    // Find expert with fewest active assignments (round-robin)
+    let immediateAssignment: any = null;
+    try {
+      const { data: experts } = await adminSupabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('role', 'expert');
+
+      if (experts && experts.length > 0) {
+        const { data: assignmentCounts } = await adminSupabase
+          .from('expert_assignments')
+          .select('expert_id')
+          .in('status', ['assigned', 'in_progress']);
+
+        const countByExpert = new Map<string, number>();
+        experts.forEach((e: any) => countByExpert.set(e.id, 0));
+        (assignmentCounts || []).forEach((a: any) => {
+          const current = countByExpert.get(a.expert_id) || 0;
+          countByExpert.set(a.expert_id, current + 1);
+        });
+
+        const sortedExperts = experts.sort(
+          (a: any, b: any) => (countByExpert.get(a.id) || 0) - (countByExpert.get(b.id) || 0)
+        );
+        const selectedExpert = sortedExperts[0] as any;
+
+        // Create expert assignment with 48h SLA for monitoring
+        const slaDeadline = new Date();
+        slaDeadline.setHours(slaDeadline.getHours() + 48);
+
+        const { data: assignment, error: assignError } = await adminSupabase
+          .from('expert_assignments')
+          .insert({
+            entity_id: entityId,
+            expert_id: selectedExpert.id,
+            assigned_by: user.id,
+            sla_deadline: slaDeadline.toISOString(),
+            status: 'assigned',
+          })
+          .select()
+          .single();
+
+        if (!assignError && assignment) {
+          immediateAssignment = assignment;
+
+          // Set entity back to irs_queue so it shows in the feed
+          await adminSupabase
+            .from('request_entities')
+            .update({ status: 'irs_queue' })
+            .eq('id', entityId);
+
+          // Record in pull history
+          const today = new Date().toISOString().split('T')[0];
+          await adminSupabase
+            .from('entity_monitoring' as any)
+            .update({
+              last_pull_date: today,
+              total_pulls_completed: 1,
+              total_billed: ENROLLMENT_FEE + PER_PULL_FEE,
+              pull_history: [{
+                date: today,
+                status: 'queued',
+                transcript_count: 0,
+                assigned_to: selectedExpert.full_name || selectedExpert.email,
+                type: 'initial_enrollment',
+              }],
+            })
+            .eq('id', (subscription as any).id);
+
+          // Notify expert
+          try {
+            await sendExpertAssignmentNotification(
+              selectedExpert.email,
+              [entity.entity_name + ' (Monitoring — Initial Pull)'],
+              1
+            );
+          } catch (emailErr) {
+            console.error('Failed to send expert monitoring notification:', emailErr);
+          }
+        } else {
+          console.error('Failed to create immediate monitoring assignment:', assignError);
+        }
+      }
+    } catch (pullError) {
+      console.error('Immediate first pull failed (subscription still created):', pullError);
+    }
+
     await logAuditFromRequest(adminSupabase, request, {
       action: 'settings_changed',
       userId: user.id,
@@ -197,10 +286,18 @@ export async function POST(request: NextRequest) {
         next_pull_date: computedNextPull,
         enrollment_fee: ENROLLMENT_FEE,
         entity_name: entity.entity_name,
+        immediate_pull: !!immediateAssignment,
       },
     });
 
-    return NextResponse.json({ success: true, subscription });
+    return NextResponse.json({
+      success: true,
+      subscription,
+      immediatePull: immediateAssignment ? {
+        assignmentId: immediateAssignment.id,
+        status: 'Expert assigned for initial pull',
+      } : null,
+    });
   } catch (error) {
     console.error('Monitoring POST error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
