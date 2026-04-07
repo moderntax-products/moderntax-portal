@@ -473,66 +473,70 @@ export async function POST(request: NextRequest) {
         .update({ gross_receipts: updatedCompliance })
         .eq('id', entityId);
 
-      // Trigger upsell email for CRITICAL or WARNING findings
+      // Enroll in compliance drip sequence for CRITICAL or WARNING findings
       if (['CRITICAL', 'WARNING'].includes(metadata.compliance.severity)) {
         try {
-          // Get signer email from entity
+          const { classifyFlags, sendDripEmail } = require('@/lib/compliance-drip');
           const { data: fullEntity } = await supabase
             .from('request_entities')
-            .select('signer_email, entity_name, signer_first_name')
+            .select('signer_email, entity_name, signer_first_name, gross_receipts')
             .eq('id', entityId)
             .single() as { data: any; error: any };
 
           if (fullEntity?.signer_email) {
-            const sgMail = require('@sendgrid/mail');
-            sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+            const classification = classifyFlags(fullEntity.gross_receipts || updatedCompliance);
 
-            const criticalFlags = metadata.compliance.flags
-              .filter((f: any) => f.severity === 'CRITICAL')
-              .map((f: any) => `<li style="color: #dc2626; margin: 4px 0;">${f.message}</li>`)
-              .join('');
+            // Check if already enrolled
+            const { data: existing } = await supabase
+              .from('compliance_drip')
+              .select('id')
+              .eq('entity_id', entityId)
+              .single() as { data: any; error: any };
 
-            const warningFlags = metadata.compliance.flags
-              .filter((f: any) => f.severity === 'WARNING')
-              .map((f: any) => `<li style="color: #d97706; margin: 4px 0;">${f.message}</li>`)
-              .join('');
+            if (!existing) {
+              // Create drip record and send first email immediately
+              const { data: drip } = await (supabase
+                .from('compliance_drip' as any)
+                .insert({
+                  entity_id: entityId,
+                  flag_category: classification.category,
+                  flag_severity: classification.severity,
+                  balance_due: classification.balanceDue || null,
+                  accrued_penalty: classification.penalty || null,
+                  accrued_interest: classification.interest || null,
+                  total_exposure: classification.totalExposure || null,
+                  drip_stage: 0,
+                  next_email_due_at: new Date().toISOString(),
+                  signer_email: fullEntity.signer_email,
+                  signer_name: fullEntity.signer_first_name || null,
+                  entity_name: fullEntity.entity_name,
+                })
+                .select('*')
+                .single()) as { data: any; error: any };
 
-            const signerName = fullEntity.signer_first_name || fullEntity.entity_name || 'there';
-            const bookingUrl = 'https://meetings.hubspot.com/matt-moderntax/moderntax-intro';
-
-            await sgMail.send({
-              to: fullEntity.signer_email,
-              from: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
-              subject: `Tax Compliance Alert: ${fullEntity.entity_name} — Action May Be Required`,
-              html: `
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <div style="background: #1a1a2e; color: white; padding: 24px; text-align: center; border-radius: 8px 8px 0 0;">
-    <h1 style="margin: 0; font-size: 22px;">Tax Compliance Review</h1>
-    <p style="margin: 8px 0 0; opacity: 0.8;">ModernTax</p>
-  </div>
-  <div style="padding: 32px 24px; background: #ffffff; border: 1px solid #e5e7eb;">
-    <p>Hi ${signerName},</p>
-    <p>During our routine IRS transcript verification for <strong>${fullEntity.entity_name}</strong>, we identified the following items that may require attention:</p>
-    ${criticalFlags ? `<div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin: 16px 0;"><h3 style="color: #dc2626; margin: 0 0 8px; font-size: 14px;">Critical Items</h3><ul style="margin: 0; padding-left: 20px;">${criticalFlags}</ul></div>` : ''}
-    ${warningFlags ? `<div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 16px 0;"><h3 style="color: #d97706; margin: 0 0 8px; font-size: 14px;">Warnings</h3><ul style="margin: 0; padding-left: 20px;">${warningFlags}</ul></div>` : ''}
-    <p>Our tax resolution team can help you address these items and get back into compliance. Schedule a free consultation:</p>
-    <div style="text-align: center; margin: 24px 0;">
-      <a href="${bookingUrl}" style="background: #16a34a; color: white; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 16px;">Book a Free Consultation</a>
-    </div>
-    <p style="color: #6b7280; font-size: 13px;">This is an automated review based on IRS transcript data. For questions, reply to this email.</p>
-  </div>
-  <div style="padding: 16px 24px; background: #f9fafb; border-radius: 0 0 8px 8px; border: 1px solid #e5e7eb; border-top: none; text-align: center;">
-    <p style="color: #9ca3af; font-size: 12px; margin: 0;">ModernTax — Tax Compliance & Resolution Services</p>
-  </div>
-</div>`.trim(),
-              replyTo: 'support@moderntax.io',
-            });
-
-            console.log(`[batch-upload] Upsell email sent to ${fullEntity.signer_email} for ${fullEntity.entity_name} (${metadata.compliance.severity})`);
+              if (drip) {
+                // Send Stage 0 email immediately
+                const sent = await sendDripEmail(0, drip, classification.allFlags);
+                if (sent) {
+                  const nextDue = new Date();
+                  nextDue.setDate(nextDue.getDate() + 3); // Next email in 3 days
+                  await (supabase
+                    .from('compliance_drip' as any)
+                    .update({
+                      email_0_sent_at: new Date().toISOString(),
+                      last_email_sent_at: new Date().toISOString(),
+                      drip_stage: 1,
+                      next_email_due_at: nextDue.toISOString(),
+                    } as any)
+                    .eq('id', drip.id));
+                }
+                console.log(`[batch-upload] Enrolled ${fullEntity.entity_name} in compliance drip (${classification.category}, ${classification.severity})`);
+              }
+            }
           }
-        } catch (upsellErr) {
-          console.error('[batch-upload] Upsell email failed:', upsellErr);
-          // Don't fail the upload if upsell email fails
+        } catch (dripErr) {
+          console.error('[batch-upload] Compliance drip enrollment failed:', dripErr);
+          // Don't fail the upload if drip enrollment fails
         }
       }
     }

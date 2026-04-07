@@ -100,6 +100,22 @@ export default async function AdminPage({ searchParams }: PageProps) {
     return { ...e, hasCritical, flagCount };
   }).sort((a: any, b: any) => (a.hasCritical === b.hasCritical ? b.flagCount - a.flagCount : a.hasCritical ? -1 : 1));
 
+  // Fetch compliance drip funnel stats
+  const { data: dripRecords } = await supabase
+    .from('compliance_drip')
+    .select('*') as { data: any[] | null; error: any };
+
+  const dripStats = {
+    enrolled: (dripRecords || []).length,
+    emailsSent: (dripRecords || []).filter((d: any) => d.email_0_sent_at).length,
+    opened: (dripRecords || []).filter((d: any) => d.open_count > 0).length,
+    clicked: (dripRecords || []).filter((d: any) => d.click_count > 0).length,
+    landingVisits: (dripRecords || []).filter((d: any) => d.landing_page_visited_at).length,
+    booked: (dripRecords || []).filter((d: any) => d.consultation_booked).length,
+    resolved: (dripRecords || []).filter((d: any) => d.resolved).length,
+    unsubscribed: (dripRecords || []).filter((d: any) => d.unsubscribed).length,
+  };
+
   const getStuckDuration = (updatedAt: string) => {
     const diff = now.getTime() - new Date(updatedAt).getTime();
     const days = Math.floor(diff / (24 * 60 * 60 * 1000));
@@ -516,64 +532,109 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         )}
 
-        {/* Compliance Alerts */}
+        {/* Compliance Marketing Funnel */}
         {complianceFlaggedEntities.length > 0 && (
-          <div className="mb-12 bg-red-50 border border-red-300 rounded-lg p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
-              <h3 className="text-lg font-bold text-red-800">
-                Compliance Alerts ({complianceFlaggedEntities.length} entit{complianceFlaggedEntities.length === 1 ? 'y' : 'ies'})
-              </h3>
-              <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-900 text-xs font-bold rounded-full">
-                {complianceFlaggedEntities.filter((e: any) => e.hasCritical).length} Critical
-              </span>
-            </div>
-            <p className="text-sm text-red-700 mb-4">
-              These entities have IRS compliance flags detected during transcript processing. Upsell emails were auto-sent to signers.
-            </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-red-200">
-                    <th className="px-4 py-2 text-left font-semibold text-red-900">Entity</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-900">Client</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-900">Severity</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-900">Flags</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-900">Request</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-red-100">
-                  {complianceFlaggedEntities.slice(0, 20).map((entity: any) => (
-                    <tr key={entity.id}>
-                      <td className="px-4 py-2 font-medium text-red-900">{entity.entity_name}</td>
-                      <td className="px-4 py-2 text-red-800">{entity.requests?.clients?.name || '—'}</td>
-                      <td className="px-4 py-2">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
-                          entity.hasCritical ? 'bg-red-200 text-red-900' : 'bg-amber-200 text-amber-900'
-                        }`}>
-                          {entity.hasCritical ? 'CRITICAL' : 'WARNING'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 text-red-800 font-mono">{entity.flagCount}</td>
-                      <td className="px-4 py-2">
-                        <Link
-                          href={`/admin/requests/${entity.request_id}`}
-                          className="text-red-700 hover:text-red-900 underline font-medium"
-                        >
-                          {entity.requests?.loan_number || 'View'}
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {complianceFlaggedEntities.length > 20 && (
-                <p className="text-xs text-red-600 mt-2 px-4">
-                  Showing 20 of {complianceFlaggedEntities.length} flagged entities
-                </p>
+          <div className="mb-12 space-y-6">
+            {/* Funnel Stats */}
+            <div className="bg-gradient-to-r from-red-50 to-amber-50 border border-red-200 rounded-lg p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <h3 className="text-lg font-bold text-red-800">
+                  Compliance Marketing ({complianceFlaggedEntities.length} flagged entit{complianceFlaggedEntities.length === 1 ? 'y' : 'ies'})
+                </h3>
+                <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-900 text-xs font-bold rounded-full">
+                  {complianceFlaggedEntities.filter((e: any) => e.hasCritical).length} Critical
+                </span>
+              </div>
+
+              {/* Conversion Funnel */}
+              <div className="grid grid-cols-7 gap-2 mb-4">
+                {[
+                  { label: 'Flagged', value: complianceFlaggedEntities.length, color: 'bg-red-100 text-red-800 border-red-200' },
+                  { label: 'Enrolled', value: dripStats.enrolled, color: 'bg-red-100 text-red-700 border-red-200' },
+                  { label: 'Emailed', value: dripStats.emailsSent, color: 'bg-amber-100 text-amber-800 border-amber-200' },
+                  { label: 'Opened', value: dripStats.opened, color: 'bg-amber-100 text-amber-700 border-amber-200' },
+                  { label: 'Clicked', value: dripStats.clicked, color: 'bg-yellow-100 text-yellow-800 border-yellow-200' },
+                  { label: 'Page Visit', value: dripStats.landingVisits, color: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
+                  { label: 'Booked', value: dripStats.booked, color: 'bg-emerald-200 text-emerald-900 border-emerald-300' },
+                ].map((step, i) => (
+                  <div key={i} className={`${step.color} border rounded-lg p-3 text-center`}>
+                    <div className="text-2xl font-bold">{step.value}</div>
+                    <div className="text-xs font-medium mt-1">{step.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {dripStats.unsubscribed > 0 && (
+                <p className="text-xs text-red-600">{dripStats.unsubscribed} unsubscribed</p>
               )}
+            </div>
+
+            {/* Entity Table */}
+            <div className="bg-white border border-gray-200 rounded-lg p-6">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Flagged Entities</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Entity</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Client</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Severity</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Drip Stage</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Request</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {complianceFlaggedEntities.slice(0, 20).map((entity: any) => {
+                      const drip = (dripRecords || []).find((d: any) => d.entity_id === entity.id);
+                      const stageLabels = ['Enrolled', 'Day 3 Due', 'Day 7 Due', 'Day 14 Due', 'Complete'];
+                      return (
+                        <tr key={entity.id}>
+                          <td className="px-4 py-2 font-medium text-gray-900">{entity.entity_name}</td>
+                          <td className="px-4 py-2 text-gray-600">{entity.requests?.clients?.name || '—'}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                              entity.hasCritical ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {entity.hasCritical ? 'CRITICAL' : 'WARNING'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2">
+                            {drip ? (
+                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                                drip.consultation_booked ? 'bg-emerald-100 text-emerald-800' :
+                                drip.unsubscribed ? 'bg-gray-100 text-gray-500' :
+                                'bg-blue-100 text-blue-800'
+                              }`}>
+                                {drip.consultation_booked ? 'Booked' :
+                                 drip.unsubscribed ? 'Unsub' :
+                                 stageLabels[drip.drip_stage] || `Stage ${drip.drip_stage}`}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">Not enrolled</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2">
+                            <Link
+                              href={`/admin/requests/${entity.request_id}`}
+                              className="text-blue-600 hover:text-blue-800 underline font-medium"
+                            >
+                              {entity.requests?.loan_number || 'View'}
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {complianceFlaggedEntities.length > 20 && (
+                  <p className="text-xs text-gray-500 mt-2 px-4">
+                    Showing 20 of {complianceFlaggedEntities.length} flagged entities
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
