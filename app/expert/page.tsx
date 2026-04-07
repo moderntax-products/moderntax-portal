@@ -3,6 +3,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import { ExpertAssignmentCard } from '@/components/ExpertAssignmentCard';
+import { IrsCallLauncher } from '@/components/IrsCallLauncher';
+import { IrsCallStatusPanel } from '@/components/IrsCallStatusPanel';
+import { IrsCallHistory } from '@/components/IrsCallHistory';
 import { LogoutButton } from '@/components/LogoutButton';
 import { useRouter } from 'next/navigation';
 
@@ -35,8 +38,41 @@ export default function ExpertDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null } | null>(null);
+  const [activeTab, setActiveTab] = useState<'assignments' | 'call-history'>('assignments');
+  const [selectedForCall, setSelectedForCall] = useState<{ id: string; entityName: string; entityId: string }[]>([]);
+  const [activeCallSessionId, setActiveCallSessionId] = useState<string | null>(null);
   const supabase = createClient();
   const router = useRouter();
+
+  // Check for active IRS call on load
+  useEffect(() => {
+    async function checkActiveCall() {
+      try {
+        const res = await fetch('/api/expert/irs-call/history?limit=1');
+        if (res.ok) {
+          const data = await res.json();
+          const activeSessions = (data.sessions || []).filter((s: any) =>
+            ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'].includes(s.status)
+          );
+          if (activeSessions.length > 0) {
+            setActiveCallSessionId(activeSessions[0].id);
+          }
+        }
+      } catch (err) {
+        // Non-fatal
+      }
+    }
+    checkActiveCall();
+  }, []);
+
+  const handleToggleSelect = (id: string, entityName: string, entityId: string) => {
+    setSelectedForCall(prev => {
+      const exists = prev.find(s => s.id === id);
+      if (exists) return prev.filter(s => s.id !== id);
+      if (prev.length >= 5) return prev; // Max 5
+      return [...prev, { id, entityName, entityId }];
+    });
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -225,6 +261,51 @@ export default function ExpertDashboard() {
           </div>
         </div>
 
+        {/* IRS Call Status Panel (when call is active) */}
+        {activeCallSessionId && (
+          <IrsCallStatusPanel
+            sessionId={activeCallSessionId}
+            onCallEnded={() => { setActiveCallSessionId(null); fetchData(); }}
+          />
+        )}
+
+        {/* Tab Navigation */}
+        <div className="flex border-b border-gray-200 mb-6">
+          <button
+            onClick={() => setActiveTab('assignments')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'assignments'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Assignments
+          </button>
+          <button
+            onClick={() => setActiveTab('call-history')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'call-history'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            IRS Call History
+          </button>
+        </div>
+
+        {activeTab === 'call-history' ? (
+          <IrsCallHistory />
+        ) : (
+        <>
+
+        {/* IRS Call Launcher (multi-entity selection) */}
+        <IrsCallLauncher
+          selectedAssignments={selectedForCall}
+          onCallStarted={(sessionId) => { setActiveCallSessionId(sessionId); setSelectedForCall([]); }}
+          onClearSelection={() => setSelectedForCall([])}
+          activeCallSessionId={activeCallSessionId}
+        />
+
         {/* IRS Direct Upload — Primary Workflow */}
         {assignments.length > 0 && (
           <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg p-6 mb-8">
@@ -340,6 +421,9 @@ export default function ExpertDashboard() {
                 key={assignment.id}
                 assignment={assignment}
                 onRefresh={fetchData}
+                selectable={!activeCallSessionId}
+                selected={selectedForCall.some(s => s.id === assignment.id)}
+                onToggleSelect={handleToggleSelect}
               />
             ))
           )}
@@ -377,6 +461,9 @@ export default function ExpertDashboard() {
               );
             })}
           </div>
+        )}
+
+        </>
         )}
       </div>
     </div>

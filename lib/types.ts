@@ -389,6 +389,78 @@ export interface MonitoringSubscription {
 }
 
 /**
+ * IRS Call Session — One phone call to IRS PPS (can cover multiple entities)
+ */
+export type IrsCallStatus = 'scheduled' | 'initiating' | 'ringing' | 'navigating_ivr' | 'on_hold' | 'speaking_to_agent' | 'completed' | 'failed' | 'cancelled';
+
+export type IrsCallOutcome =
+  | 'transcripts_requested'
+  | 'transcripts_verbal'
+  | 'caf_not_on_file'
+  | 'no_8821_on_file'
+  | '8821_esig_rejected'
+  | 'name_mismatch'
+  | 'taxpayer_not_found'
+  | 'fax_sent'
+  | 'pending_callback'
+  | 'skipped'
+  | 'other';
+
+export interface IrsCallSession {
+  id: string;
+  expert_id: string;
+  bland_call_id: string | null;
+  status: IrsCallStatus;
+  scheduled_for: string | null;
+  scheduled_timezone: string | null;
+  caf_number: string;
+  expert_name: string;
+  expert_fax: string | null;
+  expert_sor_id: string | null;
+  irs_agent_name: string | null;
+  irs_agent_badge: string | null;
+  initiated_at: string;
+  connected_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  hold_duration_seconds: number | null;
+  recording_url: string | null;
+  recording_storage_path: string | null;
+  transcript_json: { role: string; text: string; timestamp: number }[] | null;
+  concatenated_transcript: string | null;
+  call_summary: string | null;
+  cost_per_minute: number;
+  estimated_cost: number | null;
+  error_message: string | null;
+  coaching_tags: string[] | null;
+  coaching_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IrsCallEntity {
+  id: string;
+  call_session_id: string;
+  assignment_id: string;
+  entity_id: string;
+  taxpayer_tid: string;
+  taxpayer_name: string;
+  form_type: string;
+  tax_years: string[];
+  outcome: IrsCallOutcome | null;
+  outcome_notes: string | null;
+  fax_sent: boolean;
+  fax_number_used: string | null;
+  transcript_start_index: number | null;
+  transcript_end_index: number | null;
+  created_at: string;
+}
+
+export interface IrsCallSessionWithEntities extends IrsCallSession {
+  irs_call_entities: IrsCallEntity[];
+}
+
+/**
  * CSV row from Centerstone XLSX upload
  */
 export interface CsvRow {

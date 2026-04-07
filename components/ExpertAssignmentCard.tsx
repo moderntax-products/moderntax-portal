@@ -30,6 +30,10 @@ interface AssignmentCardProps {
     };
   };
   onRefresh: () => void;
+  /** IRS call multi-select */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string, entityName: string, entityId: string) => void;
 }
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -39,7 +43,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   failed: { label: 'Failed', color: 'bg-red-100 text-red-800' },
 };
 
-export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardProps) {
+export function ExpertAssignmentCard({ assignment, onRefresh, selectable, selected, onToggleSelect }: AssignmentCardProps) {
   const [showUpload, setShowUpload] = useState(false);
   const [showFlag, setShowFlag] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
@@ -97,6 +101,15 @@ export function ExpertAssignmentCard({ assignment, onRefresh }: AssignmentCardPr
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-100">
         <div className="flex items-center gap-3">
+          {selectable && ['assigned', 'in_progress'].includes(assignment.status) && (
+            <input
+              type="checkbox"
+              checked={selected || false}
+              onChange={() => onToggleSelect?.(assignment.id, entity.entity_name, entity.id)}
+              className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
+              title="Select for IRS PPS call"
+            />
+          )}
           <h3 className="font-semibold text-gray-900">{entity.entity_name}</h3>
           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.color}`}>
             {statusInfo.label}
