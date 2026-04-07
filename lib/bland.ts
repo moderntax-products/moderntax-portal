@@ -89,7 +89,7 @@ ${entityList}
 
 PHONE TREE NAVIGATION:
 - When the automated system answers, press 1 for English.
-- Press 1 for account-related inquiries.
+- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
 - If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
 - If offered a callback option, decline it and stay on hold.
 - Wait patiently on hold until a live IRS agent answers.

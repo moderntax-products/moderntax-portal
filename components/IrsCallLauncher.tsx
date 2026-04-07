@@ -52,13 +52,24 @@ export function IrsCallLauncher({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-
       if (!res.ok) {
-        setError(data.error || 'Failed to initiate call');
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const errData = await res.json();
+          errorMsg = errData.error || errorMsg;
+        } catch {
+          // Response wasn't JSON (e.g. Vercel error page)
+          const text = await res.text().catch(() => '');
+          if (text.length > 0) {
+            errorMsg = `Server error (${res.status}): non-JSON response`;
+          }
+        }
+        setError(errorMsg);
         setShowConfirm(false);
         return;
       }
+
+      const data = await res.json();
 
       if (data.status === 'scheduled') {
         setScheduleSuccess(`Call scheduled for ${new Date(data.scheduledFor).toLocaleString()}`);
@@ -70,7 +81,8 @@ export function IrsCallLauncher({
         onClearSelection();
       }
     } catch (err) {
-      setError('Network error. Please try again.');
+      console.error('IRS call error:', err);
+      setError(err instanceof Error ? `Network error: ${err.message}` : 'Network error. Please try again.');
     } finally {
       setInitiating(false);
     }
