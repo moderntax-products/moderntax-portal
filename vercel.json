@@ -62,7 +62,7 @@
     },
     {
       "path": "/api/cron/irs-call-scheduler",
-      "schedule": "*/5 7-23 * * 1-5"
+      "schedule": "0 14 * * 1-5"
     }
   ],
   "headers": [
