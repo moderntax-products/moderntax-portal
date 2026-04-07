@@ -26,11 +26,11 @@
     },
     {
       "path": "/api/cron/auto-assign-experts",
-      "schedule": "0 */2 * * *"
+      "schedule": "0 11 * * *"
     },
     {
       "path": "/api/cron/auto-complete-requests",
-      "schedule": "0 */2 * * *"
+      "schedule": "0 17 * * *"
     },
     {
       "path": "/api/cron/stuck-entity-alert",
@@ -46,7 +46,7 @@
     },
     {
       "path": "/api/cron/webhook-retry",
-      "schedule": "0 */2 * * *"
+      "schedule": "0 18 * * *"
     },
     {
       "path": "/api/cron/monitoring-repull",
