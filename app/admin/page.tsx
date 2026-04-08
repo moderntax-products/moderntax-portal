@@ -343,67 +343,69 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-mt-dark">Admin Dashboard</h1>
-            <p className="text-gray-600 mt-1">Cross-client overview and management</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/admin/billing"
-              className="px-4 py-2 text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
-            >
-              Billing
-            </Link>
-            <Link
-              href="/admin/email-intake"
-              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Email Intake
-            </Link>
-            <Link
-              href="/admin/analytics"
-              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Analytics
-            </Link>
-            <Link
-              href="/admin/experts"
-              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              IRS Experts
-            </Link>
-            <Link
-              href="/admin/clearfirm-bot"
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors"
-            >
-              Clearfirm Bot
-            </Link>
-            <Link
-              href="/admin/team"
-              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Team
-            </Link>
-            <Link
-              href="/"
-              className="text-gray-600 hover:text-gray-900 font-medium text-sm"
-            >
-              Dashboard
-            </Link>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-mt-dark">Admin Dashboard</h1>
+              <p className="text-gray-600 text-sm mt-1">Cross-client overview and management</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Link
+                href="/admin/billing"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
+              >
+                Billing
+              </Link>
+              <Link
+                href="/admin/email-intake"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Email Intake
+              </Link>
+              <Link
+                href="/admin/analytics"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Analytics
+              </Link>
+              <Link
+                href="/admin/experts"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                IRS Experts
+              </Link>
+              <Link
+                href="/admin/clearfirm-bot"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors"
+              >
+                Clearfirm Bot
+              </Link>
+              <Link
+                href="/admin/team"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Team
+              </Link>
+              <Link
+                href="/"
+                className="text-gray-600 hover:text-gray-900 font-medium text-xs sm:text-sm"
+              >
+                Dashboard
+              </Link>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-12">
         {/* System-wide Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-          <div className="bg-white rounded-lg shadow p-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 mb-8 sm:mb-12">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Total Entities</p>
-                <p className="text-3xl font-bold text-mt-dark mt-2">{totalStats.total}</p>
+                <p className="text-gray-600 text-xs sm:text-sm font-medium">Total Entities</p>
+                <p className="text-2xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{totalStats.total}</p>
               </div>
               <div className="p-3 bg-mt-green bg-opacity-10 rounded-lg">
                 <svg className="w-6 h-6 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -413,11 +415,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Completed</p>
-                <p className="text-3xl font-bold text-green-600 mt-2">{totalStats.completed}</p>
+                <p className="text-gray-600 text-xs sm:text-sm font-medium">Completed</p>
+                <p className="text-2xl sm:text-3xl font-bold text-green-600 mt-1 sm:mt-2">{totalStats.completed}</p>
               </div>
               <div className="p-3 bg-green-100 rounded-lg">
                 <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -427,11 +429,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Pending</p>
-                <p className="text-3xl font-bold text-yellow-600 mt-2">{totalStats.pending}</p>
+                <p className="text-gray-600 text-xs sm:text-sm font-medium">Pending</p>
+                <p className="text-2xl sm:text-3xl font-bold text-yellow-600 mt-1 sm:mt-2">{totalStats.pending}</p>
               </div>
               <div className="p-3 bg-yellow-100 rounded-lg">
                 <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -441,11 +443,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-600 text-sm font-medium">Failed</p>
-                <p className="text-3xl font-bold text-red-600 mt-2">{totalStats.failed}</p>
+                <p className="text-gray-600 text-xs sm:text-sm font-medium">Failed</p>
+                <p className="text-2xl sm:text-3xl font-bold text-red-600 mt-1 sm:mt-2">{totalStats.failed}</p>
               </div>
               <div className="p-3 bg-red-100 rounded-lg">
                 <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -457,37 +459,37 @@ export default async function AdminPage({ searchParams }: PageProps) {
         </div>
 
         {/* Billing & Revenue Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-12">
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-mt-green">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-12">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-mt-green">
             <p className="text-gray-600 text-sm font-medium">{prevMonthLabel} Revenue</p>
-            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenuePrev)}</p>
+            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenuePrev)}</p>
             <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesPrev} billable entities</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-300">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-emerald-300">
             <p className="text-gray-600 text-sm font-medium">{currentMonthLabel} Revenue</p>
-            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueCurrent)}</p>
+            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenueCurrent)}</p>
             <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesCurrent} billable entities</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-yellow-400">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-yellow-400">
             <p className="text-gray-600 text-sm font-medium">Outstanding AR</p>
-            <p className="text-3xl font-bold text-yellow-600 mt-2">{formatCurrency(outstandingAR)}</p>
+            <p className="text-xl sm:text-3xl font-bold text-yellow-600 mt-1 sm:mt-2">{formatCurrency(outstandingAR)}</p>
             <p className="text-xs text-gray-400 mt-1">Sent &amp; awaiting payment</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-400">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-red-400">
             <p className="text-gray-600 text-sm font-medium">Overdue</p>
-            <p className={`text-3xl font-bold mt-2 ${overdueAR > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(overdueAR)}</p>
+            <p className={`text-xl sm:text-3xl font-bold mt-1 sm:mt-2 ${overdueAR > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(overdueAR)}</p>
             <p className="text-xs text-gray-400 mt-1">{overdueInvoices} overdue invoice{overdueInvoices !== 1 ? 's' : ''}</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-400">
+          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-blue-400">
             <p className="text-gray-600 text-sm font-medium">All-Time Revenue</p>
-            <p className="text-3xl font-bold text-mt-dark mt-2">{formatCurrency(totalRevenueAllTime)}</p>
+            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenueAllTime)}</p>
             <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesAllTime} entities total</p>
           </div>
         </div>
 
         {/* Stuck Entities Warning */}
         {stuckEntities.length > 0 && (
-          <div className="mb-12 bg-amber-50 border border-amber-300 rounded-lg p-6">
+          <div className="mb-8 sm:mb-12 bg-amber-50 border border-amber-300 rounded-lg p-4 sm:p-6">
             <div className="flex items-center gap-2 mb-4">
               <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
@@ -550,7 +552,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </div>
 
               {/* Conversion Funnel */}
-              <div className="grid grid-cols-7 gap-2 mb-4">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-4">
                 {[
                   { label: 'Flagged', value: complianceFlaggedEntities.length, color: 'bg-red-100 text-red-800 border-red-200' },
                   { label: 'Enrolled', value: dripStats.enrolled, color: 'bg-red-100 text-red-700 border-red-200' },
@@ -641,22 +643,22 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
         {/* Client Stats */}
         <div className="mb-12">
-          <h2 className="text-2xl font-bold text-mt-dark mb-6">Client Overview</h2>
+          <h2 className="text-xl sm:text-2xl font-bold text-mt-dark mb-4 sm:mb-6">Client Overview</h2>
           <div className="bg-white rounded-lg shadow overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Client</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Free Trial</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Total</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completed</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Pending</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Failed</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">API Usage</th>
-                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Revenue ({prevMonthLabel})</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Payment</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completion Rate</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Client</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Free Trial</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Total</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Done</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Pending</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Failed</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden lg:table-cell">API Usage</th>
+                    <th className="px-3 sm:px-6 py-3 text-right text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Revenue</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden lg:table-cell">Payment</th>
+                    <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Completion</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -666,25 +668,25 @@ export default async function AdminPage({ searchParams }: PageProps) {
                     const clientObj = clients?.find((c) => c.id === clientId);
                     return (
                       <tr key={clientId} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4 font-semibold text-mt-dark">{stats.name}</td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 font-semibold text-xs sm:text-sm text-mt-dark">{stats.name}</td>
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden sm:table-cell">
                           <FreeTrialToggle
                             clientId={clientId}
                             clientName={stats.name}
                             initialValue={clientObj?.free_trial ?? true}
                           />
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">{stats.total}</td>
-                        <td className="px-6 py-4">
-                          <span className="text-sm font-medium text-green-600">{stats.completed}</span>
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm text-gray-600">{stats.total}</td>
+                        <td className="px-3 sm:px-6 py-3 sm:py-4">
+                          <span className="text-xs sm:text-sm font-medium text-green-600">{stats.completed}</span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
                           <span className="text-sm font-medium text-yellow-600">{stats.pending}</span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
                           <span className="text-sm font-medium text-red-600">{stats.failed}</span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden lg:table-cell">
                           {stats.api_key ? (
                             <span className="text-sm text-gray-700">
                               {stats.employment_count}
@@ -696,17 +698,17 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             <span className="text-xs text-gray-400">—</span>
                           )}
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 text-right hidden sm:table-cell">
                           {(clientRevenuePrev[clientId] || 0) > 0 ? (
                             <div>
-                              <span className="text-sm font-bold text-mt-dark">{formatCurrency(clientRevenuePrev[clientId] || 0)}</span>
+                              <span className="text-xs sm:text-sm font-bold text-mt-dark">{formatCurrency(clientRevenuePrev[clientId] || 0)}</span>
                               <p className="text-xs text-gray-400">{clientRevenueEntitiesPrev[clientId] || 0} entities</p>
                             </div>
                           ) : (
                             <span className="text-xs text-gray-400">$0.00</span>
                           )}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden lg:table-cell">
                           {clientObj?.billing_payment_method ? (
                             <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
                               {clientObj.billing_payment_method.toUpperCase()}
@@ -715,7 +717,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             <span className="text-xs text-gray-400">Not set</span>
                           )}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
                           <div className="flex items-center gap-2">
                             <div className="w-24 bg-gray-200 rounded-full h-2">
                               <div
@@ -738,8 +740,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
         {/* Recent Invoices */}
         {(allInvoices || []).length > 0 && (
           <div className="mb-12">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold text-mt-dark">Recent Invoices</h2>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+              <h2 className="text-xl sm:text-2xl font-bold text-mt-dark">Recent Invoices</h2>
               <Link
                 href="/admin/billing"
                 className="text-sm font-medium text-mt-green hover:underline"
@@ -797,8 +799,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
         {/* All Requests */}
         <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-mt-dark">All Requests</h2>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <h2 className="text-xl sm:text-2xl font-bold text-mt-dark">All Requests</h2>
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
               {(() => {
                 const baseParams = new URLSearchParams();
@@ -851,8 +853,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
 
           {/* Search and Status Filter */}
-          <div className="flex items-center gap-4 mb-6">
-            <form className="flex items-center gap-4 flex-1">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 mb-6">
+            <form className="flex items-center gap-2 sm:gap-4 flex-1">
               {productTypeFilter && productTypeFilter !== 'all' && (
                 <input type="hidden" name="type" value={productTypeFilter} />
               )}
@@ -924,25 +926,25 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Client</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Type</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Account</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entity Names</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Progress</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Submitted</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Action</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Client</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Type</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Account</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Status</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden lg:table-cell">Entity Names</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden sm:table-cell">Progress</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700 hidden md:table-cell">Submitted</th>
+                      <th className="px-3 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-700">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {filteredRequests.map((request: any) => (
                       <tr key={request.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <span className="text-sm font-medium text-gray-700">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4">
+                          <span className="text-xs sm:text-sm font-medium text-gray-700">
                             {request.clients?.name || 'Unknown'}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
                           <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
                             request.product_type === 'employment'
                               ? 'bg-indigo-100 text-indigo-700'
@@ -951,10 +953,10 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             {request.product_type === 'employment' ? 'Employment' : 'Transcript'}
                           </span>
                         </td>
-                        <td className="px-6 py-4">
-                          <code className="text-sm font-mono text-mt-dark">{request.loan_number}</code>
+                        <td className="px-3 sm:px-6 py-3 sm:py-4">
+                          <code className="text-xs sm:text-sm font-mono text-mt-dark">{request.loan_number}</code>
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4">
                           {(() => {
                             const entities = request.request_entities || [];
                             const completedCount = entities.filter((e: any) => e.status === 'completed').length;
@@ -968,7 +970,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             );
                           })()}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 hidden lg:table-cell">
                           {(() => {
                             const entities = request.request_entities || [];
                             if (entities.length === 0) return <span className="text-xs text-gray-400">None</span>;
@@ -998,7 +1000,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             );
                           })()}
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 text-sm text-gray-600 hidden sm:table-cell">
                           {(() => {
                             const entities = request.request_entities || [];
                             const completedCount = entities.filter((e: any) => e.status === 'completed').length;
@@ -1011,10 +1013,10 @@ export default async function AdminPage({ searchParams }: PageProps) {
                             );
                           })()}
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 text-sm text-gray-600 hidden md:table-cell">
                           {formatDate(request.created_at)}
                         </td>
-                        <td className="px-6 py-4 flex gap-2">
+                        <td className="px-3 sm:px-6 py-3 sm:py-4 flex gap-2">
                           <Link
                             href={`/admin/requests/${request.id}`}
                             className="text-mt-green hover:underline font-medium text-sm"
