@@ -130,68 +130,70 @@ IMPORTANT RULES:
 }
 
 /**
- * Build task prompt for hold-and-transfer mode.
- * AI navigates the IRS phone tree, waits on hold, and when a live agent answers,
- * transfers the call to the expert's personal phone.
+ * Build adaptive IRS PPS prompt.
+ * AI navigates phone tree, listens for estimated wait time, then decides:
+ * - Wait ≤ 15 min → hold and transfer to expert when agent answers
+ * - Wait > 15 min + callback offered → accept callback to expert's phone
+ * Reports status via notify_status tool at every stage for real-time SLA tracking.
  */
-function buildHoldAndTransferPrompt(params: BlandCallParams): string {
-  return `You are an automated assistant calling the IRS Practitioner Priority Service on behalf of ${params.expertName}, a tax professional.
+function buildAdaptivePrompt(params: BlandCallParams): string {
+  const entitySummary = params.entities
+    .map((e, i) => `${i + 1}. ${e.taxpayerName} (${e.tidKind} ${e.taxpayerTid}) — ${e.formType}, ${e.years.join(', ')}`)
+    .join('\n');
 
-Your ONLY job is to navigate the phone tree and wait on hold. When a live IRS agent answers, you will transfer the call.
+  const callbackDigits = (params.callbackPhone || '').replace(/\D/g, '');
 
-PHONE TREE NAVIGATION:
+  return `You are an automated assistant calling the IRS Practitioner Priority Service on behalf of ${params.expertName}, a tax professional (CAF ${params.cafNumber}).
+
+ENTITIES TO PROCESS:
+${entitySummary}
+
+===== STEP 1: NAVIGATE THE PHONE TREE =====
 - When the automated system answers, press 1 for English.
 - Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
 - If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
-- If offered a callback option, DECLINE it and stay on hold.
-- Wait patiently on hold. Do not speak during hold music.
+- LISTEN for the estimated wait time. The IRS will say something like "We estimate your wait time to be between X and Y minutes."
 
-CRITICAL HOLD BEHAVIOR:
-- You MUST stay on the line for up to 90 minutes. Do NOT hang up.
-- Hold music, silence, and recorded messages are NORMAL. Just wait quietly.
-- Do NOT speak during hold. Do NOT say anything until a live person speaks to you directly.
-- The IRS plays many recorded messages while you wait. These are NOT live agents. Keep holding.
-- Only respond when a LIVE HUMAN asks you a direct question or greets you personally.
+As soon as you hear the estimated wait time, use the notify_status tool to report:
+  event: "wait_estimate"
+  estimated_wait_minutes: (the number they said, use the higher number if a range)
 
-WHEN A LIVE IRS AGENT ANSWERS (says something like "How can I help you?" or "Practitioner Priority Service, this is [name]"):
-1. Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
-2. Immediately use the connect_expert tool to connect to ${params.callbackPhone}.
-3. Do NOT provide any taxpayer information yourself.
-4. Do NOT attempt to process any requests.
+===== STEP 2: DECIDE — HOLD OR CALLBACK =====
+
+IF estimated wait is 15 MINUTES OR LESS:
+- When offered a callback, press 2 to DECLINE and stay on hold.
+- Use notify_status with event: "holding" and estimated_wait_minutes.
+- Wait patiently. Do NOT speak during hold music or recorded messages.
+- Do NOT hang up. You MUST stay on hold for up to 90 minutes.
+- Hold music, silence, and recorded announcements are NORMAL.
+- Only respond when a LIVE HUMAN speaks to you directly.
+
+IF estimated wait is MORE THAN 15 MINUTES AND callback is offered:
+- Press 1 to ACCEPT the callback.
+- When prompted for a phone number, enter: ${callbackDigits} using the keypad.
+- If asked to confirm, press 1.
+- If asked for a name, say: "${params.expertName}".
+- Use notify_status with event: "callback_accepted", estimated_wait_minutes, and callback_phone: "${params.callbackPhone}".
+- Once confirmed, end the call.
+
+IF NO CALLBACK IS OFFERED (regardless of wait time):
+- Stay on hold. Follow the holding instructions above.
+
+===== STEP 3: WHEN A LIVE AGENT ANSWERS =====
+(This happens if you chose to hold, or if no callback was offered)
+- The agent will say something like "How can I help you?" or "Practitioner Priority Service, this is [name]."
+- Immediately use notify_status with event: "agent_answered".
+- Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
+- Use the connect_expert tool to connect to ${params.callbackPhone}.
+- Do NOT provide any taxpayer information yourself.
 
 If the agent asks who you are: "I'm connecting you with ${params.expertName}, a tax practitioner. One moment please."
-If the agent says they can't hold: "I understand, ${params.expertName} will be right with you."
 
-IMPORTANT: Your ONLY purpose is to hold the line and transfer when a human answers. Do not engage in any IRS business yourself. Do NOT hang up during hold. Stay on the line no matter how long the wait.`;
-}
-
-/**
- * Build task prompt for IRS callback mode.
- * AI navigates phone tree and when offered a callback option, provides the expert's phone number.
- */
-function buildIrsCallbackPrompt(params: BlandCallParams): string {
-  return `You are an automated assistant calling the IRS Practitioner Priority Service on behalf of ${params.expertName}, a tax professional.
-
-Your ONLY job is to navigate the phone tree and request a callback to the expert's phone number.
-
-PHONE TREE NAVIGATION:
-- When the automated system answers, press 1 for English.
-- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
-- If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
-
-CALLBACK HANDLING:
-- If offered a callback option, ACCEPT IT.
-- When prompted for a callback number, provide: ${params.callbackPhone}.
-- Confirm the callback number if asked to repeat it.
-- If asked for a name, provide: ${params.expertName}.
-- Once the callback is confirmed, thank the system and end the call.
-
-IF NO CALLBACK OPTION IS OFFERED:
-- Stay on hold and wait for an agent.
-- When an agent answers, say: "Hello, please hold one moment while I connect you with ${params.expertName}."
-- Use the connect_expert tool to connect to ${params.callbackPhone}.
-
-IMPORTANT: Do not provide any taxpayer information. Your only job is to set up the callback or transfer.`;
+===== CRITICAL RULES =====
+- Do NOT hang up during hold. Stay on the line no matter what.
+- Do NOT speak during hold music or recorded messages.
+- Do NOT provide any taxpayer information — only ${params.expertName} can do that.
+- ALWAYS use notify_status to report what is happening. This is critical for tracking.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,21 +228,17 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     },
   };
 
-  const callMode = params.callMode || 'ai_full';
+  const callMode = params.callMode || 'hold_and_transfer';
 
   // Select task prompt based on call mode
   if (pathwayId && callMode === 'ai_full') {
     body.pathway_id = pathwayId;
-  } else if (callMode === 'hold_and_transfer') {
-    body.task = buildHoldAndTransferPrompt(params);
-    body.first_sentence = '';
-  } else if (callMode === 'irs_callback') {
-    body.task = buildIrsCallbackPrompt(params);
-    body.first_sentence = '';
-    // IRS callback calls are short — just navigate tree and provide callback number
-    body.max_duration = Math.min(maxDuration, 15);
-  } else {
+  } else if (callMode === 'ai_full') {
     body.task = buildTaskPrompt(params);
+    body.first_sentence = '';
+  } else {
+    // Default: adaptive prompt handles both hold-and-transfer AND callback
+    body.task = buildAdaptivePrompt(params);
     body.first_sentence = '';
   }
 
@@ -274,8 +272,46 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     },
   ];
 
-  // Add transfer tool for hold-and-transfer and irs_callback modes
-  if ((callMode === 'hold_and_transfer' || callMode === 'irs_callback') && params.callbackPhone) {
+  // Add notify_status tool for real-time SLA tracking (all non-ai_full modes)
+  if (callMode !== 'ai_full') {
+    tools.push({
+      name: 'notify_status',
+      description: 'Report call status updates for real-time tracking. Call this at every stage: when you hear the wait estimate, when you start holding, when callback is accepted, when agent answers.',
+      url: `${appUrl}/api/expert/irs-call/status-update`,
+      method: 'POST',
+      headers: { 'x-bland-secret': webhookSecret },
+      input_schema: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'The call session ID',
+            default: params.metadata.sessionId,
+          },
+          event: {
+            type: 'string',
+            description: 'What happened: wait_estimate, holding, callback_accepted, agent_answered',
+          },
+          estimated_wait_minutes: {
+            type: 'number',
+            description: 'The estimated wait time in minutes as stated by the IRS',
+          },
+          callback_phone: {
+            type: 'string',
+            description: 'The callback phone number provided to the IRS (if callback accepted)',
+          },
+          notes: {
+            type: 'string',
+            description: 'Any additional details about what happened',
+          },
+        },
+        required: ['event'],
+      },
+    });
+  }
+
+  // Add connect_expert tool for transfer when agent answers
+  if (callMode !== 'ai_full' && params.callbackPhone) {
     tools.push({
       name: 'connect_expert',
       description: `Connect the call to ${params.expertName} at ${params.callbackPhone}. Use this when a live IRS agent has answered and you need to connect them with the expert.`,
