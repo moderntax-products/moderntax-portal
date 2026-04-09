@@ -158,54 +158,43 @@ As soon as you hear the estimated wait time, use the notify_status tool to repor
   event: "wait_estimate"
   estimated_wait_minutes: (the number they said, use the higher number if a range)
 
-===== STEP 2: DECIDE — HOLD OR CALLBACK =====
+===== STEP 2: ACCEPT CALLBACK OR SHORT HOLD =====
 
-IF estimated wait is 15 MINUTES OR LESS:
-- When offered a callback, press 2 to DECLINE and stay on hold.
-- Use notify_status with event: "holding" and estimated_wait_minutes.
-- Wait patiently. Do NOT speak during hold music or recorded messages.
-- Do NOT hang up. You MUST stay on hold for up to 90 minutes.
-- Hold music, silence, and recorded announcements are NORMAL.
-- Only respond when a LIVE HUMAN speaks to you directly.
+ALWAYS PREFER THE CALLBACK OPTION TO SAVE COSTS.
 
-IF estimated wait is MORE THAN 15 MINUTES AND callback is offered:
+IF A CALLBACK IS OFFERED (this is the preferred path):
 - Press 1 to ACCEPT the callback.
 - When prompted for a phone number, enter: ${callbackDigits} using the keypad.
 - If asked to confirm, press 1.
 - If asked for a name, say: "${params.expertName}".
 - Use notify_status with event: "callback_accepted", estimated_wait_minutes, and callback_phone: "${params.callbackPhone}".
-- Once confirmed, end the call.
+- Once the callback is confirmed, you are done. End the call politely.
 
-IF NO CALLBACK IS OFFERED (regardless of wait time):
-- Stay on hold. Follow the holding instructions above.
+IF NO CALLBACK IS OFFERED AND estimated wait is 5 MINUTES OR LESS:
+- Stay on hold. Do NOT speak during hold music or recorded messages.
+- Hold music, silence, and recorded announcements are NORMAL.
+- Only respond when a LIVE HUMAN speaks to you directly.
+- Use notify_status with event: "holding" and estimated_wait_minutes.
 
-===== STEP 3: TRANSFER THE CALL TO THE EXPERT =====
-IMPORTANT: You must transfer the call to the expert BEFORE the IRS agent answers.
+IF NO CALLBACK IS OFFERED AND estimated wait is MORE THAN 5 MINUTES:
+- Stay on hold for up to 5 minutes maximum.
+- Use notify_status with event: "holding" and estimated_wait_minutes.
+- If no agent answers within 5 minutes, use notify_status with event: "hold_timeout" and notes: "Hung up after 5 min — no callback option available".
+- Then end the call. Do NOT hold longer than 5 minutes.
 
-After you have been on hold for approximately (estimated_wait - 3) minutes:
-- Use the connect_expert tool to notify our system that you are transferring.
+===== STEP 3: IF AN IRS AGENT ANSWERS (while on short hold) =====
+If a live IRS agent answers while you are holding:
+- Use notify_status with event: "agent_answered".
+- Use the connect_expert tool to notify our system.
 - Then say: "I need to transfer this call to ${params.expertName} now."
 - The call will be transferred to ${params.callbackPhone}.
-- Use notify_status with event: "expert_pre_connected".
-
-For example: if IRS says "10 to 15 minutes", transfer after about 7-8 minutes of holding.
-If IRS says "5 minutes", transfer after about 2-3 minutes of holding.
-
-AFTER transferring, the expert will join the call and hear hold music.
-When the IRS agent answers, the expert is already on the line and can speak directly.
-Do NOT speak after transferring — stay silent and let the expert handle it.
-
-IF the IRS agent answers BEFORE you transfer (edge case):
-- Say: "Hello, one moment while I transfer you to ${params.expertName}."
-- Immediately use connect_expert tool, then say: "I am transferring now."
-- Use notify_status with event: "agent_answered".
 
 ===== CRITICAL RULES =====
-- Do NOT hang up during hold. Stay on the line no matter what.
+- ALWAYS prefer the IRS callback option. Only hold if callback is not offered.
+- MAXIMUM hold time is 5 minutes. After 5 minutes, hang up.
 - Do NOT speak during hold music or recorded messages.
 - Do NOT provide any taxpayer information — only ${params.expertName} can do that.
-- ALWAYS use notify_status to report what is happening. This is critical for tracking.
-- ALWAYS transfer the call 2-3 minutes BEFORE the estimated wait ends.
+- ALWAYS use notify_status to report what is happening at every stage.
 - IMPORTANT: When transferring, you MUST say "transfer" — this triggers the phone transfer.`;
 }
 
@@ -220,7 +209,7 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   const apiKey = getApiKey();
   const appUrl = getAppUrl();
   const webhookSecret = process.env.BLAND_WEBHOOK_SECRET || '';
-  const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '90', 10);
+  const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '10', 10);
   const pathwayId = process.env.BLAND_IRS_PPS_PATHWAY_ID;
 
   const body: Record<string, unknown> = {

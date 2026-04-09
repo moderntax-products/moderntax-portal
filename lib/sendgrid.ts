@@ -1501,9 +1501,8 @@ export async function sendExpertDailyCallSchedule(
 <div style="background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #bbf7d0;">
   <h3 style="margin: 0 0 8px 0; color: #065f46; font-size: 16px;">Pick a time — we'll call the IRS for you</h3>
   <p style="margin: 0 0 16px 0; font-size: 14px; color: #047857;">
-    Our AI will call the IRS PPS line, navigate the phone tree, and wait on hold.
-    When an agent answers, <strong>we'll transfer the call directly to your phone</strong>.
-    No more waiting on hold!
+    Our AI will call the IRS PPS line, navigate the phone tree, and <strong>request a callback to your phone</strong>.
+    You'll get an email with the estimated callback time so you can be ready when the IRS calls.
   </p>
   <p style="margin: 0 0 12px 0; font-size: 13px; color: #6b7280;">Select when you'll be available today (all times ET):</p>
   <div style="text-align: center;">
@@ -1512,9 +1511,8 @@ export async function sendExpertDailyCallSchedule(
 </div>
 
 <p style="font-size: 13px; color: #6b7280; margin-top: 16px;">
-  <strong>How it works:</strong> Click a time slot → AI calls IRS at that time → AI holds for you →
-  When a live agent answers, your phone rings and you're connected instantly.
-  Average hold time: 30-60 min. Cost: ~$0.09/min (billed to ModernTax).
+  <strong>How it works:</strong> Click a time slot → AI calls IRS at that time → AI requests a callback to your phone →
+  You get an email with the ETA → IRS calls you back directly. No hold time for you!
 </p>
   `.trim();
 
@@ -1530,5 +1528,76 @@ export async function sendExpertDailyCallSchedule(
     });
   } catch (error) {
     console.error('Failed to send expert daily call schedule:', error);
+  }
+}
+
+/**
+ * Send expert a notification that the IRS callback has been accepted.
+ * Tells them the ETA and which entities are pending.
+ */
+export async function sendExpertCallbackNotification(
+  expertEmail: string,
+  expertName: string,
+  callbackPhone: string,
+  estimatedWaitMinutes: number,
+  entities: {
+    taxpayerName: string;
+    formType: string;
+    years: string[];
+  }[]
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send callback notification');
+    return;
+  }
+
+  const firstName = expertName.split(',')[0].split(' ')[0];
+  const etaNow = new Date();
+  const etaTime = new Date(etaNow.getTime() + estimatedWaitMinutes * 60 * 1000);
+  const etaStr = etaTime.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+  });
+
+  const entityList = entities
+    .map((e) => `<li><strong>${e.taxpayerName}</strong> — ${e.formType} (${e.years.join(', ')})</li>`)
+    .join('');
+
+  const content = `
+<p>Hi ${firstName},</p>
+
+<p>Our AI just called the IRS PPS line on your behalf and <strong>secured a callback</strong>.</p>
+
+<div style="background: #f0fdf4; border: 2px solid #00C48C; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: center;">
+  <p style="margin: 0 0 4px 0; font-size: 14px; color: #6b7280;">Estimated IRS callback by</p>
+  <p style="margin: 0; font-size: 32px; font-weight: 700; color: #065f46;">${etaStr} ET</p>
+  <p style="margin: 8px 0 0 0; font-size: 14px; color: #6b7280;">to <strong>${callbackPhone}</strong></p>
+</div>
+
+<p><strong>Please be ready to answer your phone.</strong> When the IRS calls back, a live agent will be on the line ready to help with:</p>
+
+<ul style="margin: 12px 0; padding-left: 20px;">
+${entityList}
+</ul>
+
+<p style="font-size: 13px; color: #6b7280;">
+  <strong>What to have ready:</strong> Your CAF number, the signed 8821 forms, and any taxpayer details for the entities above.
+  The IRS agent may ask you to fax the 8821 — have access to a fax or efax service.
+</p>
+  `.trim();
+
+  const html = createEmailTemplate('IRS Callback Scheduled', content);
+
+  try {
+    await sgMail.send({
+      to: expertEmail,
+      from: fromEmail,
+      subject: `IRS calling you back ~${etaStr} ET — be ready to answer`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert callback notification:', error);
   }
 }
