@@ -34,6 +34,8 @@ export async function POST(request: NextRequest) {
       call_length, // minutes
       answered_by,
       error_message,
+      transferred_to,
+      call_ended_by,
     } = body;
 
     if (!call_id) {
@@ -81,60 +83,87 @@ export async function POST(request: NextRequest) {
     // Auto-detect coaching tags (declared early for use in callback handling)
     const coachingTags: string[] = [];
 
-    // Determine session status — account for transfer/callback modes
+    // Determine session status and transfer outcome
     let sessionStatus = completed ? 'completed' : (error_message ? 'failed' : 'completed');
+    const lower = transcriptText.toLowerCase();
 
-    // If this was a hold_and_transfer call, check if transfer happened
-    if (session.callback_mode === 'transfer') {
-      if (session.callback_status === 'transferring' || session.callback_status === 'connected') {
-        // Transfer was initiated — the call ended because the expert took over
-        sessionStatus = 'completed';
-        // Update callback status to connected if it was still transferring
-        if (session.callback_status === 'transferring') {
-          await adminSupabase
-            .from('irs_call_sessions' as any)
-            .update({
-              callback_status: 'connected',
-              callback_connected_at: new Date().toISOString(),
-            })
-            .eq('id', session.id);
-        }
-      } else if (!error_message && session.callback_status === 'waiting') {
-        // Call ended without transfer — agent may not have answered
-        sessionStatus = 'completed';
-        await adminSupabase
-          .from('irs_call_sessions' as any)
-          .update({ callback_status: 'no_answer' })
-          .eq('id', session.id);
+    // --- Detect what actually happened ---
+    const agentAnswered = !!(session.agent_answered_at) ||
+      lower.includes('how can i help you') ||
+      lower.includes('my name is') ||
+      lower.includes('my id number is') ||
+      lower.includes('practitioner priority service');
+
+    const transferAttempted = !!(session.callback_status === 'transferring') || !!transferred_to;
+
+    // Did the expert actually speak to the agent?
+    // Look for transcript lines from "assistant" AFTER the agent greeting that contain real conversation
+    const expertSpoke = transferred_to && call_ended_by !== 'ASSISTANT';
+
+    // Did the IRS agent hang up before expert connected?
+    const agentHungUp = agentAnswered && !transferAttempted &&
+      (lower.includes('call back') || lower.includes('goodbye') || call_ended_by === 'USER');
+
+    const agentHungUpDuringTransfer = transferAttempted && !expertSpoke &&
+      (lower.includes('i can only hold') || lower.includes('need to call back') || call_ended_by === 'USER');
+
+    // Update callback_status based on actual outcome
+    let callbackStatusUpdate: string | null = null;
+
+    if (transferred_to) {
+      // Bland confirmed the transfer happened
+      callbackStatusUpdate = 'connected';
+      coachingTags.push('expert_connected');
+    } else if (session.callback_status === 'transferring') {
+      // We tried to transfer but Bland didn't confirm
+      if (agentHungUpDuringTransfer) {
+        callbackStatusUpdate = 'failed';
+        coachingTags.push('agent_hung_up_during_transfer');
+      } else {
+        callbackStatusUpdate = 'no_answer';
+        coachingTags.push('expert_no_answer');
       }
-    }
-
-    // If this was an IRS callback mode, update callback status
-    if (session.callback_mode === 'irs_callback') {
-      const callbackAccepted = transcriptText.toLowerCase().includes('callback') &&
-        (transcriptText.toLowerCase().includes('confirmed') ||
-         transcriptText.toLowerCase().includes('scheduled') ||
-         transcriptText.toLowerCase().includes('will call'));
+    } else if (session.callback_mode === 'irs_callback') {
+      // IRS callback mode — check if callback was accepted
+      const callbackAccepted = lower.includes('callback') &&
+        (lower.includes('confirm') || lower.includes('schedul') || lower.includes('will call'));
       if (callbackAccepted) {
-        await adminSupabase
-          .from('irs_call_sessions' as any)
-          .update({ callback_status: 'waiting' })
-          .eq('id', session.id);
+        callbackStatusUpdate = 'waiting';
         coachingTags.push('irs_callback_accepted');
       }
+    } else if (agentAnswered && !transferAttempted) {
+      // Agent answered but no transfer was attempted
+      callbackStatusUpdate = 'failed';
+      coachingTags.push('no_transfer_attempted');
+    } else if (session.callback_status === 'holding' || session.callback_status === 'waiting') {
+      // Was holding/waiting but call ended without reaching agent
+      callbackStatusUpdate = call_ended_by === 'ASSISTANT' ? 'failed' : 'no_answer';
+    }
+
+    if (callbackStatusUpdate) {
+      await adminSupabase
+        .from('irs_call_sessions' as any)
+        .update({
+          callback_status: callbackStatusUpdate,
+          ...(callbackStatusUpdate === 'connected' ? { callback_connected_at: new Date().toISOString() } : {}),
+        })
+        .eq('id', session.id);
+    }
+
+    // If agent answered but expert didn't connect, flag for retry
+    if (agentAnswered && callbackStatusUpdate !== 'connected' && callbackStatusUpdate !== 'waiting') {
+      coachingTags.push('needs_retry');
     }
 
     // Populate coaching tags
     if (sessionStatus === 'completed') coachingTags.push('completed');
     if (holdDurationSeconds && holdDurationSeconds > 1800) coachingTags.push('long_hold');
-    if (transcriptText.toLowerCase().includes('name') && transcriptText.toLowerCase().includes('match')) {
-      coachingTags.push('name_mismatch');
-    }
-    if (transcriptText.toLowerCase().includes('wet signature')) {
-      coachingTags.push('esig_rejected');
-    }
+    if (lower.includes('name') && lower.includes('match')) coachingTags.push('name_mismatch');
+    if (lower.includes('wet signature')) coachingTags.push('esig_rejected');
     if (session.callback_mode === 'transfer') coachingTags.push('hold_and_transfer');
     if (session.callback_mode === 'irs_callback') coachingTags.push('irs_callback');
+    if (agentAnswered) coachingTags.push('agent_reached');
+    if (agentHungUp) coachingTags.push('agent_hung_up');
 
     // Update session
     const sessionUpdate: Record<string, unknown> = {

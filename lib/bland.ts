@@ -179,26 +179,25 @@ IF estimated wait is MORE THAN 15 MINUTES AND callback is offered:
 IF NO CALLBACK IS OFFERED (regardless of wait time):
 - Stay on hold. Follow the holding instructions above.
 
-===== STEP 3: PRE-CONNECT THE EXPERT =====
-IMPORTANT: You must connect the expert BEFORE the IRS agent answers.
+===== STEP 3: TRANSFER THE CALL TO THE EXPERT =====
+IMPORTANT: You must transfer the call to the expert BEFORE the IRS agent answers.
 
 After you have been on hold for approximately (estimated_wait - 3) minutes:
-- Use the connect_expert tool to bring ${params.expertName} onto the call at ${params.callbackPhone}.
+- Use the connect_expert tool to notify our system that you are transferring.
+- Then say: "I need to transfer this call to ${params.expertName} now."
+- The call will be transferred to ${params.callbackPhone}.
 - Use notify_status with event: "expert_pre_connected".
-- Then continue waiting silently on hold.
-- The expert will join the call and hear the hold music with you.
-- When the IRS agent answers, the expert is already on the line and can speak directly.
 
-For example: if IRS says "10 to 15 minutes", use connect_expert after about 7-8 minutes of holding.
-If IRS says "5 minutes", use connect_expert after about 2-3 minutes of holding.
+For example: if IRS says "10 to 15 minutes", transfer after about 7-8 minutes of holding.
+If IRS says "5 minutes", transfer after about 2-3 minutes of holding.
 
-AFTER connecting the expert, if the IRS agent answers:
-- Do NOT speak. The expert (${params.expertName}) is already on the line and will handle it.
-- Stay silent and let the expert talk to the agent.
+AFTER transferring, the expert will join the call and hear hold music.
+When the IRS agent answers, the expert is already on the line and can speak directly.
+Do NOT speak after transferring — stay silent and let the expert handle it.
 
-IF the IRS agent answers BEFORE you connect the expert (edge case):
-- Say: "Hello, one moment while I connect you with ${params.expertName}."
-- Immediately use connect_expert to bring ${params.expertName} on.
+IF the IRS agent answers BEFORE you transfer (edge case):
+- Say: "Hello, one moment while I transfer you to ${params.expertName}."
+- Immediately use connect_expert tool, then say: "I am transferring now."
 - Use notify_status with event: "agent_answered".
 
 ===== CRITICAL RULES =====
@@ -206,7 +205,8 @@ IF the IRS agent answers BEFORE you connect the expert (edge case):
 - Do NOT speak during hold music or recorded messages.
 - Do NOT provide any taxpayer information — only ${params.expertName} can do that.
 - ALWAYS use notify_status to report what is happening. This is critical for tracking.
-- ALWAYS connect the expert 2-3 minutes BEFORE the estimated wait ends.`;
+- ALWAYS transfer the call 2-3 minutes BEFORE the estimated wait ends.
+- IMPORTANT: When transferring, you MUST say "transfer" — this triggers the phone transfer.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +327,7 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   if (callMode !== 'ai_full' && params.callbackPhone) {
     tools.push({
       name: 'connect_expert',
-      description: `Connect the call to ${params.expertName} at ${params.callbackPhone}. Use this when a live IRS agent has answered and you need to connect them with the expert.`,
+      description: `Notify our system that you are about to transfer the call to ${params.expertName}. Use this right before you say "transfer" to connect the expert. Always call this tool first, then say you are transferring.`,
       url: `${appUrl}/api/expert/irs-call/transfer-notify`,
       method: 'POST',
       headers: { 'x-bland-secret': webhookSecret },
