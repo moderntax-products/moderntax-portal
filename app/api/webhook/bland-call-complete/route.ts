@@ -158,12 +158,36 @@ export async function POST(request: NextRequest) {
     // Populate coaching tags
     if (sessionStatus === 'completed') coachingTags.push('completed');
     if (holdDurationSeconds && holdDurationSeconds > 1800) coachingTags.push('long_hold');
-    if (lower.includes('name') && lower.includes('match')) coachingTags.push('name_mismatch');
-    if (lower.includes('wet signature')) coachingTags.push('esig_rejected');
     if (session.callback_mode === 'transfer') coachingTags.push('hold_and_transfer');
     if (session.callback_mode === 'irs_callback') coachingTags.push('irs_callback');
     if (agentAnswered) coachingTags.push('agent_reached');
     if (agentHungUp) coachingTags.push('agent_hung_up');
+
+    // Auto-detect 8821 rejection reasons from transcript
+    if (lower.includes('name') && (lower.includes('match') || lower.includes('doesn\'t match') || lower.includes('does not match'))) {
+      coachingTags.push('8821_name_mismatch');
+    }
+    if (lower.includes('wet signature') || lower.includes('original signature') || lower.includes('ink signature')) {
+      coachingTags.push('8821_esig_rejected');
+    }
+    if (lower.includes('address') && (lower.includes('doesn\'t match') || lower.includes('does not match') || lower.includes('wrong address') || lower.includes('invalid address'))) {
+      coachingTags.push('8821_bad_address');
+    }
+    if ((lower.includes('ein') || lower.includes('employer identification')) && (lower.includes('doesn\'t match') || lower.includes('does not match') || lower.includes('incorrect') || lower.includes('wrong'))) {
+      coachingTags.push('8821_wrong_ein');
+    }
+    if ((lower.includes('social security') || lower.includes('ssn')) && (lower.includes('doesn\'t match') || lower.includes('does not match') || lower.includes('incorrect') || lower.includes('wrong'))) {
+      coachingTags.push('8821_wrong_ssn');
+    }
+    if (lower.includes('8821') && (lower.includes('not on file') || lower.includes('no record') || lower.includes('don\'t have'))) {
+      coachingTags.push('8821_not_on_file');
+    }
+    if (lower.includes('caf') && (lower.includes('not on file') || lower.includes('not authorized') || lower.includes('no record'))) {
+      coachingTags.push('caf_not_on_file');
+    }
+    if (lower.includes('tax year') && (lower.includes('missing') || lower.includes('not listed') || lower.includes('incorrect'))) {
+      coachingTags.push('8821_wrong_tax_years');
+    }
 
     // Update session
     const sessionUpdate: Record<string, unknown> = {

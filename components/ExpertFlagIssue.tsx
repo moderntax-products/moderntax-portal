@@ -7,14 +7,37 @@ interface ExpertFlagIssueProps {
   onComplete: () => void;
 }
 
-const MISS_REASONS = [
-  { value: 'irs_line_busy', label: 'IRS Line Busy / Disconnected' },
-  { value: 'form_error', label: 'Form 8821 Error (name, EIN, etc.)' },
-  { value: 'tds_down', label: 'TDS System Down' },
-  { value: 'wrong_ein', label: 'Wrong EIN / Entity Mismatch' },
-  { value: 'scheduling', label: 'Scheduling Conflict' },
-  { value: 'irs_rejected', label: 'IRS Rejected Signature (wet ink required)' },
-  { value: 'other', label: 'Other' },
+const MISS_REASON_CATEGORIES = [
+  {
+    label: '8821 Rejection — Needs Resubmission',
+    reasons: [
+      { value: 'bad_address', label: 'Wrong / Incomplete Address on 8821' },
+      { value: 'wrong_ein', label: 'Wrong EIN on 8821' },
+      { value: 'wrong_ssn', label: 'Wrong SSN on 8821' },
+      { value: 'wrong_business_name', label: 'Wrong Business Name on 8821' },
+      { value: 'wrong_taxpayer_name', label: 'Wrong Taxpayer Name on 8821' },
+      { value: 'missing_tax_years', label: 'Missing or Wrong Tax Years on 8821' },
+      { value: 'wrong_form_type', label: 'Wrong Form Type on 8821' },
+      { value: 'irs_rejected', label: 'IRS Rejected Signature (wet ink required)' },
+      { value: '8821_not_on_file', label: '8821 Not on File — Needs Refax' },
+      { value: 'caf_not_on_file', label: 'CAF Number Not on File' },
+    ],
+  },
+  {
+    label: 'Call Issues',
+    reasons: [
+      { value: 'irs_line_busy', label: 'IRS Line Busy / Disconnected' },
+      { value: 'tds_down', label: 'TDS System Down' },
+      { value: 'scheduling', label: 'Scheduling Conflict' },
+      { value: 'agent_hung_up', label: 'IRS Agent Hung Up' },
+    ],
+  },
+  {
+    label: 'Other',
+    reasons: [
+      { value: 'other', label: 'Other (describe in notes)' },
+    ],
+  },
 ];
 
 export function ExpertFlagIssue({ assignmentId, onComplete }: ExpertFlagIssueProps) {
@@ -82,10 +105,14 @@ export function ExpertFlagIssue({ assignmentId, onComplete }: ExpertFlagIssuePro
           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
         >
           <option value="">Select a reason...</option>
-          {MISS_REASONS.map((r) => (
-            <option key={r.value} value={r.value}>
-              {r.label}
-            </option>
+          {MISS_REASON_CATEGORIES.map((cat) => (
+            <optgroup key={cat.label} label={cat.label}>
+              {cat.reasons.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </div>
@@ -114,6 +141,18 @@ export function ExpertFlagIssue({ assignmentId, onComplete }: ExpertFlagIssuePro
       {missReason === 'irs_rejected' && (
         <div className="text-xs text-blue-700 bg-blue-50 border border-blue-200 p-2 rounded">
           <strong>Auto-action:</strong> A fax-back email with wet signature instructions will be automatically sent to the entity signer. The entity will be reset to pending until the wet-signed 8821 is received.
+        </div>
+      )}
+
+      {['bad_address', 'wrong_ein', 'wrong_ssn', 'wrong_business_name', 'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type'].includes(missReason) && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+          <strong>Please include in notes:</strong> What the IRS said was wrong and what the correct value should be. This will be used to fix the 8821 before resubmission.
+        </div>
+      )}
+
+      {['8821_not_on_file', 'caf_not_on_file'].includes(missReason) && (
+        <div className="text-xs text-blue-700 bg-blue-50 border border-blue-200 p-2 rounded">
+          <strong>Auto-action:</strong> The 8821 will be re-faxed to the IRS. Please note the fax number the IRS agent provided (if different from default).
         </div>
       )}
 

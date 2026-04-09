@@ -80,9 +80,19 @@ export async function POST(request: Request) {
       case 'flag_issue': {
         const { missReason, notes, markFailed } = body;
 
+        // 8821 rejection reasons that require resubmission
+        const RESUBMISSION_REASONS = [
+          'bad_address', 'wrong_ein', 'wrong_ssn', 'wrong_business_name',
+          'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type',
+          '8821_not_on_file', 'caf_not_on_file',
+        ];
+        const needsResubmission = RESUBMISSION_REASONS.includes(missReason);
+
         const updateData: Record<string, unknown> = {
           miss_reason: missReason || null,
           expert_notes: notes || null,
+          needs_resubmission: needsResubmission,
+          resubmission_reason: needsResubmission ? missReason : null,
         };
 
         if (markFailed) {
@@ -112,10 +122,18 @@ export async function POST(request: Request) {
 
         // If marked as failed, update entity status
         if (markFailed) {
-          await adminSupabase
-            .from('request_entities')
-            .update({ status: 'failed' })
-            .eq('id', assignment.entity_id);
+          if (needsResubmission) {
+            // 8821 rejection: reset to pending so it re-enters the correction flow
+            await adminSupabase
+              .from('request_entities')
+              .update({ status: 'pending' })
+              .eq('id', assignment.entity_id);
+          } else {
+            await adminSupabase
+              .from('request_entities')
+              .update({ status: 'failed' })
+              .eq('id', assignment.entity_id);
+          }
         }
 
         // Notify admin users about the flagged issue
