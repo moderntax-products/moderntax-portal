@@ -5,11 +5,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient, createServerClient } from '@/lib/supabase-server';
+import { createAdminClient } from '@/lib/supabase-server';
+import { cookies } from 'next/headers';
+import { createServerRouteClient } from '@/lib/supabase-server';
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createServerClient();
+    const cookieStore = await cookies();
+    const supabase = createServerRouteClient(cookieStore);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -24,7 +27,7 @@ export async function GET(request: NextRequest) {
 
     // Admins see all, experts see own
     let query = adminSupabase
-      .from('expert_availability')
+      .from('expert_availability' as any)
       .select('*, profiles(full_name, email)')
       .order('available_date', { ascending: true })
       .order('start_time', { ascending: true });
@@ -52,7 +55,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createServerClient();
+    const cookieStore = await cookies();
+    const supabase = createServerRouteClient(cookieStore);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -117,7 +121,7 @@ export async function POST(request: NextRequest) {
 
     // Create the availability commitment
     const { data: slot, error: insertError } = await adminSupabase
-      .from('expert_availability')
+      .from('expert_availability' as any)
       .insert({
         expert_id: targetExpertId,
         available_date: availableDate,
