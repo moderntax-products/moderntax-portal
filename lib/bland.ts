@@ -146,7 +146,14 @@ PHONE TREE NAVIGATION:
 - If offered a callback option, DECLINE it and stay on hold.
 - Wait patiently on hold. Do not speak during hold music.
 
-WHEN A LIVE IRS AGENT ANSWERS:
+CRITICAL HOLD BEHAVIOR:
+- You MUST stay on the line for up to 90 minutes. Do NOT hang up.
+- Hold music, silence, and recorded messages are NORMAL. Just wait quietly.
+- Do NOT speak during hold. Do NOT say anything until a live person speaks to you directly.
+- The IRS plays many recorded messages while you wait. These are NOT live agents. Keep holding.
+- Only respond when a LIVE HUMAN asks you a direct question or greets you personally.
+
+WHEN A LIVE IRS AGENT ANSWERS (says something like "How can I help you?" or "Practitioner Priority Service, this is [name]"):
 1. Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
 2. Immediately use the connect_expert tool to connect to ${params.callbackPhone}.
 3. Do NOT provide any taxpayer information yourself.
@@ -155,7 +162,7 @@ WHEN A LIVE IRS AGENT ANSWERS:
 If the agent asks who you are: "I'm connecting you with ${params.expertName}, a tax practitioner. One moment please."
 If the agent says they can't hold: "I understand, ${params.expertName} will be right with you."
 
-IMPORTANT: Your only purpose is to hold the line and transfer when a human answers. Do not engage in any IRS business yourself.`;
+IMPORTANT: Your ONLY purpose is to hold the line and transfer when a human answers. Do not engage in any IRS business yourself. Do NOT hang up during hold. Stay on the line no matter how long the wait.`;
 }
 
 /**
@@ -206,6 +213,8 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     record: true,
     max_duration: maxDuration,
     wait_for_greeting: true,
+    amd: false,                   // Disable answering machine detection — IRS hold music triggers false positives
+    interruption_threshold: 200,  // High threshold to avoid interrupting IRS hold messages
     webhook: `${appUrl}/api/webhook/bland-call-complete`,
     metadata: params.metadata,
     request_data: {
