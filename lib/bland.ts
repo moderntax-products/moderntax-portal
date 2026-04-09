@@ -148,7 +148,7 @@ PHONE TREE NAVIGATION:
 
 WHEN A LIVE IRS AGENT ANSWERS:
 1. Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
-2. Immediately use the transfer_call tool to transfer to ${params.callbackPhone}.
+2. Immediately use the connect_expert tool to connect to ${params.callbackPhone}.
 3. Do NOT provide any taxpayer information yourself.
 4. Do NOT attempt to process any requests.
 
@@ -182,7 +182,7 @@ CALLBACK HANDLING:
 IF NO CALLBACK OPTION IS OFFERED:
 - Stay on hold and wait for an agent.
 - When an agent answers, say: "Hello, please hold one moment while I connect you with ${params.expertName}."
-- Use the transfer_call tool to transfer to ${params.callbackPhone}.
+- Use the connect_expert tool to connect to ${params.callbackPhone}.
 
 IMPORTANT: Do not provide any taxpayer information. Your only job is to set up the callback or transfer.`;
 }
@@ -268,8 +268,8 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   // Add transfer tool for hold-and-transfer and irs_callback modes
   if ((callMode === 'hold_and_transfer' || callMode === 'irs_callback') && params.callbackPhone) {
     tools.push({
-      name: 'transfer_call',
-      description: `Transfer the call to ${params.expertName} at ${params.callbackPhone}. Use this when a live IRS agent has answered and you need to connect them with the expert.`,
+      name: 'connect_expert',
+      description: `Connect the call to ${params.expertName} at ${params.callbackPhone}. Use this when a live IRS agent has answered and you need to connect them with the expert.`,
       url: `${appUrl}/api/expert/irs-call/transfer-notify`,
       method: 'POST',
       headers: { 'x-bland-secret': webhookSecret },
