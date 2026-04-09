@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/compliance-drip",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/expert-daily-call-schedule",
+      "schedule": "30 10 * * 1-5"
     }
   ],
   "headers": [

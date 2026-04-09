@@ -1410,3 +1410,125 @@ export async function sendManagerEntityTranscriptNotification(
     console.error('Failed to send manager entity transcript notification:', error);
   }
 }
+
+/**
+ * Send daily IRS call schedule email to expert
+ * Shows pending assignments and lets expert pick a time slot for automated PPS call + callback
+ */
+export async function sendExpertDailyCallSchedule(
+  expertEmail: string,
+  expertName: string,
+  _expertId: string,
+  pendingEntities: {
+    entityName: string;
+    tidKind: string;
+    formType: string;
+    years: string[];
+    assignmentId: string;
+    daysAssigned: number;
+  }[],
+  scheduleToken: string
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const firstName = expertName.split(',')[0].split(' ')[0];
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const entityRows = pendingEntities
+    .sort((a, b) => b.daysAssigned - a.daysAssigned)
+    .map(
+      (e) =>
+        `<tr>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #eee; font-weight: 600;">${e.entityName}</td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #eee;">${e.tidKind}</td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #eee;">${e.formType} (${e.years.join(', ')})</td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid #eee; color: ${e.daysAssigned >= 3 ? '#dc2626' : e.daysAssigned >= 1 ? '#d97706' : '#059669'}; font-weight: 600;">${e.daysAssigned}d</td>
+        </tr>`
+    )
+    .join('');
+
+  // Generate time slot buttons — IRS PPS hours 7 AM - 7 PM ET
+  const timeSlots = [
+    { label: '7:00 AM', value: '07:00' },
+    { label: '8:00 AM', value: '08:00' },
+    { label: '9:00 AM', value: '09:00' },
+    { label: '10:00 AM', value: '10:00' },
+    { label: '11:00 AM', value: '11:00' },
+    { label: '12:00 PM', value: '12:00' },
+    { label: '1:00 PM', value: '13:00' },
+    { label: '2:00 PM', value: '14:00' },
+    { label: '3:00 PM', value: '15:00' },
+    { label: '4:00 PM', value: '16:00' },
+    { label: '5:00 PM', value: '17:00' },
+    { label: '6:00 PM', value: '18:00' },
+  ];
+
+  const slotButtons = timeSlots
+    .map(
+      (slot) =>
+        `<a href="${appUrl}/expert/schedule?token=${scheduleToken}&time=${slot.value}"
+            style="display: inline-block; padding: 10px 16px; margin: 4px; background: #f0fdf4; border: 2px solid #00C48C; border-radius: 8px; text-decoration: none; color: #065f46; font-weight: 600; font-size: 14px; min-width: 80px; text-align: center;">
+          ${slot.label}
+        </a>`
+    )
+    .join('');
+
+  const content = `
+<p>Good morning ${firstName},</p>
+
+<p>You have <strong>${pendingEntities.length} pending ${pendingEntities.length === 1 ? 'entity' : 'entities'}</strong> that need IRS PPS calls today:</p>
+
+<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0;">
+  <thead>
+    <tr style="background: #f5f5f5;">
+      <th style="padding: 10px 12px; text-align: left;">Entity</th>
+      <th style="padding: 10px 12px; text-align: left;">Type</th>
+      <th style="padding: 10px 12px; text-align: left;">Transcripts</th>
+      <th style="padding: 10px 12px; text-align: left;">Waiting</th>
+    </tr>
+  </thead>
+  <tbody>${entityRows}</tbody>
+</table>
+
+<div style="background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%); border-radius: 12px; padding: 24px; margin: 24px 0; border: 1px solid #bbf7d0;">
+  <h3 style="margin: 0 0 8px 0; color: #065f46; font-size: 16px;">Pick a time — we'll call the IRS for you</h3>
+  <p style="margin: 0 0 16px 0; font-size: 14px; color: #047857;">
+    Our AI will call the IRS PPS line, navigate the phone tree, and wait on hold.
+    When an agent answers, <strong>we'll transfer the call directly to your phone</strong>.
+    No more waiting on hold!
+  </p>
+  <p style="margin: 0 0 12px 0; font-size: 13px; color: #6b7280;">Select when you'll be available today (all times ET):</p>
+  <div style="text-align: center;">
+    ${slotButtons}
+  </div>
+</div>
+
+<p style="font-size: 13px; color: #6b7280; margin-top: 16px;">
+  <strong>How it works:</strong> Click a time slot → AI calls IRS at that time → AI holds for you →
+  When a live agent answers, your phone rings and you're connected instantly.
+  Average hold time: 30-60 min. Cost: ~$0.09/min (billed to ModernTax).
+</p>
+  `.trim();
+
+  const html = createEmailTemplate(`IRS Call Schedule — ${dateStr}`, content);
+
+  try {
+    await sgMail.send({
+      to: expertEmail,
+      from: fromEmail,
+      subject: `[Action Required] ${pendingEntities.length} IRS ${pendingEntities.length === 1 ? 'call' : 'calls'} ready — pick your time`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send expert daily call schedule:', error);
+  }
+}
