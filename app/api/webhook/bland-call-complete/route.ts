@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     // Find the call session
     const { data: session } = await adminSupabase
       .from('irs_call_sessions' as any)
-      .select('id, expert_id, cost_per_minute, initiated_at')
+      .select('id, expert_id, cost_per_minute, initiated_at, callback_mode, callback_status, callback_phone')
       .eq('bland_call_id', call_id)
       .single() as { data: any; error: any };
 
@@ -78,11 +78,53 @@ export async function POST(request: NextRequest) {
     const transcriptText = concatenated_transcript || '';
     const agentInfo = extractAgentInfo(transcriptText);
 
-    // Determine session status
-    const sessionStatus = completed ? 'completed' : (error_message ? 'failed' : 'completed');
-
-    // Auto-detect coaching tags
+    // Auto-detect coaching tags (declared early for use in callback handling)
     const coachingTags: string[] = [];
+
+    // Determine session status — account for transfer/callback modes
+    let sessionStatus = completed ? 'completed' : (error_message ? 'failed' : 'completed');
+
+    // If this was a hold_and_transfer call, check if transfer happened
+    if (session.callback_mode === 'transfer') {
+      if (session.callback_status === 'transferring' || session.callback_status === 'connected') {
+        // Transfer was initiated — the call ended because the expert took over
+        sessionStatus = 'completed';
+        // Update callback status to connected if it was still transferring
+        if (session.callback_status === 'transferring') {
+          await adminSupabase
+            .from('irs_call_sessions' as any)
+            .update({
+              callback_status: 'connected',
+              callback_connected_at: new Date().toISOString(),
+            })
+            .eq('id', session.id);
+        }
+      } else if (!error_message && session.callback_status === 'waiting') {
+        // Call ended without transfer — agent may not have answered
+        sessionStatus = 'completed';
+        await adminSupabase
+          .from('irs_call_sessions' as any)
+          .update({ callback_status: 'no_answer' })
+          .eq('id', session.id);
+      }
+    }
+
+    // If this was an IRS callback mode, update callback status
+    if (session.callback_mode === 'irs_callback') {
+      const callbackAccepted = transcriptText.toLowerCase().includes('callback') &&
+        (transcriptText.toLowerCase().includes('confirmed') ||
+         transcriptText.toLowerCase().includes('scheduled') ||
+         transcriptText.toLowerCase().includes('will call'));
+      if (callbackAccepted) {
+        await adminSupabase
+          .from('irs_call_sessions' as any)
+          .update({ callback_status: 'waiting' })
+          .eq('id', session.id);
+        coachingTags.push('irs_callback_accepted');
+      }
+    }
+
+    // Populate coaching tags
     if (sessionStatus === 'completed') coachingTags.push('completed');
     if (holdDurationSeconds && holdDurationSeconds > 1800) coachingTags.push('long_hold');
     if (transcriptText.toLowerCase().includes('name') && transcriptText.toLowerCase().includes('match')) {
@@ -91,6 +133,8 @@ export async function POST(request: NextRequest) {
     if (transcriptText.toLowerCase().includes('wet signature')) {
       coachingTags.push('esig_rejected');
     }
+    if (session.callback_mode === 'transfer') coachingTags.push('hold_and_transfer');
+    if (session.callback_mode === 'irs_callback') coachingTags.push('irs_callback');
 
     // Update session
     const sessionUpdate: Record<string, unknown> = {

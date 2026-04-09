@@ -46,6 +46,17 @@ export interface BlandCallParams {
     expertId: string;
     assignmentIds: string[];
   };
+
+  /**
+   * Call mode:
+   * - 'ai_full': AI handles entire IRS conversation (default)
+   * - 'hold_and_transfer': AI navigates phone tree + holds, then transfers to expert's phone when agent answers
+   * - 'irs_callback': AI navigates phone tree, accepts IRS callback option, provides expert's phone for callback
+   */
+  callMode?: 'ai_full' | 'hold_and_transfer' | 'irs_callback';
+
+  /** Expert's personal phone for transfer/callback (required if callMode != 'ai_full') */
+  callbackPhone?: string;
 }
 
 export interface BlandCallResponse {
@@ -118,6 +129,64 @@ IMPORTANT RULES:
 - Read SSN/EIN digits one at a time with brief pauses.`;
 }
 
+/**
+ * Build task prompt for hold-and-transfer mode.
+ * AI navigates the IRS phone tree, waits on hold, and when a live agent answers,
+ * transfers the call to the expert's personal phone.
+ */
+function buildHoldAndTransferPrompt(params: BlandCallParams): string {
+  return `You are an automated assistant calling the IRS Practitioner Priority Service on behalf of ${params.expertName}, a tax professional.
+
+Your ONLY job is to navigate the phone tree and wait on hold. When a live IRS agent answers, you will transfer the call.
+
+PHONE TREE NAVIGATION:
+- When the automated system answers, press 1 for English.
+- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
+- If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
+- If offered a callback option, DECLINE it and stay on hold.
+- Wait patiently on hold. Do not speak during hold music.
+
+WHEN A LIVE IRS AGENT ANSWERS:
+1. Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
+2. Immediately use the transfer_call tool to transfer to ${params.callbackPhone}.
+3. Do NOT provide any taxpayer information yourself.
+4. Do NOT attempt to process any requests.
+
+If the agent asks who you are: "I'm connecting you with ${params.expertName}, a tax practitioner. One moment please."
+If the agent says they can't hold: "I understand, ${params.expertName} will be right with you."
+
+IMPORTANT: Your only purpose is to hold the line and transfer when a human answers. Do not engage in any IRS business yourself.`;
+}
+
+/**
+ * Build task prompt for IRS callback mode.
+ * AI navigates phone tree and when offered a callback option, provides the expert's phone number.
+ */
+function buildIrsCallbackPrompt(params: BlandCallParams): string {
+  return `You are an automated assistant calling the IRS Practitioner Priority Service on behalf of ${params.expertName}, a tax professional.
+
+Your ONLY job is to navigate the phone tree and request a callback to the expert's phone number.
+
+PHONE TREE NAVIGATION:
+- When the automated system answers, press 1 for English.
+- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
+- If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
+
+CALLBACK HANDLING:
+- If offered a callback option, ACCEPT IT.
+- When prompted for a callback number, provide: ${params.callbackPhone}.
+- Confirm the callback number if asked to repeat it.
+- If asked for a name, provide: ${params.expertName}.
+- Once the callback is confirmed, thank the system and end the call.
+
+IF NO CALLBACK OPTION IS OFFERED:
+- Stay on hold and wait for an agent.
+- When an agent answers, say: "Hello, please hold one moment while I connect you with ${params.expertName}."
+- Use the transfer_call tool to transfer to ${params.callbackPhone}.
+
+IMPORTANT: Do not provide any taxpayer information. Your only job is to set up the callback or transfer.`;
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -148,16 +217,26 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     },
   };
 
-  // Use pathway if configured, otherwise use task prompt
-  if (pathwayId) {
+  const callMode = params.callMode || 'ai_full';
+
+  // Select task prompt based on call mode
+  if (pathwayId && callMode === 'ai_full') {
     body.pathway_id = pathwayId;
+  } else if (callMode === 'hold_and_transfer') {
+    body.task = buildHoldAndTransferPrompt(params);
+    body.first_sentence = '';
+  } else if (callMode === 'irs_callback') {
+    body.task = buildIrsCallbackPrompt(params);
+    body.first_sentence = '';
+    // IRS callback calls are short — just navigate tree and provide callback number
+    body.max_duration = Math.min(maxDuration, 15);
   } else {
     body.task = buildTaskPrompt(params);
-    body.first_sentence = ''; // wait for IRS greeting
+    body.first_sentence = '';
   }
 
   // Mid-call tools
-  body.tools = [
+  const tools: Record<string, unknown>[] = [
     {
       name: 'send_fax',
       description: 'Send a fax of the signed 8821 form to the IRS agent. Use this when the agent requests you fax the 8821 authorization form.',
@@ -185,6 +264,37 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
       },
     },
   ];
+
+  // Add transfer tool for hold-and-transfer and irs_callback modes
+  if ((callMode === 'hold_and_transfer' || callMode === 'irs_callback') && params.callbackPhone) {
+    tools.push({
+      name: 'transfer_call',
+      description: `Transfer the call to ${params.expertName} at ${params.callbackPhone}. Use this when a live IRS agent has answered and you need to connect them with the expert.`,
+      url: `${appUrl}/api/expert/irs-call/transfer-notify`,
+      method: 'POST',
+      headers: { 'x-bland-secret': webhookSecret },
+      input_schema: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'The call session ID',
+            default: params.metadata.sessionId,
+          },
+          reason: {
+            type: 'string',
+            description: 'Why the transfer is happening (e.g. "IRS agent answered")',
+          },
+        },
+        required: [],
+      },
+    });
+
+    // Bland AI native transfer configuration
+    body.transfer_phone_number = params.callbackPhone;
+  }
+
+  body.tools = tools;
 
   const response = await fetch(`${BLAND_API_BASE}/calls`, {
     method: 'POST',

@@ -34,9 +34,11 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { assignmentIds, scheduledFor, timezone } = body;
+    const { assignmentIds, scheduledFor, timezone, callMode, callbackPhone } = body;
     // scheduledFor: ISO string like "2026-04-07T14:00:00Z" (optional — null = call now)
     // timezone: e.g. "America/New_York" (for IRS hours validation)
+    // callMode: 'ai_full' | 'hold_and_transfer' | 'irs_callback' (default: 'hold_and_transfer')
+    // callbackPhone: expert's personal phone for transfer (uses profile phone if not provided)
 
     if (!assignmentIds || !Array.isArray(assignmentIds) || assignmentIds.length === 0) {
       return NextResponse.json({ error: 'assignmentIds array is required' }, { status: 400 });
@@ -146,6 +148,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Determine call mode — default to hold_and_transfer (expert takes over when agent answers)
+    const resolvedCallMode = callMode || 'hold_and_transfer';
+    const resolvedCallbackPhone = callbackPhone || profile.phone_number || null;
+
+    // Validate callback phone for transfer/callback modes
+    if (resolvedCallMode !== 'ai_full' && !resolvedCallbackPhone) {
+      return NextResponse.json({
+        error: 'Phone number required for call transfer. Update your profile with a phone number.',
+      }, { status: 400 });
+    }
+
     // Create call session
     const { data: session, error: sessionError } = await adminSupabase
       .from('irs_call_sessions' as any)
@@ -158,6 +171,9 @@ export async function POST(request: NextRequest) {
         expert_sor_id: profile.sor_id || null,
         scheduled_for: isScheduled ? scheduledFor : null,
         scheduled_timezone: timezone || 'America/Los_Angeles',
+        callback_phone: resolvedCallbackPhone,
+        callback_mode: resolvedCallMode === 'ai_full' ? null : resolvedCallMode === 'irs_callback' ? 'irs_callback' : 'transfer',
+        callback_status: resolvedCallMode === 'ai_full' ? null : 'waiting',
       })
       .select()
       .single() as { data: any; error: any };
@@ -239,6 +255,8 @@ export async function POST(request: NextRequest) {
           expertId: user.id,
           assignmentIds,
         },
+        callMode: resolvedCallMode as 'ai_full' | 'hold_and_transfer' | 'irs_callback',
+        callbackPhone: resolvedCallbackPhone || undefined,
       });
 
       // Update session with Bland call ID

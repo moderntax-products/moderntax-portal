@@ -19,6 +19,8 @@ export function IrsCallLauncher({
   const [error, setError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [mode, setMode] = useState<'immediate' | 'schedule'>('immediate');
+  const [callMode, setCallMode] = useState<'hold_and_transfer' | 'ai_full' | 'irs_callback'>('hold_and_transfer');
+  const [callbackPhone, setCallbackPhone] = useState('');
   const [scheduledDate, setScheduledDate] = useState('');
   const [scheduledTime, setScheduledTime] = useState('09:00');
   const [scheduledTimezone, setScheduledTimezone] = useState(
@@ -35,6 +37,8 @@ export function IrsCallLauncher({
     try {
       const payload: Record<string, unknown> = {
         assignmentIds: selectedAssignments.map(a => a.id),
+        callMode,
+        ...(callbackPhone && { callbackPhone }),
       };
 
       if (mode === 'schedule' && scheduledDate && scheduledTime) {
@@ -224,6 +228,62 @@ export function IrsCallLauncher({
             </button>
           </div>
 
+          {/* Call mode selector */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-gray-700">Call Mode</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCallMode('hold_and_transfer')}
+                className={`flex-1 px-2 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                  callMode === 'hold_and_transfer'
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                Hold & Transfer
+                <span className="block text-[10px] mt-0.5 opacity-80">AI holds, transfers to you</span>
+              </button>
+              <button
+                onClick={() => setCallMode('irs_callback')}
+                className={`flex-1 px-2 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                  callMode === 'irs_callback'
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                IRS Callback
+                <span className="block text-[10px] mt-0.5 opacity-80">IRS calls you back</span>
+              </button>
+              <button
+                onClick={() => setCallMode('ai_full')}
+                className={`flex-1 px-2 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                  callMode === 'ai_full'
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                AI Full
+                <span className="block text-[10px] mt-0.5 opacity-80">AI handles everything</span>
+              </button>
+            </div>
+
+            {callMode !== 'ai_full' && (
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  Your phone number {callMode === 'hold_and_transfer' ? '(for transfer)' : '(for IRS callback)'}
+                </label>
+                <input
+                  type="tel"
+                  value={callbackPhone}
+                  onChange={e => setCallbackPhone(e.target.value)}
+                  placeholder="(555) 123-4567 — leave blank to use profile phone"
+                  className="w-full text-xs border border-gray-300 rounded-md px-2.5 py-1.5 bg-white placeholder:text-gray-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">Leave blank to use your profile phone number</p>
+              </div>
+            )}
+          </div>
+
           {mode === 'schedule' && (
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
               <p className="text-xs font-medium text-blue-800">Pick a date & time (IRS PPS: 7 AM – 7 PM, Mon–Fri)</p>
@@ -299,11 +359,16 @@ export function IrsCallLauncher({
           {mode === 'immediate' && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
               <p className="text-xs text-amber-800 font-medium">
-                This will place a live call to the IRS Practitioner Priority Service.
-                Hold times can be 15-90 minutes (~$0.09/min). The AI will speak as you.
+                {callMode === 'hold_and_transfer'
+                  ? 'AI will call IRS, navigate the phone tree, and wait on hold. When an agent answers, the call transfers to your phone.'
+                  : callMode === 'irs_callback'
+                  ? 'AI will call IRS, navigate the phone tree, and request a callback to your phone number.'
+                  : 'AI will call IRS, navigate the phone tree, wait on hold, and speak to the agent as you.'}
               </p>
               <p className="text-xs text-amber-700 mt-1">
-                Estimated max cost: ${(90 * 0.09).toFixed(2)} (90 min cap)
+                {callMode === 'irs_callback'
+                  ? 'Estimated cost: ~$0.50 (short call to set up callback)'
+                  : `Hold times can be 15-90 min (~$0.09/min). Max cost: $${(90 * 0.09).toFixed(2)}`}
               </p>
             </div>
           )}
