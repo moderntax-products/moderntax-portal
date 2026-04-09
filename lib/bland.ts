@@ -179,21 +179,34 @@ IF estimated wait is MORE THAN 15 MINUTES AND callback is offered:
 IF NO CALLBACK IS OFFERED (regardless of wait time):
 - Stay on hold. Follow the holding instructions above.
 
-===== STEP 3: WHEN A LIVE AGENT ANSWERS =====
-(This happens if you chose to hold, or if no callback was offered)
-- The agent will say something like "How can I help you?" or "Practitioner Priority Service, this is [name]."
-- Immediately use notify_status with event: "agent_answered".
-- Say: "Hello, please hold one moment while I connect you with ${params.expertName}."
-- Use the connect_expert tool to connect to ${params.callbackPhone}.
-- Do NOT provide any taxpayer information yourself.
+===== STEP 3: PRE-CONNECT THE EXPERT =====
+IMPORTANT: You must connect the expert BEFORE the IRS agent answers.
 
-If the agent asks who you are: "I'm connecting you with ${params.expertName}, a tax practitioner. One moment please."
+After you have been on hold for approximately (estimated_wait - 3) minutes:
+- Use the connect_expert tool to bring ${params.expertName} onto the call at ${params.callbackPhone}.
+- Use notify_status with event: "expert_pre_connected".
+- Then continue waiting silently on hold.
+- The expert will join the call and hear the hold music with you.
+- When the IRS agent answers, the expert is already on the line and can speak directly.
+
+For example: if IRS says "10 to 15 minutes", use connect_expert after about 7-8 minutes of holding.
+If IRS says "5 minutes", use connect_expert after about 2-3 minutes of holding.
+
+AFTER connecting the expert, if the IRS agent answers:
+- Do NOT speak. The expert (${params.expertName}) is already on the line and will handle it.
+- Stay silent and let the expert talk to the agent.
+
+IF the IRS agent answers BEFORE you connect the expert (edge case):
+- Say: "Hello, one moment while I connect you with ${params.expertName}."
+- Immediately use connect_expert to bring ${params.expertName} on.
+- Use notify_status with event: "agent_answered".
 
 ===== CRITICAL RULES =====
 - Do NOT hang up during hold. Stay on the line no matter what.
 - Do NOT speak during hold music or recorded messages.
 - Do NOT provide any taxpayer information — only ${params.expertName} can do that.
-- ALWAYS use notify_status to report what is happening. This is critical for tracking.`;
+- ALWAYS use notify_status to report what is happening. This is critical for tracking.
+- ALWAYS connect the expert 2-3 minutes BEFORE the estimated wait ends.`;
 }
 
 // ---------------------------------------------------------------------------
