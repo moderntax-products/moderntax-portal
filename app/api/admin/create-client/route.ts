@@ -5,12 +5,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerComponentClient } from '@/lib/supabase-server';
+import { cookies } from 'next/headers';
+import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditEvent } from '@/lib/audit';
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createServerComponentClient();
+    const cookieStore = await cookies();
+    const supabase = createServerRouteClient(cookieStore);
 
     const {
       data: { user },
@@ -60,8 +62,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create client
-    const { data: newClient, error: createError } = await supabase
+    // Create client (use admin client to bypass RLS)
+    const adminSupabase = createAdminClient();
+    const { data: newClient, error: createError } = await adminSupabase
       .from('clients')
       .insert({
         name: trimmedName,
