@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     const webhookSecret = request.headers.get('x-bland-secret');
     const expectedSecret = process.env.BLAND_WEBHOOK_SECRET;
 
-    if (expectedSecret && webhookSecret !== expectedSecret) {
+    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

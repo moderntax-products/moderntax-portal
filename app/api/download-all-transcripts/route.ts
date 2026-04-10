@@ -44,7 +44,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Check access
-    if (profile.role !== 'admin' && profile.role !== 'expert') {
+    if (profile.role === 'admin') {
+      // Admins can access all requests
+    } else if (profile.role === 'expert') {
+      // Experts can only access requests where they have an active assignment
+      const { data: assignments } = await adminSupabase
+        .from('expert_assignments')
+        .select('entity_id')
+        .eq('expert_id', user.id)
+        .in('status', ['assigned', 'in_progress', 'completed']);
+
+      const assignedEntityIds = (assignments || []).map((a: any) => a.entity_id);
+
+      const { data: assignedEntities } = await adminSupabase
+        .from('request_entities')
+        .select('id')
+        .eq('request_id', requestId)
+        .in('id', assignedEntityIds.length > 0 ? assignedEntityIds : ['__none__']);
+
+      if (!assignedEntities || assignedEntities.length === 0) {
+        return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
+      }
+    } else {
+      // Processors/managers: must be same client
       if (req.client_id !== profile.client_id) {
         return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
       }

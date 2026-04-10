@@ -6,6 +6,15 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate internal webhook secret
+    const webhookSecret = request.headers.get('x-webhook-secret') || request.headers.get('authorization')?.replace('Bearer ', '');
+    const expectedSecret = process.env.WEBHOOK_API_KEY;
+
+    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
+      console.error('request-created webhook: invalid or missing secret');
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
     const { requestId, userId } = body;
 

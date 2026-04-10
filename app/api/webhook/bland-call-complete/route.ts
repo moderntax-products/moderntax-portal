@@ -12,14 +12,12 @@ import { parseTranscriptOutcomes, extractAgentInfo } from '@/lib/bland';
 
 export async function POST(request: NextRequest) {
   try {
-    // Validate webhook secret
-    const webhookSecret = request.headers.get('x-bland-secret') ||
-                          request.headers.get('x-webhook-secret') ||
-                          request.headers.get('authorization');
+    // Validate webhook secret (fail closed — reject if env var is not set)
+    const webhookSecret = request.headers.get('x-bland-secret');
     const expectedSecret = process.env.BLAND_WEBHOOK_SECRET;
 
-    if (expectedSecret && webhookSecret !== expectedSecret && webhookSecret !== `Bearer ${expectedSecret}`) {
-      console.error('Bland webhook: invalid secret');
+    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
+      console.error('Bland webhook: invalid or missing secret');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
