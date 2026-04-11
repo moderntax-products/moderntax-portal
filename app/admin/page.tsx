@@ -4,6 +4,7 @@ import type { RequestStatus } from '@/lib/types';
 import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { FreeTrialToggle } from '@/components/FreeTrialToggle';
+import { NotifyProcessorsButton } from '@/components/NotifyProcessorsButton';
 
 interface PageProps {
   searchParams: Promise<{ type?: string; search?: string; status?: string }>;
@@ -75,11 +76,137 @@ export default async function AdminPage({ searchParams }: PageProps) {
     .eq('status', 'processing')
     .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
-  const stuckEntities = [
-    ...(stuckSentEntities || []),
-    ...(stuckQueueEntities || []),
-    ...(stuckProcessingEntities || []),
-  ];
+  // stuckEntities replaced by bottleneck analysis below
+  void stuckSentEntities; void stuckQueueEntities; void stuckProcessingEntities;
+
+  // --- Bottleneck Analysis ---
+  // Fetch ALL incomplete requests with entities, assignments, and submitter info for bottleneck view
+  const { data: incompleteRequests } = await supabase
+    .from('requests')
+    .select(`
+      id, loan_number, status, created_at, client_id, requested_by,
+      clients(name),
+      profiles!requests_requested_by_fkey(full_name, email, role)
+    `)
+    .not('status', 'in', '("completed","failed","cancelled")')
+    .order('created_at', { ascending: true }) as { data: any[] | null; error: any };
+
+  const incompleteIds = (incompleteRequests || []).map((r: any) => r.id);
+  const { data: incompleteEntities } = await supabase
+    .from('request_entities')
+    .select('id, request_id, entity_name, status, created_at, updated_at')
+    .in('request_id', incompleteIds.length > 0 ? incompleteIds : ['__none__']) as { data: any[] | null; error: any };
+
+  const incEntityIds = (incompleteEntities || []).map((e: any) => e.id);
+  const { data: incAssignments } = await supabase
+    .from('expert_assignments')
+    .select('entity_id, expert_id, status, profiles!expert_assignments_expert_id_fkey(full_name)')
+    .in('entity_id', incEntityIds.length > 0 ? incEntityIds : ['__none__'])
+    .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
+
+  const incAssignmentMap = new Map<string, any>();
+  (incAssignments || []).forEach((a: any) => incAssignmentMap.set(a.entity_id, a));
+
+  const incEntityMap = new Map<string, any[]>();
+  (incompleteEntities || []).forEach((e: any) => {
+    if (!incEntityMap.has(e.request_id)) incEntityMap.set(e.request_id, []);
+    incEntityMap.get(e.request_id)!.push(e);
+  });
+
+  // Categorize bottlenecks
+  type Bottleneck = {
+    entityName: string;
+    entityId: string;
+    requestId: string;
+    loanNumber: string;
+    clientName: string;
+    processorName: string;
+    processorEmail: string;
+    status: string;
+    expertName: string | null;
+    ageDays: number;
+    ageDisplay: string;
+    category: 'unassigned' | 'awaiting_signature' | 'irs_queue' | 'stale' | 'no_entities';
+  };
+
+  const bottlenecks: Bottleneck[] = [];
+  const processorBacklog: Record<string, { name: string; email: string; client: string; pending: number; stale: number }> = {};
+
+  for (const req of (incompleteRequests || [])) {
+    const reqEntities = incEntityMap.get(req.id) || [];
+    const createdAt = new Date(req.created_at);
+    const ageHours = Math.round((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60));
+    const ageDays = Math.floor(ageHours / 24);
+    const ageDisplay = ageDays > 0 ? `${ageDays}d ${ageHours % 24}h` : `${ageHours}h`;
+    const processorName = (req.profiles as any)?.full_name || 'Unknown';
+    const processorEmail = (req.profiles as any)?.email || '';
+    const processorRole = (req.profiles as any)?.role || '';
+    const clientName = (req.clients as any)?.name || 'Unknown';
+
+    // Track processor backlog (skip admin-submitted)
+    if (processorRole !== 'admin' && processorEmail) {
+      if (!processorBacklog[processorEmail]) {
+        processorBacklog[processorEmail] = { name: processorName, email: processorEmail, client: clientName, pending: 0, stale: 0 };
+      }
+      const pendingCount = reqEntities.filter((e: any) => !['completed', 'failed'].includes(e.status)).length;
+      processorBacklog[processorEmail].pending += pendingCount || 1;
+      if (ageDays >= 3) processorBacklog[processorEmail].stale += 1;
+    }
+
+    // Request with no entities
+    if (reqEntities.length === 0) {
+      bottlenecks.push({
+        entityName: '(No entities)',
+        entityId: '',
+        requestId: req.id,
+        loanNumber: req.loan_number || req.id.slice(0, 8),
+        clientName,
+        processorName,
+        processorEmail,
+        status: req.status,
+        expertName: null,
+        ageDays,
+        ageDisplay,
+        category: 'no_entities',
+      });
+      continue;
+    }
+
+    for (const entity of reqEntities) {
+      if (['completed', 'failed'].includes(entity.status)) continue;
+      const assignment = incAssignmentMap.get(entity.id);
+      const expertName = assignment?.profiles?.full_name || null;
+      const entityAgeHours = Math.round((now.getTime() - new Date(entity.updated_at || entity.created_at).getTime()) / (1000 * 60 * 60));
+      const entityAgeDays = Math.floor(entityAgeHours / 24);
+
+      let category: Bottleneck['category'] = 'irs_queue';
+      if (entity.status === '8821_sent') category = 'awaiting_signature';
+      else if (['irs_queue', 'processing'].includes(entity.status) && !assignment) category = 'unassigned';
+      else if (entityAgeDays >= 5) category = 'stale';
+
+      bottlenecks.push({
+        entityName: entity.entity_name,
+        entityId: entity.id,
+        requestId: req.id,
+        loanNumber: req.loan_number || req.id.slice(0, 8),
+        clientName,
+        processorName,
+        processorEmail,
+        status: entity.status,
+        expertName,
+        ageDays,
+        ageDisplay,
+        category,
+      });
+    }
+  }
+
+  // Group by category
+  const unassignedBottlenecks = bottlenecks.filter(b => b.category === 'unassigned');
+  const signatureBottlenecks = bottlenecks.filter(b => b.category === 'awaiting_signature');
+  const staleBottlenecks = bottlenecks.filter(b => b.category === 'stale');
+  const irsQueueBottlenecks = bottlenecks.filter(b => b.category === 'irs_queue');
+  const noEntityBottlenecks = bottlenecks.filter(b => b.category === 'no_entities');
 
   // Fetch entities with compliance flags (gross_receipts JSONB contains severity/flags)
   const { data: allCompletedEntities } = await supabase
@@ -116,13 +243,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
     unsubscribed: (dripRecords || []).filter((d: any) => d.unsubscribed).length,
   };
 
-  const getStuckDuration = (updatedAt: string) => {
-    const diff = now.getTime() - new Date(updatedAt).getTime();
-    const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-    const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-    if (days > 0) return `${days}d ${hours}h`;
-    return `${hours}h`;
-  };
+  // getStuckDuration replaced by bottleneck ageDisplay calculation
 
   // Calculate stats per client — count at entity (EIN/SSN) level, not request level
   const clientStats: Record<
@@ -487,50 +608,255 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         </div>
 
-        {/* Stuck Entities Warning */}
-        {stuckEntities.length > 0 && (
-          <div className="mb-8 sm:mb-12 bg-amber-50 border border-amber-300 rounded-lg p-4 sm:p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
-              <h3 className="text-lg font-bold text-amber-800">Stuck Entities ({stuckEntities.length})</h3>
+        {/* Bottleneck Resolution Center */}
+        {bottlenecks.length > 0 && (
+          <div className="mb-8 sm:mb-12 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <h2 className="text-xl font-bold text-gray-900">Bottleneck Resolution</h2>
+                <span className="px-2 py-0.5 bg-red-100 text-red-800 text-xs font-bold rounded-full">
+                  {bottlenecks.length} blocking
+                </span>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-amber-200">
-                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Entity</th>
-                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Client</th>
-                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Status</th>
-                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Stuck For</th>
-                    <th className="px-4 py-2 text-left font-semibold text-amber-900">Request</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-amber-100">
-                  {stuckEntities.map((entity: any) => (
-                    <tr key={entity.id}>
-                      <td className="px-4 py-2 font-medium text-amber-900">{entity.entity_name}</td>
-                      <td className="px-4 py-2 text-amber-800">{entity.requests?.clients?.name || '—'}</td>
-                      <td className="px-4 py-2">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadgeColor(entity.status)}`}>
-                          {formatStatus(entity.status)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 text-amber-800 font-mono">{getStuckDuration(entity.updated_at)}</td>
-                      <td className="px-4 py-2">
-                        <Link
-                          href={`/admin/requests/${entity.request_id}`}
-                          className="text-amber-700 hover:text-amber-900 underline font-medium"
-                        >
-                          {entity.requests?.loan_number || 'View'}
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            {/* Bottleneck Summary Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className={`rounded-lg p-4 border ${unassignedBottlenecks.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${unassignedBottlenecks.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{unassignedBottlenecks.length}</div>
+                <div className="text-xs font-medium text-gray-600 mt-1">Unassigned</div>
+                <div className="text-[10px] text-gray-400">Need expert</div>
+              </div>
+              <div className={`rounded-lg p-4 border ${signatureBottlenecks.length > 0 ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${signatureBottlenecks.length > 0 ? 'text-blue-700' : 'text-gray-400'}`}>{signatureBottlenecks.length}</div>
+                <div className="text-xs font-medium text-gray-600 mt-1">Awaiting 8821</div>
+                <div className="text-[10px] text-gray-400">Needs signature</div>
+              </div>
+              <div className={`rounded-lg p-4 border ${irsQueueBottlenecks.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${irsQueueBottlenecks.length > 0 ? 'text-amber-700' : 'text-gray-400'}`}>{irsQueueBottlenecks.length}</div>
+                <div className="text-xs font-medium text-gray-600 mt-1">IRS Queue</div>
+                <div className="text-[10px] text-gray-400">Expert working</div>
+              </div>
+              <div className={`rounded-lg p-4 border ${staleBottlenecks.length > 0 ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${staleBottlenecks.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{staleBottlenecks.length}</div>
+                <div className="text-xs font-medium text-gray-600 mt-1">Stale (5d+)</div>
+                <div className="text-[10px] text-gray-400">Needs escalation</div>
+              </div>
+              <div className={`rounded-lg p-4 border ${noEntityBottlenecks.length > 0 ? 'bg-purple-50 border-purple-200' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`text-2xl font-bold ${noEntityBottlenecks.length > 0 ? 'text-purple-700' : 'text-gray-400'}`}>{noEntityBottlenecks.length}</div>
+                <div className="text-xs font-medium text-gray-600 mt-1">No Entities</div>
+                <div className="text-[10px] text-gray-400">Empty request</div>
+              </div>
             </div>
+
+            {/* Unassigned — highest priority */}
+            {unassignedBottlenecks.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-red-800 mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                  Needs Expert Assignment ({unassignedBottlenecks.length})
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-red-200">
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Entity</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Client</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Processor</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Age</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-red-100">
+                      {unassignedBottlenecks.map((b, i) => (
+                        <tr key={`unassigned-${i}`}>
+                          <td className="px-3 py-2 font-medium text-red-900">{b.entityName}</td>
+                          <td className="px-3 py-2 text-red-800 text-xs">{b.clientName}</td>
+                          <td className="px-3 py-2 text-red-800 text-xs">{b.processorName}</td>
+                          <td className="px-3 py-2">
+                            <span className={`font-mono text-xs font-bold ${b.ageDays >= 3 ? 'text-red-700' : 'text-amber-700'}`}>{b.ageDisplay}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Link href={`/admin/requests/${b.requestId}`} className="text-red-700 hover:text-red-900 underline font-medium text-xs">
+                              Assign Expert
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Awaiting 8821 Signature */}
+            {signatureBottlenecks.length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-blue-800 mb-3">
+                  Awaiting 8821 Signature ({signatureBottlenecks.length})
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-blue-200">
+                        <th className="px-3 py-2 text-left font-semibold text-blue-900 text-xs">Entity</th>
+                        <th className="px-3 py-2 text-left font-semibold text-blue-900 text-xs">Client</th>
+                        <th className="px-3 py-2 text-left font-semibold text-blue-900 text-xs">Processor</th>
+                        <th className="px-3 py-2 text-left font-semibold text-blue-900 text-xs">Waiting</th>
+                        <th className="px-3 py-2 text-left font-semibold text-blue-900 text-xs">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-blue-100">
+                      {signatureBottlenecks.map((b, i) => (
+                        <tr key={`sig-${i}`}>
+                          <td className="px-3 py-2 font-medium text-blue-900">{b.entityName}</td>
+                          <td className="px-3 py-2 text-blue-800 text-xs">{b.clientName}</td>
+                          <td className="px-3 py-2 text-blue-800 text-xs">{b.processorName}</td>
+                          <td className="px-3 py-2">
+                            <span className={`font-mono text-xs font-bold ${b.ageDays >= 7 ? 'text-red-700' : b.ageDays >= 3 ? 'text-amber-700' : 'text-blue-700'}`}>{b.ageDisplay}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Link href={`/admin/requests/${b.requestId}`} className="text-blue-700 hover:text-blue-900 underline font-medium text-xs">
+                              Resend 8821
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* IRS Queue — in progress */}
+            {irsQueueBottlenecks.length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-amber-800 mb-3">
+                  In IRS Queue ({irsQueueBottlenecks.length})
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-amber-200">
+                        <th className="px-3 py-2 text-left font-semibold text-amber-900 text-xs">Entity</th>
+                        <th className="px-3 py-2 text-left font-semibold text-amber-900 text-xs">Client</th>
+                        <th className="px-3 py-2 text-left font-semibold text-amber-900 text-xs">Expert</th>
+                        <th className="px-3 py-2 text-left font-semibold text-amber-900 text-xs">Age</th>
+                        <th className="px-3 py-2 text-left font-semibold text-amber-900 text-xs">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100">
+                      {irsQueueBottlenecks.map((b, i) => (
+                        <tr key={`irs-${i}`}>
+                          <td className="px-3 py-2 font-medium text-amber-900">{b.entityName}</td>
+                          <td className="px-3 py-2 text-amber-800 text-xs">{b.clientName}</td>
+                          <td className="px-3 py-2 text-amber-800 text-xs">{b.expertName || (<span className="text-red-600 font-bold">Unassigned</span>)}</td>
+                          <td className="px-3 py-2">
+                            <span className={`font-mono text-xs font-bold ${b.ageDays >= 3 ? 'text-red-700' : 'text-amber-700'}`}>{b.ageDisplay}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Link href={`/admin/requests/${b.requestId}`} className="text-amber-700 hover:text-amber-900 underline font-medium text-xs">
+                              View
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Stale entities */}
+            {staleBottlenecks.length > 0 && (
+              <div className="bg-red-50 border border-red-300 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-red-800 mb-3">
+                  Stale — Needs Escalation ({staleBottlenecks.length})
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-red-200">
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Entity</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Client</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Status</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Expert</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Stuck For</th>
+                        <th className="px-3 py-2 text-left font-semibold text-red-900 text-xs">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-red-100">
+                      {staleBottlenecks.map((b, i) => (
+                        <tr key={`stale-${i}`}>
+                          <td className="px-3 py-2 font-medium text-red-900">{b.entityName}</td>
+                          <td className="px-3 py-2 text-red-800 text-xs">{b.clientName}</td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadgeColor(b.status)}`}>
+                              {formatStatus(b.status)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-red-800 text-xs">{b.expertName || '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className="font-mono text-xs font-bold text-red-700">{b.ageDisplay}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Link href={`/admin/requests/${b.requestId}`} className="text-red-700 hover:text-red-900 underline font-medium text-xs">
+                              Escalate
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Processor Backlog Summary */}
+            {Object.keys(processorBacklog).length > 0 && (
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold text-gray-800">Processor Backlog</h3>
+                  <NotifyProcessorsButton />
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700 text-xs">Processor</th>
+                        <th className="px-3 py-2 text-left font-semibold text-gray-700 text-xs">Client</th>
+                        <th className="px-3 py-2 text-center font-semibold text-gray-700 text-xs">Pending</th>
+                        <th className="px-3 py-2 text-center font-semibold text-gray-700 text-xs">Stale</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {Object.values(processorBacklog).sort((a, b) => b.stale - a.stale || b.pending - a.pending).map((p, i) => (
+                        <tr key={`proc-${i}`}>
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-gray-900 text-sm">{p.name}</div>
+                            <div className="text-xs text-gray-400">{p.email}</div>
+                          </td>
+                          <td className="px-3 py-2 text-gray-600 text-xs">{p.client}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="font-bold text-amber-700">{p.pending}</span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {p.stale > 0 ? (
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">{p.stale}</span>
+                            ) : (
+                              <span className="text-green-600 text-xs">0</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

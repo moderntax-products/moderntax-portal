@@ -136,6 +136,13 @@ export async function GET(request: NextRequest) {
       return age >= 3;
     }).length;
 
+    // Bottleneck counts
+    const allPendingEntities = (entities || []).filter((e: any) => !['completed', 'failed'].includes(e.status));
+    const unassignedCount = allPendingEntities.filter((e: any) => {
+      return ['irs_queue', 'processing'].includes(e.status) && !assignmentMap.has(e.id);
+    }).length;
+    const awaitingSigCount = allPendingEntities.filter((e: any) => e.status === '8821_sent').length;
+
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
 
     const html = `
@@ -154,6 +161,14 @@ export async function GET(request: NextRequest) {
       <div style="text-align: center; flex: 1; padding: 12px; background: ${staleCount > 0 ? '#fef2f2' : '#f0fdf4'}; border-radius: 8px;">
         <div style="font-size: 28px; font-weight: 700; color: ${staleCount > 0 ? '#dc2626' : '#059669'};">${staleCount}</div>
         <div style="font-size: 11px; color: #6b7280; text-transform: uppercase;">Stale (3+ days)</div>
+      </div>
+      <div style="text-align: center; flex: 1; padding: 12px; background: ${unassignedCount > 0 ? '#fef2f2' : '#f0fdf4'}; border-radius: 8px;">
+        <div style="font-size: 28px; font-weight: 700; color: ${unassignedCount > 0 ? '#dc2626' : '#059669'};">${unassignedCount}</div>
+        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase;">Unassigned</div>
+      </div>
+      <div style="text-align: center; flex: 1; padding: 12px; background: ${awaitingSigCount > 0 ? '#eff6ff' : '#f9fafb'}; border-radius: 8px;">
+        <div style="font-size: 28px; font-weight: 700; color: ${awaitingSigCount > 0 ? '#3b82f6' : '#9ca3af'};">${awaitingSigCount}</div>
+        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase;">Awaiting 8821</div>
       </div>
     </div>
 
@@ -195,7 +210,7 @@ export async function GET(request: NextRequest) {
         await sgMail.send({
           to: admin.email,
           from: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
-          subject: `Pipeline Status: ${totalIncomplete} incomplete${staleCount > 0 ? ` (${staleCount} stale)` : ''} — ${now.toLocaleDateString('en-US', { timeZone: 'America/New_York' })}`,
+          subject: `Pipeline: ${totalIncomplete} pending${unassignedCount > 0 ? ` | ${unassignedCount} unassigned` : ''}${staleCount > 0 ? ` | ${staleCount} stale` : ''} — ${now.toLocaleDateString('en-US', { timeZone: 'America/New_York' })}`,
           html,
           replyTo: 'support@moderntax.io',
         });

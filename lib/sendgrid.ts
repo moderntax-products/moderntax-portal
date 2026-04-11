@@ -1601,3 +1601,152 @@ ${entityList}
     console.error('Failed to send expert callback notification:', error);
   }
 }
+
+/**
+ * Send processor/manager a backlog status email
+ * Shows their pending requests, what's blocking each one, and timeline expectations
+ */
+export async function sendProcessorBacklogNotification(
+  processorEmail: string,
+  processorName: string,
+  clientName: string,
+  pendingRequests: {
+    loanNumber: string;
+    status: string;
+    ageDisplay: string;
+    ageDays: number;
+    entities: {
+      name: string;
+      status: string;
+      expertName: string | null;
+      blocker: string;
+    }[];
+  }[],
+  summary: {
+    totalPending: number;
+    awaitingSignature: number;
+    inIrsQueue: number;
+    unassigned: number;
+    staleCount: number;
+  }
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send backlog notification');
+    return;
+  }
+
+  const firstName = processorName.split(' ')[0];
+
+  const statusLabels: Record<string, string> = {
+    'pending': 'Pending',
+    'submitted': 'Submitted',
+    '8821_sent': '8821 Sent',
+    '8821_signed': '8821 Signed',
+    'irs_queue': 'IRS Queue',
+    'processing': 'Processing',
+  };
+
+  const blockerColors: Record<string, string> = {
+    'awaiting_signature': '#3b82f6',
+    'needs_expert': '#d97706',
+    'irs_queue': '#f59e0b',
+    'processing': '#8b5cf6',
+    'stale': '#dc2626',
+  };
+
+  const requestRows = pendingRequests.map((req) => {
+    const ageColor = req.ageDays >= 7 ? '#dc2626' : req.ageDays >= 3 ? '#d97706' : '#059669';
+    const entityLines = req.entities.map((e) => {
+      const blockerColor = blockerColors[e.blocker] || '#6b7280';
+      const expertLabel = e.expertName || '<span style="color: #dc2626; font-weight: 600;">Unassigned</span>';
+      return `<tr style="border-bottom: 1px solid #f3f4f6;">
+        <td style="padding: 6px 12px; font-size: 13px;">${e.name}</td>
+        <td style="padding: 6px 12px; font-size: 12px;"><span style="background: ${blockerColor}15; color: ${blockerColor}; padding: 2px 8px; border-radius: 12px; font-weight: 600;">${statusLabels[e.status] || e.status}</span></td>
+        <td style="padding: 6px 12px; font-size: 12px;">${expertLabel}</td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div style="border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; overflow: hidden;">
+        <div style="background: #f9fafb; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong style="font-size: 14px; color: #111827;">${req.loanNumber}</strong>
+            <span style="margin-left: 8px; font-size: 12px; background: ${ageColor}15; color: ${ageColor}; padding: 2px 8px; border-radius: 12px; font-weight: 600;">${req.ageDisplay} old</span>
+          </div>
+          <span style="font-size: 12px; color: #6b7280;">${statusLabels[req.status] || req.status}</span>
+        </div>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <th style="padding: 6px 12px; text-align: left; font-size: 11px; color: #6b7280; text-transform: uppercase;">Entity</th>
+              <th style="padding: 6px 12px; text-align: left; font-size: 11px; color: #6b7280; text-transform: uppercase;">Status</th>
+              <th style="padding: 6px 12px; text-align: left; font-size: 11px; color: #6b7280; text-transform: uppercase;">Expert</th>
+            </tr>
+          </thead>
+          <tbody>${entityLines}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+
+  // Timeline expectations section
+  const timelineItems: string[] = [];
+  if (summary.awaitingSignature > 0) {
+    timelineItems.push(`<li><strong>${summary.awaitingSignature} entit${summary.awaitingSignature === 1 ? 'y' : 'ies'}</strong> waiting for 8821 signature — once signed, transcripts typically take <strong>1-2 business days</strong>.</li>`);
+  }
+  if (summary.inIrsQueue > 0) {
+    timelineItems.push(`<li><strong>${summary.inIrsQueue} entit${summary.inIrsQueue === 1 ? 'y is' : 'ies are'}</strong> in the IRS queue — our experts are actively working these. Expected turnaround: <strong>same day to 24 hours</strong> once assigned.</li>`);
+  }
+  if (summary.unassigned > 0) {
+    timelineItems.push(`<li><strong>${summary.unassigned} entit${summary.unassigned === 1 ? 'y' : 'ies'}</strong> pending expert assignment — we are assigning these now and will begin processing shortly.</li>`);
+  }
+  if (summary.staleCount > 0) {
+    timelineItems.push(`<li style="color: #dc2626;"><strong>${summary.staleCount} request${summary.staleCount === 1 ? '' : 's'}</strong> older than 3 days — we are prioritizing these and will provide an update within 24 hours.</li>`);
+  }
+
+  const content = `
+<p>Hi ${firstName},</p>
+
+<p>Here is a status update on your pending verification requests at <strong>${clientName}</strong>.</p>
+
+<div style="display: flex; gap: 16px; margin: 20px 0;">
+  <div style="flex: 1; text-align: center; padding: 16px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+    <div style="font-size: 28px; font-weight: 700; color: #111827;">${summary.totalPending}</div>
+    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase;">Pending</div>
+  </div>
+  <div style="flex: 1; text-align: center; padding: 16px; background: ${summary.staleCount > 0 ? '#fef2f2' : '#f0fdf4'}; border-radius: 8px; border: 1px solid ${summary.staleCount > 0 ? '#fecaca' : '#bbf7d0'};">
+    <div style="font-size: 28px; font-weight: 700; color: ${summary.staleCount > 0 ? '#dc2626' : '#059669'};">${summary.staleCount}</div>
+    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase;">Stale (3+ days)</div>
+  </div>
+</div>
+
+<h3 style="font-size: 14px; color: #374151; margin: 24px 0 12px;">Request Details</h3>
+${requestRows}
+
+<h3 style="font-size: 14px; color: #374151; margin: 24px 0 12px;">Timeline Expectations</h3>
+<ul style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8;">
+  ${timelineItems.join('\n  ')}
+</ul>
+
+<p style="margin-top: 20px; font-size: 13px; color: #6b7280;">
+  If any 8821 forms are still awaiting signature, please check with your borrowers to ensure they complete the e-sign process.
+  This is the most common cause of delays.
+</p>
+  `.trim();
+
+  const html = createEmailTemplate('Request Backlog Update', content, {
+    text: 'View Dashboard',
+    url: `${appUrl}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: processorEmail,
+      from: { email: fromEmail, name: 'ModernTax' },
+      subject: `Backlog Update: ${summary.totalPending} pending request${summary.totalPending !== 1 ? 's' : ''} — ${clientName}`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send processor backlog notification:', error);
+  }
+}
