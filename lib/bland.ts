@@ -29,6 +29,8 @@ export interface BlandCallParams {
   expertFax?: string;
   expertPhone?: string;
   expertAddress?: string;
+  /** Expert's SOR (Secure Object Repository) inbox username for transcript delivery */
+  sorInbox?: string;
 
   /** Entities to process in this call (up to 5) */
   entities: {
@@ -84,49 +86,106 @@ export interface BlandCallDetails {
 // ---------------------------------------------------------------------------
 
 function buildTaskPrompt(params: BlandCallParams): string {
-  const entityList = params.entities
+  // Determine if entities are individuals (SSN) or businesses (EIN)
+  const hasSSN = params.entities.some(e => e.tidKind === 'SSN');
+  const hasEIN = params.entities.some(e => e.tidKind === 'EIN');
+  const isMixed = hasSSN && hasEIN;
+
+  // Build detailed entity scripts with speaking instructions
+  const entityScripts = params.entities
     .map((e, i) => {
       const tidLabel = e.tidKind === 'SSN' ? 'Social Security Number' : 'Employer Identification Number';
-      return `${i + 1}. ${e.taxpayerName}, ${tidLabel} ${e.taxpayerTid}, requesting Record of Account and Tax Return transcripts for Form ${e.formType}, tax years ${e.years.join(', ')}. Authorization: Form 8821 on file.`;
+      // Format TID for speaking: read digit by digit
+      const tidDigits = e.taxpayerTid.replace(/\D/g, '').split('').join(', ');
+      // Spell entity name phonetically for clarity
+      const yearsList = e.years.join(', ');
+
+      // Determine transcript types based on form
+      let transcriptTypes = 'Record of Account transcript and Tax Return transcript';
+      const formLower = e.formType.toLowerCase();
+      if (formLower.includes('1040')) {
+        transcriptTypes = 'Record of Account transcript, Tax Return transcript, and Wage & Income transcript';
+      }
+
+      return `
+--- CLIENT ${i + 1} of ${params.entities.length}: ${e.taxpayerName} ---
+  Full legal name: "${e.taxpayerName}"
+  ${tidLabel}: ${e.taxpayerTid} (speak as: ${tidDigits})
+  Authorization: Form 8821 on file
+  Transcripts needed: ${transcriptTypes}
+  Form type: ${e.formType}
+  Tax years: ${yearsList}
+
+  SCRIPT FOR THIS CLIENT:
+  Say: "For my ${i === 0 ? 'first' : i === 1 ? 'second' : i === 2 ? 'third' : i === 3 ? 'fourth' : 'fifth'} client, the taxpayer name is ${e.taxpayerName}."
+  Say: "The ${e.tidKind === 'SSN' ? 'Social is' : 'EIN is'} ${tidDigits}."
+  Say: "I need ${transcriptTypes} for Form ${e.formType}, tax years ${yearsList}."
+  Say: "I have a signed 8821 on file."
+  WAIT for the agent to pull up the account and confirm.
+  If agent confirms: Say "Please send those to my SOR inbox${params.sorInbox ? `, username ${params.sorInbox}` : ''}."
+  If agent says name doesn't match: Ask "What name do you have on file?" and use the update_entity_status tool to record the mismatch.
+  If agent says 8821 not on file: Ask "Can I fax it to you?" If yes, ask for the fax number and use the notify_fax_needed tool.
+  If agent says they need the 8821 faxed: Ask "What fax number should I use?" and use the notify_fax_needed tool.`;
     })
     .join('\n');
 
-  return `You are ${params.expertName}, a tax professional calling the IRS Practitioner Priority Service.
-Your CAF number is ${params.cafNumber}.${params.expertFax ? ` Your fax number is ${params.expertFax}.` : ''}
+  return `You are ${params.expertName}, a tax professional calling the IRS Practitioner Priority Service (PPS).
 
-You are calling to request tax transcripts for ${params.entities.length} client${params.entities.length > 1 ? 's' : ''}:
+YOUR CREDENTIALS:
+- Full name: ${params.expertName}
+- CAF number: ${params.cafNumber}
+- Fax number: ${params.expertFax || 'not available'}
+- SOR inbox: ${params.sorInbox || 'on file'}
 
-${entityList}
+You are calling to request tax transcripts for ${params.entities.length} client${params.entities.length > 1 ? 's' : ''}.
 
-PHONE TREE NAVIGATION:
-- When the automated system answers, press 1 for English.
-- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
-- If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
-- If offered a callback option, decline it and stay on hold.
-- Wait patiently on hold until a live IRS agent answers.
+===== PHASE 1: PHONE TREE NAVIGATION =====
+The IRS automated system will answer. Follow these steps:
+1. Press 1 for English.
+2. Press ${hasEIN && !hasSSN ? '3 for business account inquiries' : hasSSN && !hasEIN ? '2 for individual account inquiries' : '3 for business account inquiries'}.
+3. If prompted for ${hasSSN && !hasEIN ? 'a Social Security Number' : 'an EIN'}, enter ${params.entities[0].taxpayerTid.replace(/\D/g, '')} using the keypad.
+4. Listen for estimated wait time. Use the notify_status tool: event "wait_estimate".
+5. If offered a callback option: ACCEPT IT. Enter callback phone ${(params.callbackPhone || params.expertPhone || '').replace(/\D/g, '')} on keypad. Use notify_status: event "callback_accepted". Then hang up.
+6. If no callback offered and wait ≤ 5 minutes: HOLD. Do NOT speak during hold music.
+7. If no callback offered and wait > 5 minutes: Hold for max 5 minutes, then hang up.
 
-WHEN THE IRS AGENT ANSWERS:
-1. Greet them professionally: "Hi, this is ${params.expertName}, CAF number ${params.cafNumber}."
-2. Say you have ${params.entities.length} client${params.entities.length > 1 ? 's' : ''} to process today.
-3. For each client, clearly provide:
-   - The taxpayer's full name
-   - Their ${params.entities[0].tidKind === 'SSN' ? 'Social Security Number' : 'EIN'}
-   - Which transcripts you need (Record of Account and Tax Return)
-   - The form type and tax years
-4. If the agent asks for your fax number, provide: ${params.expertFax || 'your fax number on file'}.
-5. If the agent needs to verify the 8821 authorization: confirm it was filed electronically via IRS e-Services.
-6. If the agent says the business name doesn't match their records: ask them what name they have on file, then note the discrepancy.
-7. If the agent asks you to fax the 8821: say "Sure, what fax number should I use?" and then use the send_fax tool with the fax number they provide.
-8. Confirm transcripts will be sent to your Secure Object Repository inbox.
-9. After all clients are processed, thank the agent and end the call.
+===== PHASE 2: GREETING THE IRS AGENT =====
+When a live agent answers:
+1. Use notify_status with event: "agent_answered".
+2. Say: "Hi, this is ${params.expertName}, I'm a tax practitioner. My CAF number is ${params.cafNumber}."
+3. Say: "I have ${params.entities.length} ${isMixed ? 'accounts' : hasEIN ? 'business accounts' : 'individual accounts'} to process today. I need transcripts for federal tax matters — ${params.entities.length === 1 ? 'this is a new client' : 'these are new clients'} and I need to get their transcripts pulled."
+4. If agent asks how many accounts: "${params.entities.length} accounts."
+5. If agent asks about authorization: "I have signed 8821 forms for all of them."
 
-IMPORTANT RULES:
-- Be patient, professional, and concise. Speak clearly and at a moderate pace.
-- Do NOT volunteer unnecessary information.
-- If the agent puts you on hold mid-call, wait silently without speaking.
-- If the agent asks a question you cannot answer, say "Let me check on that" and note it.
-- Spell out names letter by letter if asked (use NATO phonetic alphabet).
-- Read SSN/EIN digits one at a time with brief pauses.`;
+===== PHASE 3: PROCESS EACH CLIENT =====
+Go through each client one at a time. Wait for the agent to confirm each one before moving to the next.
+
+${entityScripts}
+
+===== PHASE 4: FAX HANDLING =====
+The IRS agent will likely ask you to fax the 8821 forms.
+- When the agent gives you a fax number, use the notify_fax_needed tool with the fax number and entity index.
+- Say: "Okay, I'll fax that over to you now. It'll come from a ${params.expertFax ? params.expertFax.slice(0, 3) : '825'} area code fax number."
+- The expert will manually fax the document. Say: "The fax has been submitted, you should receive it shortly."
+- If the agent puts you on hold to wait for the fax: WAIT SILENTLY. Do not speak during holds.
+- When the agent comes back and confirms fax receipt, move to the next client.
+
+===== PHASE 5: WRAP UP =====
+After all clients are processed:
+1. Confirm: "Can you send all the transcripts to my Secure Object Repository inbox${params.sorInbox ? `, username ${params.sorInbox}` : ''}?"
+2. Ask: "Is there anything else you need from me?"
+3. Say: "Thank you for your help, have a great day."
+
+===== CRITICAL RULES =====
+- Be patient, professional, and concise. IRS agents are busy.
+- Do NOT volunteer information the agent hasn't asked for.
+- When on hold mid-call, WAIT SILENTLY. Hold music and silence are normal.
+- Only respond when a LIVE HUMAN speaks to you directly.
+- Read SSN/EIN digits one at a time with brief pauses between each digit.
+- If asked to spell a name, use NATO phonetic alphabet (Alpha, Bravo, Charlie...).
+- If the agent asks something you cannot answer, say: "Let me check on that and get back to you."
+- ALWAYS use notify_status at every stage to report what's happening.
+- If the agent provides their name or badge number, note it with update_entity_status.`;
 }
 
 /**
@@ -212,10 +271,16 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '10', 10);
   const pathwayId = process.env.BLAND_IRS_PPS_PATHWAY_ID;
 
+  // ai_full mode needs longer duration for multi-entity calls with faxing and holds
+  const callMode = params.callMode || 'hold_and_transfer';
+  const effectiveMaxDuration = callMode === 'ai_full'
+    ? Math.max(maxDuration, 30) // At least 30 min for full AI calls
+    : maxDuration;
+
   const body: Record<string, unknown> = {
     phone_number: '+18668604259', // IRS PPS
     record: true,
-    max_duration: maxDuration,
+    max_duration: effectiveMaxDuration,
     wait_for_greeting: true,
     amd: false,                   // Disable answering machine detection — IRS hold music triggers false positives
     interruption_threshold: 200,  // High threshold to avoid interrupting IRS hold messages
@@ -229,8 +294,6 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
       entities: params.entities,
     },
   };
-
-  const callMode = params.callMode || 'hold_and_transfer';
 
   // Select task prompt based on call mode
   if (pathwayId && callMode === 'ai_full') {
@@ -270,6 +333,62 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
           },
         },
         required: ['fax_number'],
+      },
+    },
+    {
+      name: 'notify_fax_needed',
+      description: 'Notify the expert that the IRS agent needs an 8821 faxed. Use this when the agent asks you to fax the 8821 form. The expert will manually send the fax.',
+      url: `${appUrl}/api/expert/irs-call/mid-call-fax`,
+      method: 'POST',
+      headers: { 'x-bland-secret': webhookSecret },
+      input_schema: {
+        type: 'object',
+        properties: {
+          entity_index: {
+            type: 'number',
+            description: 'Which client (0-based index) the fax is for. 0 = first client, 1 = second, etc.',
+          },
+          fax_number: {
+            type: 'string',
+            description: 'The fax number the IRS agent provided to send the 8821 to',
+          },
+          session_id: {
+            type: 'string',
+            description: 'The call session ID',
+            default: params.metadata.sessionId,
+          },
+        },
+        required: ['fax_number'],
+      },
+    },
+    {
+      name: 'update_entity_status',
+      description: 'Record the outcome for a specific client during the call. Use this when the IRS agent confirms transcripts sent, reports a name mismatch, says 8821 is not on file, or any other per-entity outcome.',
+      url: `${appUrl}/api/expert/irs-call/status-update`,
+      method: 'POST',
+      headers: { 'x-bland-secret': webhookSecret },
+      input_schema: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'The call session ID',
+            default: params.metadata.sessionId,
+          },
+          event: {
+            type: 'string',
+            description: 'What happened: transcripts_sent, name_mismatch, 8821_not_on_file, fax_received, agent_badge',
+          },
+          entity_index: {
+            type: 'number',
+            description: 'Which client (0-based). 0 = first client, 1 = second, etc.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Details: the name the IRS has on file, the badge number, etc.',
+          },
+        },
+        required: ['event'],
       },
     },
   ];

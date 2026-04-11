@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address')
+      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id')
       .eq('id', user.id)
       .single() as { data: any; error: any };
 
@@ -255,6 +255,7 @@ export async function POST(request: NextRequest) {
           expertId: user.id,
           assignmentIds,
         },
+        sorInbox: profile.sor_id || undefined,
         callMode: resolvedCallMode as 'ai_full' | 'hold_and_transfer' | 'irs_callback',
         callbackPhone: resolvedCallbackPhone || undefined,
       });
