@@ -84,6 +84,8 @@ export type Database = {
           city: string | null;
           state: string | null;
           zip_code: string | null;
+          sor_id: string | null;
+          voice_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -102,6 +104,8 @@ export type Database = {
           city?: string | null;
           state?: string | null;
           zip_code?: string | null;
+          sor_id?: string | null;
+          voice_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -120,6 +124,8 @@ export type Database = {
           city?: string | null;
           state?: string | null;
           zip_code?: string | null;
+          sor_id?: string | null;
+          voice_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };

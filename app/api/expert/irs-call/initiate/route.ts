@@ -12,7 +12,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { initiateCall } from '@/lib/bland';
 
-const MAX_ENTITIES_PER_CALL = 5;
+const MAX_ENTITIES_PER_CALL = 3; // IRS processes each 8821 individually — 3 keeps call under 45 min
 const DAILY_SPEND_CAP = parseFloat(process.env.BLAND_DAILY_SPEND_CAP || '50');
 
 export async function POST(request: NextRequest) {
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id')
+      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id, voice_id')
       .eq('id', user.id)
       .single() as { data: any; error: any };
 
@@ -256,6 +256,7 @@ export async function POST(request: NextRequest) {
           assignmentIds,
         },
         sorInbox: profile.sor_id || undefined,
+        voiceId: profile.voice_id || undefined,
         callMode: resolvedCallMode as 'ai_full' | 'hold_and_transfer' | 'irs_callback',
         callbackPhone: resolvedCallbackPhone || undefined,
       });

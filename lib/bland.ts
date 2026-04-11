@@ -31,8 +31,10 @@ export interface BlandCallParams {
   expertAddress?: string;
   /** Expert's SOR (Secure Object Repository) inbox username for transcript delivery */
   sorInbox?: string;
+  /** ElevenLabs cloned voice ID — makes AI sound like the actual expert on the call */
+  voiceId?: string;
 
-  /** Entities to process in this call (up to 5) */
+  /** Entities to process in this call (up to 3 — each requires individual fax/hold cycle) */
   entities: {
     entityId: string;
     taxpayerName: string;
@@ -163,12 +165,14 @@ Go through each client one at a time. Wait for the agent to confirm each one bef
 ${entityScripts}
 
 ===== PHASE 4: FAX HANDLING =====
-The IRS agent will likely ask you to fax the 8821 forms.
-- When the agent gives you a fax number, use the notify_fax_needed tool with the fax number and entity index.
+IMPORTANT: The IRS processes each 8821 separately — NOT as a batch. Each entity requires its own fax→hold→confirmation cycle.
+- When the agent asks you to fax the 8821 for a specific client, use the notify_fax_needed tool with the fax number and entity index.
 - Say: "Okay, I'll fax that over to you now. It'll come from a ${params.expertFax ? params.expertFax.slice(0, 3) : '825'} area code fax number."
 - The expert will manually fax the document. Say: "The fax has been submitted, you should receive it shortly."
-- If the agent puts you on hold to wait for the fax: WAIT SILENTLY. Do not speak during holds.
-- When the agent comes back and confirms fax receipt, move to the next client.
+- If the agent puts you on hold to wait for the fax: WAIT SILENTLY. Do not speak during holds. Expect 3-5 minutes per fax.
+- When the agent confirms fax receipt for this client, proceed with transcript ordering for THIS client before moving to the next one.
+- REPEAT this cycle for each client — the agent may request one fax at a time.
+- Sometimes the agent will accept all 8821s faxed at once but still process them one at a time. Follow the agent's lead.
 
 ===== PHASE 5: WRAP UP =====
 After all clients are processed:
@@ -271,10 +275,11 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '10', 10);
   const pathwayId = process.env.BLAND_IRS_PPS_PATHWAY_ID;
 
-  // ai_full mode needs longer duration for multi-entity calls with faxing and holds
+  // ai_full mode needs longer duration — each entity requires its own fax→hold→confirm cycle (~8 min each)
+  // 3 entities max × 8 min + 17 min fixed (phone tree + queue + greeting + wrap) ≈ 41 min
   const callMode = params.callMode || 'hold_and_transfer';
   const effectiveMaxDuration = callMode === 'ai_full'
-    ? Math.max(maxDuration, 30) // At least 30 min for full AI calls
+    ? Math.max(maxDuration, 45) // 45 min for full AI calls (3 entities w/ individual fax holds)
     : maxDuration;
 
   const body: Record<string, unknown> = {
@@ -285,6 +290,14 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     amd: false,                   // Disable answering machine detection — IRS hold music triggers false positives
     interruption_threshold: 200,  // High threshold to avoid interrupting IRS hold messages
     webhook: `${appUrl}/api/webhook/bland-call-complete`,
+    // ElevenLabs cloned voice — sounds like the actual expert on the call
+    ...(params.voiceId ? {
+      voice_id: params.voiceId,       // ElevenLabs voice ID
+      voice_settings: {
+        stability: 0.7,               // Slightly less stable = more natural variation
+        similarity_boost: 0.85,       // High similarity to cloned voice
+      },
+    } : {}),
     metadata: params.metadata,
     request_data: {
       expert_name: params.expertName,
