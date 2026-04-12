@@ -15,9 +15,11 @@ const WARNING_MS = 2 * 60 * 1000; // Show warning 2 minutes before timeout
 export function SessionTimeout() {
   const [showWarning, setShowWarning] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
+  const [hasSession, setHasSession] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const warningRef = useRef<NodeJS.Timeout | null>(null);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const showWarningRef = useRef(false); // Ref to avoid stale closure issues
 
   const handleLogout = useCallback(async () => {
     const supabase = createClient();
@@ -32,10 +34,12 @@ export function SessionTimeout() {
     if (countdownRef.current) clearInterval(countdownRef.current);
 
     setShowWarning(false);
+    showWarningRef.current = false;
 
     // Set warning timer
     warningRef.current = setTimeout(() => {
       setShowWarning(true);
+      showWarningRef.current = true;
       setSecondsLeft(Math.floor(WARNING_MS / 1000));
 
       // Start countdown
@@ -60,12 +64,27 @@ export function SessionTimeout() {
     resetTimers();
   }, [resetTimers]);
 
+  // Check if user has an active session — don't render overlay on public pages
   useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => {
+      setHasSession(!!data.session);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setHasSession(!!session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!hasSession) return; // Don't run timers if no session
+
     // Activity events to track
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
 
     const handleActivity = () => {
-      if (!showWarning) {
+      // Use ref to check warning state — avoids stale closure bug
+      if (!showWarningRef.current) {
         resetTimers();
       }
     };
@@ -86,9 +105,9 @@ export function SessionTimeout() {
       if (warningRef.current) clearTimeout(warningRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
     };
-  }, [resetTimers, showWarning]);
+  }, [resetTimers, hasSession]);
 
-  if (!showWarning) return null;
+  if (!showWarning || !hasSession) return null;
 
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
