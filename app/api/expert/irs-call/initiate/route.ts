@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id, voice_id')
+      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id, voice_sample_url')
       .eq('id', user.id)
       .single() as { data: any; error: any };
 
@@ -256,7 +256,7 @@ export async function POST(request: NextRequest) {
           assignmentIds,
         },
         sorInbox: profile.sor_id || undefined,
-        voiceId: profile.voice_id || undefined,
+        voiceSampleUrl: profile.voice_sample_url || undefined,
         callMode: resolvedCallMode as 'ai_full' | 'hold_and_transfer' | 'irs_callback',
         callbackPhone: resolvedCallbackPhone || undefined,
       });

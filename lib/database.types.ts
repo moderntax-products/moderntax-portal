@@ -85,7 +85,7 @@ export type Database = {
           state: string | null;
           zip_code: string | null;
           sor_id: string | null;
-          voice_id: string | null;
+          voice_sample_url: string | null;
           created_at: string;
           updated_at: string;
         };

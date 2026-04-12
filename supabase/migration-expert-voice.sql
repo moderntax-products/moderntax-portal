@@ -1,5 +1,5 @@
--- Migration: Add voice_id and sor_id to profiles for IRS PPS call automation
--- voice_id: ElevenLabs cloned voice ID — AI agent sounds like the actual expert
+-- Migration: Add voice_sample_url and sor_id to profiles for IRS PPS call automation
+-- voice_sample_url: URL to expert's recorded voice sample for VoxCPM2 voice cloning
 -- sor_id: IRS Secure Object Repository inbox username for transcript delivery
 --
 -- Run in Supabase SQL Editor
@@ -9,10 +9,10 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'profiles' AND column_name = 'voice_id'
+    WHERE table_name = 'profiles' AND column_name = 'voice_sample_url'
   ) THEN
-    ALTER TABLE profiles ADD COLUMN voice_id text;
-    COMMENT ON COLUMN profiles.voice_id IS 'ElevenLabs cloned voice ID for Bland AI calls';
+    ALTER TABLE profiles ADD COLUMN voice_sample_url text;
+    COMMENT ON COLUMN profiles.voice_sample_url IS 'URL to voice sample audio for VoxCPM2 zero-shot cloning on IRS PPS calls';
   END IF;
 
   IF NOT EXISTS (
@@ -24,8 +24,6 @@ BEGIN
   END IF;
 END $$;
 
--- Set Matt Parker's voice_id from ElevenLabs clone
--- Replace YOUR_ELEVENLABS_VOICE_ID with the actual voice ID from ElevenLabs dashboard
-UPDATE profiles
-SET voice_id = 'YOUR_ELEVENLABS_VOICE_ID'
-WHERE email = 'matthewaparker@icloud.com';
+-- Create voice-samples folder policy in uploads bucket (experts can upload their own)
+-- Note: The uploads bucket should already exist. Voice samples are stored at:
+-- uploads/voice-samples/{user_id}/voice-sample.webm

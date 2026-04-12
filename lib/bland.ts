@@ -31,8 +31,12 @@ export interface BlandCallParams {
   expertAddress?: string;
   /** Expert's SOR (Secure Object Repository) inbox username for transcript delivery */
   sorInbox?: string;
-  /** ElevenLabs cloned voice ID — makes AI sound like the actual expert on the call */
-  voiceId?: string;
+  /**
+   * URL to expert's voice sample audio (stored in Supabase Storage).
+   * Used by VoxCPM2 for zero-shot voice cloning — AI sounds like the actual expert.
+   * Bland AI fetches this URL and uses it as reference audio for TTS.
+   */
+  voiceSampleUrl?: string;
 
   /** Entities to process in this call (up to 3 — each requires individual fax/hold cycle) */
   entities: {
@@ -290,12 +294,13 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
     amd: false,                   // Disable answering machine detection — IRS hold music triggers false positives
     interruption_threshold: 200,  // High threshold to avoid interrupting IRS hold messages
     webhook: `${appUrl}/api/webhook/bland-call-complete`,
-    // ElevenLabs cloned voice — sounds like the actual expert on the call
-    ...(params.voiceId ? {
-      voice_id: params.voiceId,       // ElevenLabs voice ID
+    // VoxCPM2 voice cloning — expert's voice sample as reference audio
+    // Bland AI custom TTS endpoint uses this to clone the expert's voice
+    ...(params.voiceSampleUrl ? {
       voice_settings: {
-        stability: 0.7,               // Slightly less stable = more natural variation
-        similarity_boost: 0.85,       // High similarity to cloned voice
+        provider: 'custom',
+        endpoint: `${appUrl}/api/tts/voxcpm2`,
+        reference_audio_url: params.voiceSampleUrl,
       },
     } : {}),
     metadata: params.metadata,

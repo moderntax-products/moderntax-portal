@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { VoiceRecorder } from '@/components/VoiceRecorder';
 
 interface ExpertProfile {
   full_name: string;
@@ -14,6 +15,7 @@ interface ExpertProfile {
   city: string;
   state: string;
   zip_code: string;
+  voice_sample_url: string;
 }
 
 const US_STATES = [
@@ -40,6 +42,7 @@ export default function ExpertProfilePage() {
     city: '',
     state: '',
     zip_code: '',
+    voice_sample_url: '',
   });
 
   useEffect(() => {
@@ -55,7 +58,7 @@ export default function ExpertProfilePage() {
 
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
+        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, voice_sample_url')
         .eq('id', user.id)
         .single();
 
@@ -74,6 +77,7 @@ export default function ExpertProfilePage() {
         city: profileData.city || '',
         state: profileData.state || '',
         zip_code: profileData.zip_code || '',
+        voice_sample_url: profileData.voice_sample_url || '',
       });
       setLoading(false);
     }
@@ -352,6 +356,12 @@ export default function ExpertProfilePage() {
               </div>
             </div>
           </div>
+
+          {/* Voice Sample for IRS PPS Calls */}
+          <VoiceRecorder
+            existingUrl={profile.voice_sample_url || null}
+            onUploaded={(url) => setProfile((prev) => ({ ...prev, voice_sample_url: url }))}
+          />
 
           {/* Status */}
           {error && (
