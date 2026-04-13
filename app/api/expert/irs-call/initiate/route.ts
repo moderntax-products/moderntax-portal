@@ -23,15 +23,24 @@ export async function POST(request: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, sor_id, voice_sample_url')
+      .select('role, full_name, caf_number, ptin, phone_number, fax_number, address')
       .eq('id', user.id)
       .single() as { data: any; error: any };
 
-    if (!profile || profile.role !== 'expert') {
+    if (profileError || !profile || profile.role !== 'expert') {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
+
+    // Fetch optional columns separately — may not exist if migration not run yet
+    const { data: extraFields } = await supabase
+      .from('profiles')
+      .select('sor_id, voice_sample_url')
+      .eq('id', user.id)
+      .single() as { data: any; error: any };
+
+    const fullProfile = { ...profile, ...extraFields };
 
     const body = await request.json();
     const { assignmentIds, scheduledFor, timezone, callMode, callbackPhone } = body;
@@ -168,7 +177,7 @@ export async function POST(request: NextRequest) {
         caf_number: profile.caf_number,
         expert_name: profile.full_name || user.email,
         expert_fax: profile.fax_number,
-        expert_sor_id: profile.sor_id || null,
+        expert_sor_id: fullProfile.sor_id || null,
         scheduled_for: isScheduled ? scheduledFor : null,
         scheduled_timezone: timezone || 'America/Los_Angeles',
         callback_phone: resolvedCallbackPhone,
@@ -255,8 +264,8 @@ export async function POST(request: NextRequest) {
           expertId: user.id,
           assignmentIds,
         },
-        sorInbox: profile.sor_id || undefined,
-        voiceSampleUrl: profile.voice_sample_url || undefined,
+        sorInbox: fullProfile.sor_id || undefined,
+        voiceSampleUrl: fullProfile.voice_sample_url || undefined,
         callMode: resolvedCallMode as 'ai_full' | 'hold_and_transfer' | 'irs_callback',
         callbackPhone: resolvedCallbackPhone || undefined,
       });
