@@ -261,7 +261,8 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
   const config = STATUS_CONFIG[session.status] || STATUS_CONFIG.initiating;
   const isActive = ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'].includes(session.status);
   const runningCost = (localElapsed / 60 * 0.09).toFixed(2);
-  const canListen = ['ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'].includes(session.status);
+  const canListen = ['navigating_ivr', 'on_hold', 'speaking_to_agent'].includes(session.status);
+  const canTransfer = ['on_hold', 'speaking_to_agent'].includes(session.status);
 
   if (minimized && isActive) {
     return (
@@ -394,10 +395,16 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
           )}
 
           {audioError && (
-            <p className="mt-1.5 text-[10px] text-red-600">{audioError}</p>
+            <div className="mt-1.5">
+              <p className="text-[10px] text-red-600">
+                {audioError.includes('Org preferences') || audioError.includes('live listening')
+                  ? 'Live listen not enabled on Bland AI account. Use "Transfer to My Phone" when the status changes to "on hold" or "speaking to agent".'
+                  : audioError}
+              </p>
+            </div>
           )}
 
-          {!audioEnabled && session.status === 'on_hold' && (
+          {!audioEnabled && !audioError && session.status === 'on_hold' && (
             <p className="mt-2 text-[10px] opacity-60">
               Click &ldquo;Listen In&rdquo; to hear the IRS line. You&apos;ll hear when an agent picks up so you&apos;re ready.
             </p>
@@ -426,8 +433,8 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
         </div>
       )}
 
-      {/* Transfer button — available when call is active (on_hold or speaking_to_agent) */}
-      {canListen && !transferSuccess && (
+      {/* Transfer button — available when on hold or speaking to agent */}
+      {canTransfer && !transferSuccess && (
         <div className="mb-3">
           <button
             onClick={handleTransfer}
