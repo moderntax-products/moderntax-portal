@@ -503,6 +503,51 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
 }
 
 /**
+ * Transfer an active call to the expert's phone.
+ * Uses Bland AI's call update endpoint to trigger a warm transfer.
+ */
+export async function transferCall(blandCallId: string, phoneNumber: string): Promise<void> {
+  const apiKey = getApiKey();
+
+  const response = await fetch(`${BLAND_API_BASE}/calls/${blandCallId}/transfer`, {
+    method: 'POST',
+    headers: {
+      'Authorization': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ phone_number: phoneNumber }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Bland AI transfer failed (${response.status}): ${errorText}`);
+  }
+}
+
+/**
+ * Get a WebSocket URL to listen to a live call.
+ * Returns the WSS URL that streams PCM Int16 mono audio at 16kHz.
+ */
+export async function getLiveListenUrl(blandCallId: string): Promise<string> {
+  const apiKey = getApiKey();
+
+  const response = await fetch(`${BLAND_API_BASE}/calls/${blandCallId}/listen`, {
+    method: 'POST',
+    headers: {
+      'Authorization': apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Bland AI live listen failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.data?.url || data.url;
+}
+
+/**
  * Get the current status and details of a call.
  */
 export async function getCallStatus(blandCallId: string): Promise<BlandCallDetails> {
