@@ -288,18 +288,24 @@ export async function POST(request: Request) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } else if (action === 'download_template') {
-      // Download pre-filled 8821 templates for offline signature
+      // Generate pre-filled 8821 PDFs for offline signature
       for (const entity of entities) {
         try {
-          const templateId = getTemplateId(entity.form_type || '1040');
+          const designee = getDesigneeForEntity(entity);
+          const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
+          const entityAddress = [entity.address, entity.city, entity.state, entity.zip_code]
+            .filter(Boolean)
+            .join(', ') || '';
 
-          // Download template PDF for offline signature
-          const templateApi = new DropboxSign.TemplateApi();
-          templateApi.username = process.env.DROPBOX_SIGN_API_KEY || '';
-
-          // Get template files for download
-          const filesResult = await templateApi.templateFiles(templateId, 'pdf');
-          const pdfBuffer = filesResult.body;
+          const pdfBuffer = await generate8821PDF({
+            taxpayer: {
+              name: entity.entity_name || '',
+              tin: entity.tid || '',
+              address: entityAddress,
+            },
+            designee,
+            formType,
+          });
 
           // Upload to Supabase storage for download
           const storagePath = `8821-templates/clearfirm/${entity.id}/${Date.now()}-8821-template.pdf`;
