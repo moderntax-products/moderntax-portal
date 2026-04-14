@@ -1,62 +1,40 @@
 /**
  * Clearfirm Bot API
  * GET: List pending Clearfirm entities awaiting 8821 processing
- * POST: Process entities — generate 8821 via Dropbox Sign with LaTonya Holmes designee,
- *       download signed template for offline signature, update entity status
+ * POST: Process entities — generate filled 8821 PDF and send via Dropbox Sign
+ *
+ * v2: Uses file-based signature requests with server-side PDF generation
+ *     instead of Dropbox Sign templates. All Section 3 tax info, designee
+ *     PTIN/CAF/phone, and taxpayer details are filled in the PDF form fields.
  */
 
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { generate8821PDF, DESIGNEES as PDF_DESIGNEES } from '@/lib/8821-pdf';
+import type { DesigneeInfo } from '@/lib/8821-pdf';
 import * as DropboxSign from '@dropbox/sign';
+import { Readable } from 'stream';
 
-// Designee profiles
-const DESIGNEES: Record<string, {
-  name: string;
-  address: string;
-  city: string;
-  state: string;
-  zip: string;
-  ptin: string;
-  caf: string;
-}> = {
-  default: {
-    name: 'LaTonya Holmes',
-    address: '8465 Houndstooth Enclave Dr',
-    city: 'New Port Richey',
-    state: 'FL',
-    zip: '34655',
-    ptin: '0316-30210',
-    caf: '0315-23541R',
-  },
-  parker: {
-    name: 'Matthew Parker C/O ModernTax',
-    address: '2 Embarcadero, 8th Floor',
-    city: 'San Francisco',
-    state: 'CA',
-    zip: '94111',
-    ptin: 'P01809554',
-    caf: '0316-30210R',
-  },
-};
-
-// Default designee for backward compat
-const CLEARFIRM_DESIGNEE = DESIGNEES.default;
-
-// Template IDs (same as dropbox-sign.ts)
-const TEMPLATE_INDIVIDUAL = 'a34ce6060750406fc9464d1d46bf99e053c1c177';
-const TEMPLATE_BUSINESS = '6e08048317bb0efd8cf976c2cc14159ca51ef584';
-
-function getTemplateId(formType: string): string {
-  if (formType === '1040') return TEMPLATE_INDIVIDUAL;
-  return TEMPLATE_BUSINESS;
+// Map legacy designee keys to the new standardized format in 8821-pdf.ts
+function getDesigneeForEntity(entity: any): DesigneeInfo {
+  const key = entity.designee_key || entity.designee_override || 'default';
+  return PDF_DESIGNEES[key] || PDF_DESIGNEES.default;
 }
 
 function getDropboxApi(): DropboxSign.SignatureRequestApi {
   const api = new DropboxSign.SignatureRequestApi();
   api.username = process.env.DROPBOX_SIGN_API_KEY || '';
   return api;
+}
+
+/** Convert a Buffer to a ReadStream for the Dropbox Sign SDK */
+function bufferToStream(buffer: Buffer, filename: string): any {
+  const stream = Readable.from(buffer) as any;
+  stream.path = filename;         // SDK needs .path to detect filename
+  stream.name = filename;         // Some SDK versions use .name
+  return stream;
 }
 
 /**
@@ -131,7 +109,7 @@ export async function GET(_request: Request) {
     });
 
     return NextResponse.json({
-      designee: CLEARFIRM_DESIGNEE,
+      designee: PDF_DESIGNEES.default,
       pending: pendingEntities,
       processing: processingEntities,
       completed: completedEntities,
@@ -192,85 +170,87 @@ export async function POST(request: Request) {
     const results: any[] = [];
 
     if (action === 'send_8821') {
-      // Send 8821 signature requests via Dropbox Sign
+      // Send 8821 signature requests via Dropbox Sign with filled PDFs
       const api = getDropboxApi();
 
       for (const entity of entities) {
         try {
-          const templateId = getTemplateId(entity.form_type || '1040');
-
-          // Use signer email or a placeholder for offline processing
+          const designee = getDesigneeForEntity(entity);
+          const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
           const signerEmail = entity.signer_email || 'pending-signer@moderntax.io';
           const signerName = [entity.signer_first_name, entity.signer_last_name]
             .filter(Boolean)
             .join(' ') || entity.entity_name;
-
-          // Build taxpayer address from entity data
-          const isIndividual = (entity.form_type || '1040') === '1040';
           const entityAddress = [entity.address, entity.city, entity.state, entity.zip_code]
             .filter(Boolean)
             .join(', ') || '';
-          const designeeFullAddress = `${CLEARFIRM_DESIGNEE.name}\n${CLEARFIRM_DESIGNEE.address}, ${CLEARFIRM_DESIGNEE.city}, ${CLEARFIRM_DESIGNEE.state} ${CLEARFIRM_DESIGNEE.zip}`;
 
-          // Build custom fields: taxpayer info (Section 1) + designee info (Section 2)
-          // Field names differ between individual (1040) and business templates
-          // PTIN field on business template is too narrow (27px) — include in designee address block
-          const customFields = isIndividual
-            ? [
-                // Section 1: Taxpayer
-                { name: 'Taxpayer Name', value: entity.entity_name || '' },
-                { name: 'EIN/SSN Number', value: entity.tid || '' },
-                { name: 'Address, City, State, Zip', value: entityAddress },
-                // Section 2: Designee
-                { name: 'Tax Practioner', value: CLEARFIRM_DESIGNEE.name },
-                { name: 'Tax Practioner City, State, Zip Code', value: `${CLEARFIRM_DESIGNEE.address}, ${CLEARFIRM_DESIGNEE.city}, ${CLEARFIRM_DESIGNEE.state} ${CLEARFIRM_DESIGNEE.zip}` },
-                { name: 'CAF Number', value: CLEARFIRM_DESIGNEE.caf },
-              ]
-            : [
-                // Section 1: Taxpayer
-                { name: 'Taxpayer Name', value: entity.entity_name || '' },
-                { name: 'EIN/SSN', value: entity.tid || '' },
-                { name: 'Business Address, City, State, Zip Code', value: entityAddress },
-                // Section 2: Designee
-                { name: 'Designee Name, Address, City State Zip', value: `${designeeFullAddress}\nPTIN: ${CLEARFIRM_DESIGNEE.ptin}` },
-                { name: 'CAF', value: CLEARFIRM_DESIGNEE.caf },
-              ];
-
-          const signatureData: DropboxSign.SignatureRequestSendWithTemplateRequest = {
-            testMode: true, // Remove when upgraded to paid Dropbox Sign API plan
-            templateIds: [templateId],
-            signers: [
-              {
-                role: 'Taxpayer',
-                name: signerName,
-                emailAddress: signerEmail,
-              },
-            ],
-            ccs: [
-              {
-                role: 'Credit Analyst',
-                emailAddress: 'matt@moderntax.io',
-              },
-            ],
-            subject: `Form 8821 — Tax Information Authorization for ${entity.entity_name}`,
-            message: `IRS Form 8821 for ${entity.entity_name}. Designee: ${CLEARFIRM_DESIGNEE.name} (PTIN: ${CLEARFIRM_DESIGNEE.ptin}, CAF: ${CLEARFIRM_DESIGNEE.caf}). Processed by ModernTax for Clearfirm.`,
-            metadata: {
-              entity_id: entity.id,
-              entity_name: entity.entity_name,
-              form_type: entity.form_type,
-              client: 'clearfirm',
-              designee_name: CLEARFIRM_DESIGNEE.name,
-              designee_ptin: CLEARFIRM_DESIGNEE.ptin,
-              designee_caf: CLEARFIRM_DESIGNEE.caf,
+          // Generate filled 8821 PDF with all sections populated
+          const pdfBuffer = await generate8821PDF({
+            taxpayer: {
+              name: entity.entity_name || '',
+              tin: entity.tid || '',
+              address: entityAddress,
             },
-            customFields,
-          };
+            designee,
+            formType,
+          });
 
-          const result = await api.signatureRequestSendWithTemplate(signatureData);
+          // Send as file-based signature request (not template)
+          const sigRequest = new DropboxSign.SignatureRequestSendRequest();
+          sigRequest.testMode = true; // Remove when upgraded to paid plan
+          sigRequest.files = [bufferToStream(pdfBuffer, `8821-${entity.entity_name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`)];
+          sigRequest.signers = [{
+            emailAddress: signerEmail,
+            name: signerName,
+            order: 0,
+          }];
+          sigRequest.ccEmailAddresses = ['matt@moderntax.io'];
+          sigRequest.subject = `Form 8821 — Tax Information Authorization for ${entity.entity_name}`;
+          sigRequest.message = `Please sign this IRS Form 8821 to authorize ModernTax to obtain tax transcripts on behalf of ${entity.entity_name}. Please print your name on the "Print Name" line, add your title (if applicable), then sign and date. Designee: ${designee.name} (PTIN: ${designee.ptin}, CAF: ${designee.caf}).`;
+          sigRequest.metadata = {
+            entity_id: entity.id,
+            entity_name: entity.entity_name,
+            form_type: entity.form_type,
+            client: 'clearfirm',
+            designee_name: designee.name,
+            designee_ptin: designee.ptin,
+            designee_caf: designee.caf,
+          };
+          // Signature field at Section 6 signature line (coordinates from IRS form)
+          sigRequest.formFieldsPerDocument = [
+            {
+              documentIndex: 0,
+              apiId: 'sig_taxpayer',
+              type: 'signature',
+              name: 'Taxpayer Signature',
+              x: 58,
+              y: 647,
+              width: 200,
+              height: 20,
+              required: true,
+              signer: '0',
+              page: 1,
+            } as any,
+            {
+              documentIndex: 0,
+              apiId: 'date_signed',
+              type: 'date_signed',
+              name: 'Date Signed',
+              x: 432,
+              y: 647,
+              width: 120,
+              height: 20,
+              required: true,
+              signer: '0',
+              page: 1,
+            } as any,
+          ];
+
+          const result = await api.signatureRequestSend(sigRequest);
           const signatureRequestId = result.body?.signatureRequest?.signatureRequestId;
 
           if (signatureRequestId) {
-            // Update entity with signature info
             await adminSupabase
               .from('request_entities')
               .update({
@@ -303,6 +283,9 @@ export async function POST(request: Request) {
             error: errorMsg,
           });
         }
+
+        // Rate limit: 1 second between Dropbox Sign API calls
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } else if (action === 'download_template') {
       // Download pre-filled 8821 templates for offline signature
@@ -359,7 +342,7 @@ export async function POST(request: Request) {
       details: {
         action,
         entity_count: entityIds.length,
-        designee: CLEARFIRM_DESIGNEE.name,
+        designee: PDF_DESIGNEES.default.name,
         results,
       },
     });
@@ -368,7 +351,7 @@ export async function POST(request: Request) {
       success: true,
       action,
       results,
-      designee: CLEARFIRM_DESIGNEE,
+      designee: PDF_DESIGNEES.default,
     });
   } catch (error) {
     console.error('Clearfirm bot POST error:', error);
