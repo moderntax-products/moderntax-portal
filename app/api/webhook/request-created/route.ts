@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
     try {
       const { data: entities } = await supabase
         .from('request_entities')
-        .select('id, entity_name, form_type, signer_first_name, signer_last_name, signer_email, status')
+        .select('id, entity_name, form_type, tid, tid_kind, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, status')
         .eq('request_id', requestId) as { data: any[] | null; error: any };
 
       if (entities && entities.length > 0) {

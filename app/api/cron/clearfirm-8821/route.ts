@@ -140,7 +140,7 @@ export async function GET(request: NextRequest) {
 
         // Send as file-based signature request
         const sigRequest = new DropboxSign.SignatureRequestSendRequest();
-        sigRequest.testMode = true;
+        sigRequest.testMode = true; // Required on free API plan — upgrade to remove TEST watermark
         sigRequest.files = [bufferToStream(pdfBuffer, `8821-${entity.entity_name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`)];
         sigRequest.signers = [{
           emailAddress: signerEmail,
