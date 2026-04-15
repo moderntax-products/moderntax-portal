@@ -152,8 +152,8 @@ The IRS automated system will answer. Follow these steps:
 3. If prompted for ${hasSSN && !hasEIN ? 'a Social Security Number' : 'an EIN'}, enter ${params.entities[0].taxpayerTid.replace(/\D/g, '')} using the keypad.
 4. Listen for estimated wait time. Use the notify_status tool: event "wait_estimate".
 5. If offered a callback option: ACCEPT IT. Enter callback phone ${(params.callbackPhone || params.expertPhone || '').replace(/\D/g, '')} on keypad. Use notify_status: event "callback_accepted". Then hang up.
-6. If no callback offered and wait ≤ 5 minutes: HOLD. Do NOT speak during hold music.
-7. If no callback offered and wait > 5 minutes: Hold for max 5 minutes, then hang up.
+6. If no callback offered: HOLD. Do NOT speak during hold music. IRS PPS wait times are typically 15-60 minutes — this is NORMAL.
+7. Use notify_status with event "holding" and the estimated wait minutes. Be patient — hold for as long as necessary until an agent answers.
 
 ===== PHASE 2: GREETING THE IRS AGENT =====
 DETECTING A LIVE AGENT — do NOT miss this:
@@ -231,9 +231,9 @@ As soon as you hear the estimated wait time, use the notify_status tool to repor
   event: "wait_estimate"
   estimated_wait_minutes: (the number they said, use the higher number if a range)
 
-===== STEP 2: ACCEPT CALLBACK OR SHORT HOLD =====
+===== STEP 2: ACCEPT CALLBACK OR HOLD =====
 
-ALWAYS PREFER THE CALLBACK OPTION TO SAVE COSTS.
+ALWAYS PREFER THE CALLBACK OPTION IF OFFERED.
 
 IF A CALLBACK IS OFFERED (this is the preferred path):
 - Press 1 to ACCEPT the callback.
@@ -243,17 +243,13 @@ IF A CALLBACK IS OFFERED (this is the preferred path):
 - Use notify_status with event: "callback_accepted", estimated_wait_minutes, and callback_phone: "${params.callbackPhone}".
 - Once the callback is confirmed, you are done. End the call politely.
 
-IF NO CALLBACK IS OFFERED AND estimated wait is 5 MINUTES OR LESS:
+IF NO CALLBACK IS OFFERED — HOLD AND WAIT:
 - Stay on hold. Do NOT speak during hold music or recorded messages.
-- Hold music, silence, and recorded announcements are NORMAL.
+- Hold music, silence, and recorded announcements are NORMAL — IRS PPS wait times are typically 15-60 minutes.
 - Only respond when a LIVE HUMAN speaks to you directly.
 - Use notify_status with event: "holding" and estimated_wait_minutes.
-
-IF NO CALLBACK IS OFFERED AND estimated wait is MORE THAN 5 MINUTES:
-- Stay on hold for up to 5 minutes maximum.
-- Use notify_status with event: "holding" and estimated_wait_minutes.
-- If no agent answers within 5 minutes, use notify_status with event: "hold_timeout" and notes: "Hung up after 5 min — no callback option available".
-- Then end the call. Do NOT hold longer than 5 minutes.
+- Be patient and KEEP HOLDING. Do NOT hang up early. The expert is paying for this call specifically to avoid waiting on hold themselves.
+- The call will automatically end at the max duration limit — you do not need to track time.
 
 ===== STEP 3: IF AN IRS AGENT ANSWERS (while on short hold) =====
 DETECTING A LIVE AGENT — this is critical, do NOT miss it:
@@ -272,7 +268,7 @@ DO NOT stay silent when an agent speaks. If you are unsure whether it is a live 
 
 ===== CRITICAL RULES =====
 - ALWAYS prefer the IRS callback option. Only hold if callback is not offered.
-- MAXIMUM hold time is 5 minutes. After 5 minutes, hang up.
+- If no callback is offered, KEEP HOLDING until an agent answers or the call reaches max duration. Do NOT hang up early.
 - Do NOT speak during hold music or recorded LOOP messages (estimated wait announcements).
 - DO respond immediately to any human that greets you or asks you a question.
 - Do NOT provide any taxpayer information — only ${params.expertName} can do that.
@@ -291,7 +287,7 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   const apiKey = getApiKey();
   const appUrl = getAppUrl();
   const webhookSecret = process.env.BLAND_WEBHOOK_SECRET || '';
-  const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '10', 10);
+  const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '90', 10);
   const pathwayId = process.env.BLAND_IRS_PPS_PATHWAY_ID;
 
   // ai_full mode needs longer duration — each entity requires its own fax→hold→confirm cycle (~8 min each)
