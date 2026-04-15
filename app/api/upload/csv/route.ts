@@ -5,6 +5,7 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
+import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -303,10 +304,60 @@ export async function POST(request: NextRequest) {
       console.error('Entity creation error:', entError);
     }
 
-    // Auto-send 8821 via Dropbox Sign for entities with signer email (and no existing signature)
+    // --- Repeat Entity Intelligence ---
+    // Check if any entities have been previously verified (same TID in completed requests)
+    const repeatEntities: RepeatEntityMatch[] = [];
+
     if (!entError) {
       try {
-        const { data: createdEntities } = await supabase
+        const { data: createdEntities } = await admin
+          .from('request_entities')
+          .select('id, entity_name, tid, tid_kind, form_type, status, signature_id')
+          .eq('request_id', req.id) as { data: any[] | null; error: any };
+
+        if (createdEntities) {
+          for (const entity of createdEntities) {
+            if (!entity.tid || entity.signature_id) continue;
+
+            const priorMatches = await findPriorEntities(admin, entity.tid, entity.id);
+            if (priorMatches.length > 0) {
+              const best = priorMatches[0]; // Most recent completed match
+
+              // Auto-attach prior transcripts + compliance data
+              const attached = await attachPriorTranscripts(admin, entity.id, best);
+              if (attached) {
+                console.log(`[csv-upload] Repeat entity: ${entity.entity_name} (TID ${entity.tid}) — attached ${best.transcriptCount} prior transcripts from loan ${best.loanNumber}`);
+              }
+
+              // Auto-enroll in monitoring (quarterly)
+              const enrolled = await autoEnrollMonitoring(admin, entity.id, req.id, profile.client_id!, user.id);
+              if (enrolled) {
+                console.log(`[csv-upload] Auto-enrolled ${entity.entity_name} in quarterly monitoring`);
+              }
+
+              repeatEntities.push({
+                entityId: entity.id,
+                entityName: entity.entity_name,
+                priorLoan: best.loanNumber,
+                priorCompletedAt: best.completedAt,
+                transcriptsAttached: best.transcriptCount,
+                complianceSummary: best.complianceSummary,
+                monitoringEnrolled: enrolled,
+                eightyTwentyOneSkipped: attached,
+              });
+            }
+          }
+        }
+      } catch (repeatErr) {
+        console.error('[csv-upload] Repeat entity check error:', repeatErr);
+      }
+    }
+
+    // Auto-send 8821 via Dropbox Sign for entities with signer email (and no existing signature)
+    // Skip entities that were auto-completed via repeat entity intelligence
+    if (!entError) {
+      try {
+        const { data: createdEntities } = await admin
           .from('request_entities')
           .select('id, entity_name, form_type, tid, tid_kind, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, signature_id, status')
           .eq('request_id', req.id) as { data: any[] | null; error: any };
@@ -315,6 +366,8 @@ export async function POST(request: NextRequest) {
           for (const entity of createdEntities) {
             // Skip if already has a signature_id (pre-signed from CSV)
             if (entity.signature_id) continue;
+            // Skip if already completed (repeat entity auto-attached transcripts)
+            if (entity.status === 'completed') continue;
             // Skip employment entities
             if (entity.form_type === 'W2_INCOME') continue;
             // Must have signer email
@@ -322,7 +375,7 @@ export async function POST(request: NextRequest) {
 
             try {
               const { signatureRequestId } = await sendSignatureRequest(entity, entity.signer_email);
-              await supabase
+              await admin
                 .from('request_entities')
                 .update({ signature_id: signatureRequestId, status: '8821_sent' })
                 .eq('id', entity.id);
@@ -332,18 +385,18 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Update request status if all entities have been sent
-          const { data: updatedEntities } = await supabase
+          // Update request status if all entities have been sent or completed
+          const { data: updatedEntities } = await admin
             .from('request_entities')
             .select('status')
             .eq('request_id', req.id) as { data: any[] | null; error: any };
 
           if (updatedEntities) {
-            const allSent = updatedEntities.every(
+            const allDone = updatedEntities.every(
               (e: any) => ['8821_sent', '8821_signed', 'irs_queue', 'processing', 'completed'].includes(e.status)
             );
-            if (allSent) {
-              await supabase.from('requests').update({ status: '8821_sent' }).eq('id', req.id);
+            if (allDone) {
+              await admin.from('requests').update({ status: '8821_sent' }).eq('id', req.id);
             }
           }
         }
@@ -354,8 +407,7 @@ export async function POST(request: NextRequest) {
 
     // Notify all admins about the new request in real-time
     try {
-      const adminClient = createAdminClient();
-      const { data: admins } = await adminClient
+      const { data: admins } = await admin
         .from('profiles')
         .select('email')
         .eq('role', 'admin');
@@ -380,8 +432,7 @@ export async function POST(request: NextRequest) {
     // Notify manager(s) if processor ordered entity transcripts
     if (entityTranscriptIndices.length > 0) {
       try {
-        const adminClient = createAdminClient();
-        const { data: managers } = await adminClient
+        const { data: managers } = await admin
           .from('profiles')
           .select('email')
           .eq('client_id', profile.client_id)
@@ -428,6 +479,7 @@ export async function POST(request: NextRequest) {
       requests_created: 1,
       entities_created: entityCount,
       loan_numbers: [effectiveLoanNumber],
+      repeat_entities: repeatEntities.length > 0 ? repeatEntities : undefined,
     });
   } catch (err) {
     console.error('CSV upload error:', err);

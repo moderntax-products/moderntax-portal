@@ -17,6 +17,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sendSignatureRequest } from '@/lib/dropbox-sign';
+import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -272,6 +274,64 @@ export async function POST(request: NextRequest) {
       console.error('Entity creation error:', entError);
     }
 
+    // --- Repeat Entity Intelligence ---
+    const repeatEntities: RepeatEntityMatch[] = [];
+
+    if (!entError) {
+      try {
+        const { data: createdEntities } = await adminSupabase
+          .from('request_entities')
+          .select('id, entity_name, tid, tid_kind, form_type, status, signature_id, signer_email, signer_first_name, signer_last_name, address, city, state, zip_code')
+          .eq('request_id', req.id) as { data: any[] | null; error: any };
+
+        if (createdEntities) {
+          for (const entity of createdEntities) {
+            if (!entity.tid) continue;
+
+            // Check for prior verified entities
+            if (!entity.signature_id) {
+              const priorMatches = await findPriorEntities(adminSupabase, entity.tid, entity.id);
+              if (priorMatches.length > 0) {
+                const best = priorMatches[0];
+                const attached = await attachPriorTranscripts(adminSupabase, entity.id, best);
+                if (attached) {
+                  console.log(`[email-intake] Repeat entity: ${entity.entity_name} — attached ${best.transcriptCount} prior transcripts`);
+                }
+                const enrolled = await autoEnrollMonitoring(adminSupabase, entity.id, req.id, senderProfile.client_id, user.id);
+                repeatEntities.push({
+                  entityId: entity.id,
+                  entityName: entity.entity_name,
+                  priorLoan: best.loanNumber,
+                  priorCompletedAt: best.completedAt,
+                  transcriptsAttached: best.transcriptCount,
+                  complianceSummary: best.complianceSummary,
+                  monitoringEnrolled: enrolled,
+                  eightyTwentyOneSkipped: attached,
+                });
+                continue; // Skip 8821 for this entity
+              }
+            }
+
+            // Auto-send 8821 for non-repeat entities
+            if (!entity.signature_id && entity.status !== 'completed' && entity.signer_email && entity.form_type !== 'W2_INCOME') {
+              try {
+                const { signatureRequestId } = await sendSignatureRequest(entity, entity.signer_email);
+                await adminSupabase
+                  .from('request_entities')
+                  .update({ signature_id: signatureRequestId, status: '8821_sent' })
+                  .eq('id', entity.id);
+                console.log(`[email-intake] 8821 sent for ${entity.entity_name} → ${entity.signer_email}`);
+              } catch (sendErr) {
+                console.error(`[email-intake] Failed to send 8821 for ${entity.entity_name}:`, sendErr);
+              }
+            }
+          }
+        }
+      } catch (repeatErr) {
+        console.error('[email-intake] Repeat entity / 8821 error:', repeatErr);
+      }
+    }
+
     // Get client name for notifications
     const { data: clientData } = await adminSupabase
       .from('clients')
@@ -310,6 +370,7 @@ export async function POST(request: NextRequest) {
         role: senderProfile.role,
         client: clientData?.name,
       },
+      repeat_entities: repeatEntities.length > 0 ? repeatEntities : undefined,
       message: `Request created for ${senderProfile.full_name} (${senderProfile.email}) at ${clientData?.name || 'Unknown'}`,
     });
   } catch (err) {

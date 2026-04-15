@@ -209,9 +209,10 @@ export default async function AdminPage({ searchParams }: PageProps) {
   const noEntityBottlenecks = bottlenecks.filter(b => b.category === 'no_entities');
 
   // Fetch entities with compliance flags (gross_receipts JSONB contains severity/flags)
+  // Include signer_email + requester profile email for marketing outreach
   const { data: allCompletedEntities } = await supabase
     .from('request_entities')
-    .select('id, entity_name, status, gross_receipts, request_id, updated_at, requests(loan_number, clients(name))')
+    .select('id, entity_name, status, gross_receipts, request_id, updated_at, signer_email, signer_first_name, signer_last_name, requests(loan_number, requested_by, clients(name), profiles!requests_requested_by_fkey(email, full_name))')
     .eq('status', 'completed')
     .not('gross_receipts', 'is', null) as { data: any[] | null; error: any };
 
@@ -224,8 +225,35 @@ export default async function AdminPage({ searchParams }: PageProps) {
     const entries = Object.values(e.gross_receipts) as any[];
     const hasCritical = entries.some((v: any) => v?.severity === 'CRITICAL');
     const flagCount = entries.reduce((sum: number, v: any) => sum + (v?.flags?.length || 0), 0);
-    return { ...e, hasCritical, flagCount };
+    // Extract all flags + total exposure for compliance opportunities
+    const allFlags: { type: string; message: string; severity: string }[] = [];
+    let totalExposure = 0;
+    entries.forEach((v: any) => {
+      if (v?.flags) allFlags.push(...v.flags);
+      if (v?.financials) {
+        totalExposure += (v.financials.accountBalance || 0)
+          + (v.financials.accruedInterest || 0)
+          + (v.financials.accruedPenalty || 0);
+      }
+    });
+    const flagTypes = [...new Set(allFlags.map((f: any) => f.type))];
+    // Resolve best contact email: signer_email > requester profile email
+    const contactEmail = e.signer_email || e.requests?.profiles?.email || null;
+    const contactName = (e.signer_first_name && e.signer_last_name)
+      ? `${e.signer_first_name} ${e.signer_last_name}`
+      : e.requests?.profiles?.full_name || e.entity_name;
+    return { ...e, hasCritical, flagCount, allFlags, totalExposure, flagTypes, contactEmail, contactName };
   }).sort((a: any, b: any) => (a.hasCritical === b.hasCritical ? b.flagCount - a.flagCount : a.hasCritical ? -1 : 1));
+
+  // Compliance Opportunities: group flagged entities by flag type for targeted outreach
+  const complianceOpportunities = {
+    balanceDue: complianceFlaggedEntities.filter((e: any) => e.flagTypes.includes('BALANCE_DUE')),
+    unfiledReturns: complianceFlaggedEntities.filter((e: any) => e.flagTypes.includes('UNFILED')),
+    liensLevies: complianceFlaggedEntities.filter((e: any) => e.flagTypes.some((t: string) => ['LIEN', 'LEVY', 'COLLECTION'].includes(t))),
+    penalties: complianceFlaggedEntities.filter((e: any) => e.flagTypes.some((t: string) => ['INSTALLMENT', 'OIC'].includes(t))),
+    audits: complianceFlaggedEntities.filter((e: any) => e.flagTypes.some((t: string) => ['AUDIT', 'SFR'].includes(t))),
+    totalExposure: complianceFlaggedEntities.reduce((sum: number, e: any) => sum + (e.totalExposure || 0), 0),
+  };
 
   // Fetch compliance drip funnel stats
   const { data: dripRecords } = await supabase
@@ -875,6 +903,14 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-900 text-xs font-bold rounded-full">
                   {complianceFlaggedEntities.filter((e: any) => e.hasCritical).length} Critical
                 </span>
+                <span className="ml-1 px-2 py-0.5 bg-green-100 text-green-800 text-xs font-bold rounded-full">
+                  {complianceFlaggedEntities.filter((e: any) => e.contactEmail).length} with email
+                </span>
+                {complianceFlaggedEntities.filter((e: any) => !e.contactEmail).length > 0 && (
+                  <span className="ml-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full">
+                    {complianceFlaggedEntities.filter((e: any) => !e.contactEmail).length} missing email
+                  </span>
+                )}
               </div>
 
               {/* Conversion Funnel */}
@@ -909,7 +945,9 @@ export default async function AdminPage({ searchParams }: PageProps) {
                     <tr className="border-b border-gray-200">
                       <th className="px-4 py-2 text-left font-semibold text-gray-700">Entity</th>
                       <th className="px-4 py-2 text-left font-semibold text-gray-700">Client</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Contact</th>
                       <th className="px-4 py-2 text-left font-semibold text-gray-700">Severity</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">Exposure</th>
                       <th className="px-4 py-2 text-left font-semibold text-gray-700">Drip Stage</th>
                       <th className="px-4 py-2 text-left font-semibold text-gray-700">Request</th>
                     </tr>
@@ -920,14 +958,34 @@ export default async function AdminPage({ searchParams }: PageProps) {
                       const stageLabels = ['Enrolled', 'Day 3 Due', 'Day 7 Due', 'Day 14 Due', 'Complete'];
                       return (
                         <tr key={entity.id}>
-                          <td className="px-4 py-2 font-medium text-gray-900">{entity.entity_name}</td>
+                          <td className="px-4 py-2 font-medium text-gray-900">
+                            {entity.entity_name}
+                            {entity.contactName && entity.contactName !== entity.entity_name && (
+                              <div className="text-xs text-gray-500">{entity.contactName}</div>
+                            )}
+                          </td>
                           <td className="px-4 py-2 text-gray-600">{entity.requests?.clients?.name || '—'}</td>
+                          <td className="px-4 py-2">
+                            {entity.contactEmail ? (
+                              <a href={`mailto:${entity.contactEmail}`} className="text-blue-600 hover:text-blue-800 text-xs underline">
+                                {entity.contactEmail}
+                              </a>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-yellow-50 text-yellow-700 text-xs rounded border border-yellow-200">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" /></svg>
+                                No email
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-2">
                             <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
                               entity.hasCritical ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
                             }`}>
                               {entity.hasCritical ? 'CRITICAL' : 'WARNING'}
                             </span>
+                          </td>
+                          <td className="px-4 py-2 text-xs text-gray-700 font-medium">
+                            {entity.totalExposure > 0 ? `$${entity.totalExposure.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
                           </td>
                           <td className="px-4 py-2">
                             {drip ? (
@@ -963,6 +1021,33 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   </p>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Compliance Opportunities — Breakdown by flag type for tax prep/planning outreach */}
+        {complianceOpportunities.totalExposure > 0 && (
+          <div className="mb-12">
+            <h2 className="text-xl sm:text-2xl font-bold text-mt-dark mb-4">
+              Compliance Opportunities
+              <span className="ml-3 text-sm font-normal text-gray-500">
+                ${complianceOpportunities.totalExposure.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} total exposure
+              </span>
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {[
+                { label: 'Balance Due', count: complianceOpportunities.balanceDue.length, color: 'border-red-300 bg-red-50 text-red-800', service: 'Tax Resolution' },
+                { label: 'Unfiled Returns', count: complianceOpportunities.unfiledReturns.length, color: 'border-red-300 bg-red-50 text-red-800', service: 'Tax Prep' },
+                { label: 'Liens / Levies', count: complianceOpportunities.liensLevies.length, color: 'border-orange-300 bg-orange-50 text-orange-800', service: 'Lien Release' },
+                { label: 'Installment / OIC', count: complianceOpportunities.penalties.length, color: 'border-amber-300 bg-amber-50 text-amber-800', service: 'Tax Planning' },
+                { label: 'Audits / SFR', count: complianceOpportunities.audits.length, color: 'border-purple-300 bg-purple-50 text-purple-800', service: 'Audit Defense' },
+              ].filter(item => item.count > 0).map((item, i) => (
+                <div key={i} className={`border rounded-lg p-4 ${item.color}`}>
+                  <div className="text-3xl font-bold">{item.count}</div>
+                  <div className="text-sm font-semibold mt-1">{item.label}</div>
+                  <div className="text-xs opacity-75 mt-0.5">{item.service}</div>
+                </div>
+              ))}
             </div>
           </div>
         )}
