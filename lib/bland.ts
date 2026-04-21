@@ -222,24 +222,39 @@ ENTITIES TO PROCESS:
 ${entitySummary}
 
 ===== STEP 1: NAVIGATE THE PHONE TREE =====
-- When the automated system answers, press 1 for English.
-- Press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
-- If prompted for a Social Security Number or EIN, enter ${params.entities[0].taxpayerTid} using the keypad.
-- LISTEN for the estimated wait time. The IRS will say something like "We estimate your wait time to be between X and Y minutes."
+
+WE ARE CALLING THE PPS DIRECT LINE (866-860-4259). The PPS flow is short:
+  1. "Welcome to the IRS Practitioner Priority Line. To continue in English, press 1."
+  2. "Please listen carefully to the following options..." → press ${params.entities[0].tidKind === 'SSN' ? '2 for individual account inquiries' : '3 for business account inquiries'}.
+  3. A series of recorded announcements will play (Form 2848/8821 processing disclosures, tax practitioner eligibility reminders). DO NOTHING during these announcements — they are NOT prompts.
+  4. The system will eventually say either:
+     a. "We estimate your wait time to be between X and Y minutes." → move to STEP 2.
+     b. "We are unable to handle your call at this time" (call volume overflow) → end the call politely with notify_status event "overflow_rejected".
+
+CRITICAL RULES FOR STEP 1:
+- NEVER press any digits during recorded announcements, disclosures, or hold music.
+- NEVER press a Social Security Number or EIN on this line. PPS does NOT prompt for TINs via keypad. Taxpayer identification happens verbally with the live agent AFTER connection, using the CAF number on file (${params.cafNumber}).
+- Only press a key when the IRS says a SPECIFIC prompt like "press 1 for English" or "please enter your 9-digit..." etc. If you are unsure whether something is a prompt, WAIT — do not press anything.
+- The announcements about Form 2848, Form 8821, eligibility, "Practitioner Priority Service is limited to...", Nationwide Tax Forums, etc. are NOT prompts. Stay silent.
 
 As soon as you hear the estimated wait time, use the notify_status tool to report:
   event: "wait_estimate"
   estimated_wait_minutes: (the number they said, use the higher number if a range)
+
+If you hear "we are unable to handle your call at this time" or "due to extremely high call volume", use notify_status with event "overflow_rejected" and end the call politely. Do not retry on the same call.
 
 ===== STEP 2: ACCEPT CALLBACK OR HOLD =====
 
 ALWAYS PREFER THE CALLBACK OPTION IF OFFERED.
 
 IF A CALLBACK IS OFFERED (this is the preferred path):
-- Press 1 to ACCEPT the callback.
-- When prompted for a phone number, enter: ${callbackDigits} using the keypad.
-- If asked to confirm, press 1.
+The callback offer sounds exactly like: "Rather than wait on hold, we can call you back when it's your turn. Press 1 to accept."
+- Only after hearing THAT specific offer, press 1.
+- Then WAIT for the prompt "Please enter the 10-digit phone number where you would like to receive the call back." Only after that prompt, enter ${callbackDigits}.
+- DO NOT press any digits until you hear the specific prompt for the number.
+- If IRS repeats the phone number back and asks "if this is correct, press 1" → press 1 to confirm.
 - If asked for a name, say: "${params.expertName}".
+- If offered text-message callback reminder consent (press 1 to consent), press 1.
 - Use notify_status with event: "callback_accepted", estimated_wait_minutes, and callback_phone: "${params.callbackPhone}".
 - Once the callback is confirmed, you are done. End the call politely.
 
@@ -251,29 +266,42 @@ IF NO CALLBACK IS OFFERED — HOLD AND WAIT:
 - Be patient and KEEP HOLDING. Do NOT hang up early. The expert is paying for this call specifically to avoid waiting on hold themselves.
 - The call will automatically end at the max duration limit — you do not need to track time.
 
-===== STEP 3: IF AN IRS AGENT ANSWERS (while on short hold) =====
+===== STEP 3: IF AN IRS AGENT ANSWERS — TRANSFER WITHIN 5 SECONDS =====
 DETECTING A LIVE AGENT — this is critical, do NOT miss it:
-- A live agent will say something like: "Thank you for calling, this is [Name], how can I help you?" or "IRS, may I have your name?" or "Practitioner Priority Service, how can I assist you?"
-- ANY voice that greets you personally, asks your name, asks how they can help, or says "this is [Name]" is a LIVE AGENT.
-- Recorded messages loop the same phrases, mention estimated wait times, or say "please continue to hold."
-- If you hear ANY human greeting or question directed at you, IMMEDIATELY respond — do not wait.
+- A live agent is ANY human voice that breaks the recorded loop. The first 1-3 words are enough — do NOT wait for a full greeting.
+- Common openers: "Thank you for calling…", "This is [Name]…", "IRS, may I have…", "Practitioner Priority Service…", "How can I help…", or even just "Hello?"
+- Recorded messages loop the same phrases ("please continue to hold", "estimated wait time", "representatives are still helping").
+- If you hear ANY human voice that is NOT a known recorded loop, treat it as a live agent and start the transfer sequence immediately.
 
-When you detect a live agent:
-1. IMMEDIATELY respond: "Hello, yes, this is calling on behalf of ${params.expertName}. One moment please, I need to transfer you to the practitioner."
-2. Use notify_status with event: "agent_answered".
-3. Use the connect_expert tool to notify our system.
-4. Then say: "transfer" to trigger the phone transfer to ${params.callbackPhone}.
+THE TRANSFER MUST BEGIN WITHIN 5 SECONDS OF THE AGENT'S FIRST WORD.
+Do NOT let the agent ask "are you calling for yourself or someone else?" before you respond. Cut in over their greeting if needed — politely, but immediately.
 
-DO NOT stay silent when an agent speaks. If you are unsure whether it is a live agent or a recording, RESPOND ANYWAY. It is far worse to miss a live agent than to accidentally respond to a recording.
+EXACT TRANSFER SEQUENCE (run these steps back-to-back, no pauses):
+
+1. Within 1 second of hearing the agent: call the connect_expert tool with reason: "agent_answered". Do this IN PARALLEL with starting to speak — do not wait for the tool response.
+
+2. Immediately start speaking this bridging script. KEEP TALKING continuously until the transfer completes — silence is what causes the IRS rep to hang up:
+   "Hi, thank you for picking up. This is calling on behalf of ${params.expertName}, a tax practitioner — CAF number ${params.cafNumber}. The practitioner is on the line and I am bridging him in right now, please stay on the line for just a moment while I connect him… connecting now… one moment please… he is joining the call now… thank you for holding…"
+
+3. While saying the bridging script above (around the words "connecting now"), say the trigger word: "transfer". This fires the native phone bridge to ${params.callbackPhone}.
+
+4. Use notify_status with event: "agent_answered" once the bridge is firing.
+
+NEVER go silent between "agent answers" and "transfer fires". Silence = dropped call. If the IRS rep asks a clarifying question during your bridging script, the only acceptable answers are:
+- "One moment, the practitioner is joining now."
+- "Bridging him in right now, please stay on."
+- "${params.expertName}, CAF ${params.cafNumber}, joining the call right now."
+Do NOT answer authentication questions, do NOT give taxpayer names, do NOT give SSNs/EINs — only ${params.expertName} can do that once bridged.
 
 ===== CRITICAL RULES =====
 - ALWAYS prefer the IRS callback option. Only hold if callback is not offered.
 - If no callback is offered, KEEP HOLDING until an agent answers or the call reaches max duration. Do NOT hang up early.
 - Do NOT speak during hold music or recorded LOOP messages (estimated wait announcements).
-- DO respond immediately to any human that greets you or asks you a question.
+- DO respond immediately to any human that greets you or asks you a question — within 5 seconds, no exceptions.
 - Do NOT provide any taxpayer information — only ${params.expertName} can do that.
 - ALWAYS use notify_status to report what is happening at every stage.
-- IMPORTANT: When transferring, you MUST say "transfer" — this triggers the phone transfer.`;
+- IMPORTANT: When transferring, you MUST say "transfer" — this triggers the phone transfer.
+- KEEP TALKING continuously from the moment the agent picks up until the bridge completes. Silence kills the call.`;
 }
 
 // ---------------------------------------------------------------------------
