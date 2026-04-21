@@ -18,6 +18,9 @@ interface CallSession {
   hold_duration_seconds: number | null;
   irs_agent_name: string | null;
   irs_call_entities: CallEntity[];
+  callback_status: string | null;
+  callback_phone: string | null;
+  agent_answered_at: string | null;
 }
 
 interface IrsCallStatusPanelProps {
@@ -61,6 +64,11 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
   const [transferring, setTransferring] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState(false);
+  const [transferInfo, setTransferInfo] = useState<string | null>(null);
+
+  // Cancel confirmation state — End Call is destructive (drops the IRS line),
+  // so it requires an explicit confirmation step.
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -84,12 +92,17 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
     }
   }, [sessionId, onCallEnded]);
 
-  // Poll for status every 15 seconds
+  // Adaptive polling — slow during early call setup, fast once we're close to a live agent.
+  // The transfer trigger window is only ~5 seconds wide, so 15s polling is way too slow
+  // when status is on_hold or speaking_to_agent.
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    const fastStatuses = ['on_hold', 'speaking_to_agent'];
+    const isFast = session && fastStatuses.includes(session.status);
+    const intervalMs = isFast ? 1500 : 10000;
+    const interval = setInterval(fetchStatus, intervalMs);
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, [fetchStatus, session?.status]);
 
   // Local elapsed timer
   useEffect(() => {
@@ -211,7 +224,105 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
     }
   }, [session?.status, disconnectAudio]);
 
+  // --- Agent-picked-up alert ---
+  // Plays a loud, repeating browser alert the moment the AI flips status to
+  // speaking_to_agent (or callback_status to "transferring"). The AI's bridging script
+  // buys ~10 seconds before the IRS rep gives up — this gets the expert's attention
+  // immediately so they can pick up their phone before the bridge.
+  const alertedRef = useRef(false);
+  const alertTimerRef = useRef<number | null>(null);
+  const stopAlert = useCallback(() => {
+    if (alertTimerRef.current !== null) {
+      window.clearInterval(alertTimerRef.current);
+      alertTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    const agentLive =
+      session.status === 'speaking_to_agent' ||
+      session.callback_status === 'transferring' ||
+      !!session.agent_answered_at;
+
+    if (agentLive && !alertedRef.current) {
+      alertedRef.current = true;
+      setMinimized(false); // force-expand the panel
+
+      // Audible alert via WebAudio — repeating two-tone beep for 20 seconds or until
+      // the call leaves an active state (whichever comes first).
+      try {
+        const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+        const playBeep = () => {
+          const now = ctx.currentTime;
+          [880, 660].forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0, now + i * 0.18);
+            gain.gain.linearRampToValueAtTime(0.4, now + i * 0.18 + 0.02);
+            gain.gain.linearRampToValueAtTime(0, now + i * 0.18 + 0.16);
+            osc.connect(gain).connect(ctx.destination);
+            osc.start(now + i * 0.18);
+            osc.stop(now + i * 0.18 + 0.18);
+          });
+        };
+        playBeep();
+        alertTimerRef.current = window.setInterval(playBeep, 1200);
+        window.setTimeout(() => stopAlert(), 20000);
+      } catch (err) {
+        console.warn('Could not play agent-on-line alert tone:', err);
+      }
+
+      // Vibrate on mobile (no-op on desktop)
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate?.([200, 100, 200, 100, 400]); } catch { /* ignore */ }
+      }
+
+      // Browser notification — works if the user previously granted permission
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification('IRS agent on the line!', {
+            body: 'Pick up your phone — bridge is connecting now.',
+            tag: 'irs-agent-live',
+            requireInteraction: true,
+          });
+        } catch { /* ignore */ }
+      }
+
+      // Page-title flash so it's visible from another tab
+      const originalTitle = document.title;
+      let flash = true;
+      const titleTimer = window.setInterval(() => {
+        document.title = flash ? '🔔 IRS AGENT ON LINE — PICK UP' : originalTitle;
+        flash = !flash;
+      }, 700);
+      window.setTimeout(() => {
+        window.clearInterval(titleTimer);
+        document.title = originalTitle;
+      }, 20000);
+    }
+
+    // Reset the alert latch once the call ends — allows a future re-trigger if a new
+    // session begins in the same panel mount.
+    if (session && ['completed', 'failed', 'cancelled'].includes(session.status)) {
+      stopAlert();
+    }
+  }, [session?.status, session?.callback_status, session?.agent_answered_at, stopAlert]);
+
+  useEffect(() => () => stopAlert(), [stopAlert]);
+
+  // Request notification permission on mount so the browser alert can fire later.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      // Best-effort — don't block on the user's response.
+      Notification.requestPermission().catch(() => { /* ignore */ });
+    }
+  }, []);
+
   const handleCancel = async () => {
+    setShowCancelConfirm(false);
     setCancelling(true);
     try {
       const res = await fetch('/api/expert/irs-call/cancel', {
@@ -233,6 +344,7 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
   const handleTransfer = async () => {
     setTransferring(true);
     setTransferError(null);
+    setTransferInfo(null);
     try {
       const res = await fetch('/api/expert/irs-call/transfer', {
         method: 'POST',
@@ -241,7 +353,14 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Transfer failed');
-      setTransferSuccess(true);
+      // Bland removed the /transfer endpoint — manual push is not supported.
+      // Server returns requires_auto_transfer=true with a message explaining
+      // that the AI will bridge automatically on agent greeting.
+      if (data.requires_auto_transfer) {
+        setTransferInfo(data.message || 'Auto-transfer is configured — your phone will ring when the AI detects an agent.');
+      } else {
+        setTransferSuccess(true);
+      }
       fetchStatus();
     } catch (err) {
       setTransferError(err instanceof Error ? err.message : 'Transfer failed');
@@ -326,11 +445,11 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
                 </svg>
               </button>
               <button
-                onClick={handleCancel}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={cancelling}
                 className="px-3 py-1 text-xs font-medium bg-red-100 text-red-700 rounded-lg hover:bg-red-200 disabled:opacity-50"
               >
-                {cancelling ? 'Cancelling...' : 'End Call'}
+                {cancelling ? 'Ending...' : 'End Call'}
               </button>
             </>
           )}
@@ -397,9 +516,20 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
           {audioError && (
             <div className="mt-1.5">
               <p className="text-[10px] text-red-600">
-                {audioError.includes('Org preferences') || audioError.includes('live listening')
-                  ? 'Live listen not enabled on Bland AI account. Use "Transfer to My Phone" when the status changes to "on hold" or "speaking to agent".'
-                  : audioError}
+                {audioError.includes('Org preferences') || audioError.includes('live listening') ? (
+                  <>
+                    <strong>Live listen requires a Bland plan upgrade.</strong>{' '}
+                    Enable on your Bland account at{' '}
+                    <a href="https://bland.ai/pricing" target="_blank" rel="noreferrer" className="underline">
+                      bland.ai/pricing
+                    </a>
+                    . Until then, the AI will auto-bridge to your cell when it detects an IRS agent greeting —
+                    no manual action required. If the AI misses the agent, the call cannot be salvaged via
+                    the API and you&apos;ll need to end this call and dial IRS manually.
+                  </>
+                ) : (
+                  audioError
+                )}
               </p>
             </div>
           )}
@@ -448,6 +578,11 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
           </button>
           {transferError && (
             <p className="mt-1 text-xs text-red-600">{transferError}</p>
+          )}
+          {transferInfo && (
+            <p className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+              <strong>Manual transfer unavailable.</strong> {transferInfo}
+            </p>
           )}
           <p className="mt-1 text-[10px] opacity-60 text-center">
             When you hear the IRS agent answer, click to transfer the call to your phone.
@@ -510,6 +645,79 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* End Call confirmation modal — destructive action, requires explicit confirm */}
+      {showCancelConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="end-call-title"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCancelConfirm(false); }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border-2 border-red-200">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 id="end-call-title" className="text-base font-bold text-gray-900">End this IRS call now?</h3>
+                <p className="text-xs text-gray-500 mt-0.5">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 space-y-2">
+              <div className="flex items-start gap-2">
+                <span className="text-red-600 mt-0.5">•</span>
+                <p className="text-xs text-red-800">
+                  <strong>The call will hang up immediately.</strong>
+                  {session.status === 'speaking_to_agent'
+                    ? ' An IRS agent is currently on the line — they will be disconnected.'
+                    : session.status === 'on_hold'
+                      ? ' You are currently on hold in the PPS queue. Your place in line will be lost.'
+                      : ' Any progress on this call will be lost.'}
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-red-600 mt-0.5">•</span>
+                <p className="text-xs text-red-800">
+                  Estimated wait if you re-call: <strong>15-60 minutes</strong> (PPS hold queue).
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-red-600 mt-0.5">•</span>
+                <p className="text-xs text-red-800">
+                  Current call: <strong>{formatDuration(localElapsed)}</strong> · ${runningCost} billed.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 mb-4">
+              If you just want to step away, you can <strong>minimize</strong> this panel and let the AI keep holding for you.
+              Only end the call if you no longer need it.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200"
+                autoFocus
+              >
+                Keep Call Active
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {cancelling ? 'Ending...' : 'End Call Now'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

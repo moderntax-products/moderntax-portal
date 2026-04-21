@@ -1,16 +1,25 @@
 /**
- * IRS Call Manual Transfer
- * POST — Expert triggers call transfer to their phone from the dashboard.
+ * IRS Call Manual Transfer — reality check.
  *
- * When the expert hears the IRS agent answer via live listen,
- * they click "Transfer to My Phone" which hits this endpoint.
- * We update the session status and tell Bland AI to transfer the call.
+ * Bland AI removed the `/v1/calls/{id}/transfer` REST endpoint (returns 404 as
+ * of April 2026). Mid-call transfer now only happens one way: the AI says the
+ * word "transfer" during the call, which triggers the bridge to the
+ * `transfer_phone_number` that was set at call initiation time.
+ *
+ * We can't reach into an in-progress Bland call and force a transfer from
+ * outside. The best we can do from a click is:
+ *   • confirm the callback_phone is configured (it was set at initiation)
+ *   • mark the session as transfer-requested so the UI updates expectations
+ *   • tell the expert: the AI will auto-bridge when it detects an agent
+ *     greeting; if it misses that, the call can't be salvaged via API
+ *
+ * Returning a clean 200 with the right guidance is better than the previous
+ * behaviour (returning a Bland 404 + HTML error page leaked through to the UI).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
-import { transferCall } from '@/lib/bland';
 
 export async function POST(request: NextRequest) {
   try {
@@ -44,28 +53,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No callback phone on file. Update your profile.' }, { status: 400 });
     }
 
-    const activeStatuses = ['navigating_ivr', 'on_hold', 'speaking_to_agent'];
-    if (!activeStatuses.includes(session.status)) {
-      return NextResponse.json({ error: 'Call is not in a transferable state' }, { status: 400 });
-    }
-
-    // Trigger transfer via Bland AI API
-    await transferCall(session.bland_call_id, session.callback_phone);
-
-    // Update session status
+    // Mark the session as "manual transfer requested" so the UI can show a
+    // different message and we have an audit trail. We can't actually initiate
+    // the transfer — Bland's API no longer supports it. Flag-only.
     await adminSupabase
       .from('irs_call_sessions' as any)
       .update({
-        status: 'speaking_to_agent',
-        callback_status: 'transferring',
+        callback_status: 'waiting',
         callback_initiated_at: new Date().toISOString(),
-        agent_answered_at: new Date().toISOString(),
       })
       .eq('id', sessionId);
 
     return NextResponse.json({
       success: true,
-      message: `Transferring call to ${session.callback_phone}`,
+      requires_auto_transfer: true,
+      callback_phone: session.callback_phone,
+      message: `Manual transfer is not supported by Bland's current API. The AI is configured to auto-bridge to ${session.callback_phone} the moment it detects an IRS agent greeting. Keep the call running and watch for your phone to ring.`,
+      guidance: 'If the AI misses the agent greeting and the call ends in voicemail or silence, the only recovery is to end this call and dial IRS manually. To avoid missing an agent, enable Live Listen on your Bland account (higher plan tier) so you can catch the agent yourself.',
     });
   } catch (error) {
     console.error('Manual transfer error:', error);
