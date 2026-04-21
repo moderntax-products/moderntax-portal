@@ -59,9 +59,10 @@ export async function GET(request: NextRequest) {
       try {
         blandStatus = await getBlandStatus(session.bland_call_id);
 
-        // If Bland says call is completed but our DB doesn't know yet, update
+        // Completion fallback — webhook SHOULD handle this, but it's unreliable
+        // (see the 2026-04-21 incidents where the DB stayed on `ringing` for 29
+        // min after Bland marked the call `completed`). Force-reconcile here.
         if (blandStatus.completed && session.status !== 'completed') {
-          // Webhook should handle this, but update status as a fallback
           const elapsedMinutes = blandStatus.call_length || 0;
           await adminSupabase
             .from('irs_call_sessions' as any)
@@ -74,6 +75,46 @@ export async function GET(request: NextRequest) {
               estimated_cost: Math.round(elapsedMinutes * (session.cost_per_minute || 0.09) * 100) / 100,
             })
             .eq('id', session.id);
+          session.status = 'completed';
+        }
+
+        // Intermediate-status reconciliation — same bug class as above but for
+        // transitions within the active lifecycle. The DB gets stuck on `ringing`
+        // for the entire call because the status-transition webhook from Bland
+        // isn't firing (or is being rejected). We infer the real state from the
+        // transcript and update the DB so the UI shows reality.
+        if (!blandStatus.completed && blandStatus.concatenated_transcript) {
+          const t = String(blandStatus.concatenated_transcript).toLowerCase();
+          let inferred: string | null = null;
+          // Precedence: agent-on-line → hold → IVR → ringing.
+          // "how can i help you" and similar live-agent greetings beat everything.
+          if (/thank you for calling|how (can|may) i help|this is (ms?|mrs|miss|mr)\b.+?\s+(?:my )?(?:id|badge)/.test(t)) {
+            inferred = 'speaking_to_agent';
+          } else if (/please continue to hold|our representatives are still|we estimate your wait time|please hold while your call is transferred/.test(t)) {
+            inferred = 'on_hold';
+          } else if (/welcome to the internal revenue service|please listen carefully|practitioner priority service line/.test(t)) {
+            // We've passed IVR and entered hold queue, but haven't hit a hold-loop phrase yet
+            inferred = session.status === 'ringing' || session.status === 'initiating' ? 'navigating_ivr' : session.status;
+          }
+
+          if (inferred && inferred !== session.status) {
+            const updateFields: Record<string, unknown> = { status: inferred };
+            // Stamp hold_start_at the first time we see the hold loop
+            if (inferred === 'on_hold' && !session.hold_start_at) {
+              updateFields.hold_start_at = new Date().toISOString();
+            }
+            // Stamp agent_answered_at the first time we detect a live agent
+            if (inferred === 'speaking_to_agent' && !session.agent_answered_at) {
+              updateFields.agent_answered_at = new Date().toISOString();
+            }
+            await adminSupabase
+              .from('irs_call_sessions' as any)
+              .update(updateFields)
+              .eq('id', session.id);
+            session.status = inferred;
+            if (inferred === 'on_hold' && !session.hold_start_at) session.hold_start_at = updateFields.hold_start_at;
+            if (inferred === 'speaking_to_agent' && !session.agent_answered_at) session.agent_answered_at = updateFields.agent_answered_at;
+          }
         }
       } catch (blandError) {
         // Non-fatal — return DB status
