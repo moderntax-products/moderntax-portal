@@ -19,6 +19,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
+import { parseSignersFromEmailBody, pickPrincipalSigner, type ParsedSigner } from '@/lib/parse-email-signers';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -35,6 +36,9 @@ interface CsvRow {
   signature_created_at: string;
   years: string;
   form: string;
+  /** Signer email as provided on the row (if any) — may be blank, in which
+   * case the email-body parser fills it in after entity creation. */
+  email: string;
 }
 
 function normalizeHeader(header: string): string {
@@ -61,6 +65,7 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
     signature_created_at: normalized['signature_created_at'] || normalized['signaturecreatedat'] || '',
     years: normalized['years'] || normalized['year'] || '',
     form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '1040',
+    email: normalized['email'] || normalized['signer_email'] || normalized['signeremail'] || '',
   };
 }
 
@@ -248,24 +253,62 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create request' }, { status: 500 });
     }
 
+    // --- Derive signer info from email body as fallback ---
+    // Processors often omit the signer info from the CSV and put it in the
+    // email body instead ("Natvarlal Patel - rinabpatel@yahoo.com"). Parse
+    // `notes` now and apply the principal signer to every row that doesn't
+    // already carry one.
+    const bodySigners: ParsedSigner[] = parseSignersFromEmailBody(notes);
+    const principal = pickPrincipalSigner(bodySigners);
+
+    /** Choose the best signer for a given row, in priority order:
+     *  1. Row's own explicit email (CSV column)
+     *  2. Parsed signer whose name matches the row's legal_name (individual 1040 case)
+     *  3. The overall principal signer from the email body (businesses owned by same person)
+     */
+    function pickSignerForRow(row: CsvRow): ParsedSigner | null {
+      if (row.email) {
+        return {
+          email: row.email.toLowerCase(),
+          firstName: row['first name'] || null,
+          lastName: row['last name'] || null,
+          sourceLine: 'csv_row_email_column',
+        };
+      }
+      // Name match: e.g. "Natvarlal Patel" legal_name on a 1040 row finds the
+      // body signer named "Natvarlal Patel".
+      const rowName = row.legal_name.trim().toLowerCase();
+      const nameMatch = bodySigners.find(s => {
+        if (!s.firstName || !s.lastName) return false;
+        const full = `${s.firstName} ${s.lastName}`.toLowerCase();
+        return rowName === full || rowName.includes(full);
+      });
+      if (nameMatch) return nameMatch;
+      return principal;
+    }
+
     // Create entities
-    const entities = rows.map((row) => ({
-      request_id: req.id,
-      entity_name: row.legal_name,
-      tid: row.tid,
-      tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
-      address: row.address || null,
-      city: row.city || null,
-      state: row.state || null,
-      zip_code: row.zip_code || null,
-      form_type: validateFormType(row.form),
-      years: parseYears(row.years),
-      signer_first_name: row['first name'] || null,
-      signer_last_name: row['last name'] || null,
-      signature_id: row.signature_id || null,
-      signature_created_at: parseSignatureDate(row.signature_created_at),
-      status: row.signature_id ? '8821_signed' : 'pending',
-    }));
+    const entities = rows.map((row) => {
+      const signer = pickSignerForRow(row);
+      return {
+        request_id: req.id,
+        entity_name: row.legal_name,
+        tid: row.tid,
+        tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
+        address: row.address || null,
+        city: row.city || null,
+        state: row.state || null,
+        zip_code: row.zip_code || null,
+        form_type: validateFormType(row.form),
+        years: parseYears(row.years),
+        signer_first_name: row['first name'] || signer?.firstName || null,
+        signer_last_name: row['last name'] || signer?.lastName || null,
+        signer_email: signer?.email || null,
+        signature_id: row.signature_id || null,
+        signature_created_at: parseSignatureDate(row.signature_created_at),
+        status: row.signature_id ? '8821_signed' : 'pending',
+      };
+    });
 
     const { error: entError } = await adminSupabase.from('request_entities').insert(entities);
     const entityCount = entError ? 0 : entities.length;

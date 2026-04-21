@@ -5,13 +5,51 @@ import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { FreeTrialToggle } from '@/components/FreeTrialToggle';
 import { NotifyProcessorsButton } from '@/components/NotifyProcessorsButton';
+import { FireAllPending8821sButton } from '@/components/FireAllPending8821sButton';
 
 interface PageProps {
-  searchParams: Promise<{ type?: string; search?: string; status?: string }>;
+  searchParams: Promise<{
+    type?: string;
+    search?: string;
+    status?: string;
+    /** Time window (days) for the All Requests list. Default 7. Use "all" to disable. */
+    window?: string;
+    /** When true (default), hide requests with HIST-* loan numbers (migration imports). */
+    hideLegacy?: string;
+    /** Zero-based page index for the All Requests list. Default 0. */
+    page?: string;
+  }>;
 }
 
+/** How many rows the admin "All Requests" list renders per page. */
+const ADMIN_REQUESTS_PAGE_SIZE = 50;
+
 export default async function AdminPage({ searchParams }: PageProps) {
-  const { type: productTypeFilter, search: searchFilter, status: statusFilter } = await searchParams;
+  const {
+    type: productTypeFilter,
+    search: searchFilter,
+    status: statusFilter,
+    window: windowFilterRaw,
+    hideLegacy: hideLegacyRaw,
+    page: pageRaw,
+  } = await searchParams;
+
+  // Defaults are tuned for "show me what's actively moving":
+  //   - window=7 days (recent only)
+  //   - hideLegacy=true (exclude HIST-* migration loan numbers)
+  //   - sort by updated_at DESC (activity-first) instead of created_at
+  //   - pagination at ADMIN_REQUESTS_PAGE_SIZE
+  const windowDays = (() => {
+    if (!windowFilterRaw) return 7;
+    if (windowFilterRaw === 'all') return null;
+    const n = parseInt(windowFilterRaw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 7;
+  })();
+  const hideLegacy = hideLegacyRaw !== 'false'; // default true
+  const currentPage = (() => {
+    const n = parseInt(pageRaw || '0', 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  })();
   const supabase = await createServerComponentClient();
 
   // Check authentication
@@ -40,11 +78,13 @@ export default async function AdminPage({ searchParams }: PageProps) {
     .select('*')
     .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null; api_key: string | null; api_request_limit: number | null; billing_payment_method: string | null; billing_ap_email: string | null; billing_ap_phone: string | null; billing_rate_pdf: number; billing_rate_csv: number }[] | null; error: any };
 
-  // Fetch all requests with entities (include completed_at for revenue calc) and client info
+  // Fetch all requests with entities (include completed_at for revenue calc) and client info.
+  // NOTE: "allRequests" is used by stats/bottleneck code below and must stay a full-table scan
+  //       for accurate counts. The admin's "All Requests" UI below paginates via `visibleRequests`.
   const { data: allRequests, error: requestsError } = await supabase
     .from('requests')
     .select('*, request_entities(id, entity_name, status, completed_at), clients(name, slug)')
-    .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
+    .order('updated_at', { ascending: false }) as { data: any[] | null; error: any };
 
   // Fetch invoices for billing overview
   const { data: allInvoices } = await supabase
@@ -326,7 +366,8 @@ export default async function AdminPage({ searchParams }: PageProps) {
     });
   }
 
-  // Filter requests by product type, search, and status
+  // Filter requests by product type, search, status, time window, and legacy flag.
+  // Order: start from `allRequests` (already sorted by updated_at DESC), layer on filters.
   let filteredRequests = allRequests || [];
   if (productTypeFilter && productTypeFilter !== 'all') {
     filteredRequests = filteredRequests.filter((r: any) => r.product_type === productTypeFilter);
@@ -347,6 +388,29 @@ export default async function AdminPage({ searchParams }: PageProps) {
   if (statusFilter && statusFilter !== 'all') {
     filteredRequests = filteredRequests.filter((r: any) => r.status === statusFilter);
   }
+  // Hide migration-imported requests by default — they're long-historical and clog the list.
+  // Triggered off the `HIST-` loan-number convention used by the Dropbox backfill.
+  if (hideLegacy && !searchFilter) {
+    filteredRequests = filteredRequests.filter((r: any) => !r.loan_number?.startsWith('HIST-'));
+  }
+  // Time window — default 7d. Applies to updated_at so real-time activity bubbles to the top.
+  // A search term bypasses the window filter (user is explicitly looking for something old).
+  if (windowDays !== null && !searchFilter) {
+    const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+    filteredRequests = filteredRequests.filter((r: any) => {
+      const ts = new Date(r.updated_at || r.created_at).getTime();
+      return ts >= cutoff;
+    });
+  }
+
+  // Paginate the final filtered list.
+  const totalFiltered = filteredRequests.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / ADMIN_REQUESTS_PAGE_SIZE));
+  const pageIndex = Math.min(currentPage, totalPages - 1);
+  const visibleRequests = filteredRequests.slice(
+    pageIndex * ADMIN_REQUESTS_PAGE_SIZE,
+    (pageIndex + 1) * ADMIN_REQUESTS_PAGE_SIZE,
+  );
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
@@ -499,6 +563,10 @@ export default async function AdminPage({ searchParams }: PageProps) {
               <p className="text-gray-600 text-sm mt-1">Cross-client overview and management</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              {/* Fires every pending Dropbox Sign 8821 request across all clients.
+                  Live count refreshes on mount and after each send. Two-step
+                  confirm prevents accidental bulk spend. */}
+              <FireAllPending8821sButton />
               <Link
                 href="/admin/billing"
                 className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
@@ -1325,14 +1393,84 @@ export default async function AdminPage({ searchParams }: PageProps) {
             )}
           </div>
 
+          {/* Time-window + legacy-visibility quick filters */}
+          {(() => {
+            const base = new URLSearchParams();
+            if (productTypeFilter && productTypeFilter !== 'all') base.set('type', productTypeFilter);
+            if (searchFilter) base.set('search', searchFilter);
+            if (statusFilter && statusFilter !== 'all') base.set('status', statusFilter);
+            const mkHref = (override: Record<string, string | null>) => {
+              const p = new URLSearchParams(base);
+              // Any change resets to page 0
+              for (const [k, v] of Object.entries(override)) {
+                if (v === null) p.delete(k);
+                else p.set(k, v);
+              }
+              const s = p.toString();
+              return s ? `/admin?${s}` : '/admin';
+            };
+            const windows: [string, string][] = [
+              ['1', '24h'],
+              ['7', '7d'],
+              ['30', '30d'],
+              ['all', 'All time'],
+            ];
+            const activeWindow = windowDays === null ? 'all' : String(windowDays);
+            return (
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <span className="text-xs text-gray-500 mr-1">Recent:</span>
+                {windows.map(([v, label]) => {
+                  const isActive = activeWindow === v;
+                  return (
+                    <Link
+                      key={v}
+                      href={mkHref({ window: v, page: null })}
+                      className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                        isActive
+                          ? 'bg-mt-dark text-white border-mt-dark'
+                          : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {label}
+                    </Link>
+                  );
+                })}
+                <span className="text-xs text-gray-400 mx-2">•</span>
+                <Link
+                  href={mkHref({ hideLegacy: hideLegacy ? 'false' : null, page: null })}
+                  className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                    hideLegacy
+                      ? 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200'
+                      : 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200'
+                  }`}
+                  title={hideLegacy
+                    ? 'Pre-portal ModernTax deliveries (HIST-* loan numbers, imported via Apr 15 Dropbox backfill) are hidden. Click to show them.'
+                    : 'Pre-portal ModernTax deliveries (HIST-* loan numbers, imported via Apr 15 Dropbox backfill) are shown. Click to hide them.'}
+                >
+                  {hideLegacy ? 'Hiding pre-portal (HIST-*)' : 'Showing pre-portal (HIST-*)'}
+                </Link>
+                {searchFilter && (
+                  <span className="text-xs text-gray-400 italic">
+                    Window/legacy filters ignored while searching.
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Result count */}
           <p className="text-sm text-gray-500 mb-4">
-            Showing {filteredRequests.length} request{filteredRequests.length !== 1 ? 's' : ''}
+            Showing {visibleRequests.length === totalFiltered
+              ? `${totalFiltered} request${totalFiltered !== 1 ? 's' : ''}`
+              : `${pageIndex * ADMIN_REQUESTS_PAGE_SIZE + 1}–${pageIndex * ADMIN_REQUESTS_PAGE_SIZE + visibleRequests.length} of ${totalFiltered}`}
             {searchFilter && <span> matching &ldquo;{searchFilter}&rdquo;</span>}
             {statusFilter && statusFilter !== 'all' && <span> with status {formatStatus(statusFilter)}</span>}
+            {!searchFilter && windowDays !== null && <span> updated in last {windowDays === 1 ? '24h' : `${windowDays} days`}</span>}
+            {!searchFilter && hideLegacy && <span> (pre-portal HIST-* deliveries hidden)</span>}
+            <span className="text-gray-400"> · sorted by last activity</span>
           </p>
           <div className="bg-white rounded-lg shadow overflow-hidden">
-            {filteredRequests.length > 0 ? (
+            {visibleRequests.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -1348,7 +1486,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filteredRequests.map((request: any) => (
+                    {visibleRequests.map((request: any) => (
                       <tr key={request.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-3 sm:px-6 py-3 sm:py-4">
                           <span className="text-xs sm:text-sm font-medium text-gray-700">
@@ -1448,10 +1586,62 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </div>
             ) : (
               <div className="px-6 py-12 text-center">
-                <p className="text-gray-500 font-medium">No requests yet</p>
+                <p className="text-gray-500 font-medium">No requests match the current filters</p>
+                <p className="text-xs text-gray-400 mt-1">Try widening the time window or showing pre-portal (HIST-*) deliveries.</p>
               </div>
             )}
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (() => {
+            const base = new URLSearchParams();
+            if (productTypeFilter && productTypeFilter !== 'all') base.set('type', productTypeFilter);
+            if (searchFilter) base.set('search', searchFilter);
+            if (statusFilter && statusFilter !== 'all') base.set('status', statusFilter);
+            if (windowFilterRaw) base.set('window', windowFilterRaw);
+            if (hideLegacyRaw === 'false') base.set('hideLegacy', 'false');
+            const mkPageHref = (p: number) => {
+              const params = new URLSearchParams(base);
+              if (p > 0) params.set('page', String(p));
+              const s = params.toString();
+              return s ? `/admin?${s}` : '/admin';
+            };
+            const prevDisabled = pageIndex === 0;
+            const nextDisabled = pageIndex >= totalPages - 1;
+            return (
+              <div className="flex items-center justify-between mt-4 text-sm">
+                <div className="text-gray-500">
+                  Page <span className="font-semibold text-gray-700">{pageIndex + 1}</span> of {totalPages}
+                </div>
+                <div className="flex gap-2">
+                  {prevDisabled ? (
+                    <span className="px-3 py-1.5 text-xs rounded border border-gray-200 text-gray-300 cursor-not-allowed">
+                      ← Prev
+                    </span>
+                  ) : (
+                    <Link
+                      href={mkPageHref(pageIndex - 1)}
+                      className="px-3 py-1.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                    >
+                      ← Prev
+                    </Link>
+                  )}
+                  {nextDisabled ? (
+                    <span className="px-3 py-1.5 text-xs rounded border border-gray-200 text-gray-300 cursor-not-allowed">
+                      Next →
+                    </span>
+                  ) : (
+                    <Link
+                      href={mkPageHref(pageIndex + 1)}
+                      className="px-3 py-1.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                    >
+                      Next →
+                    </Link>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
