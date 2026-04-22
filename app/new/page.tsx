@@ -919,6 +919,10 @@ function ManualEntryTab() {
     { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  // MOD-200: `submitted` flips true when the request is persisted and navigation
+  // is firing. Drives a clearer "✓ Submitted, redirecting..." button state so
+  // processors don't re-click thinking their submission didn't register.
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const currentYear = new Date().getFullYear();
@@ -966,6 +970,15 @@ function ManualEntryTab() {
     }
 
     setIsLoading(true);
+
+    // Idempotency guard (MOD-200 fix) — track whether we're heading into a
+    // navigation. When `navigating=true` the finally block will NOT reset
+    // isLoading, which keeps the submit button disabled through the
+    // router.push window so a processor can't click it again during the
+    // navigation gap. That was the root cause of Justin Kim's 2026-04-22
+    // triple-submit on loan 18036 (3 requests 14s + 30s apart).
+    let navigating = false;
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setError('Not authenticated'); return; }
@@ -977,6 +990,32 @@ function ManualEntryTab() {
         .single() as { data: { client_id: string | null } | null; error: unknown };
 
       if (!profile?.client_id) { setError('No client associated'); return; }
+
+      // Pre-INSERT duplicate check — if the same user just submitted the same
+      // loan number in the last 60 seconds, treat this as a retry and send
+      // them to the existing request instead of creating a duplicate row.
+      // Belt-and-suspenders alongside the button-disable guard.
+      const sixtySecondsAgo = new Date(Date.now() - 60_000).toISOString();
+      const { data: recentDup } = await supabase
+        .from('requests')
+        .select('id')
+        .eq('client_id', profile.client_id)
+        .eq('requested_by', user.id)
+        .eq('loan_number', loanNumber.trim())
+        .gte('created_at', sixtySecondsAgo)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: { id: string } | null; error: unknown };
+
+      if (recentDup?.id) {
+        // Silent redirect to the existing row. No error banner — this is the
+        // expected path when a user re-clicks; the portal was working, their
+        // request is safe, and we shouldn't confuse them with a warning.
+        setSubmitted(true);
+        navigating = true;
+        router.push(`/request/${recentDup.id}`);
+        return;
+      }
 
       const { data: req, error: reqError } = await supabase
         .from('requests')
@@ -1036,11 +1075,20 @@ function ManualEntryTab() {
         }
       }
 
+      // Flip to the "submitted, redirecting" visual state BEFORE calling
+      // router.push. The button copy changes + remains disabled, giving the
+      // user clear confirmation that their click registered even if the
+      // page doesn't rerender instantly.
+      setSubmitted(true);
+      navigating = true;
       router.push(`/request/${req.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setIsLoading(false);
+      // Only reset isLoading when we're NOT navigating away. Leaving it
+      // `true` through the router.push handoff is intentional — the page
+      // will unmount, carrying `isLoading=true` with it.
+      if (!navigating) setIsLoading(false);
     }
   };
 
@@ -1258,9 +1306,9 @@ function ManualEntryTab() {
         </div>
       )}
 
-      <button type="submit" disabled={isLoading}
+      <button type="submit" disabled={isLoading || submitted}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
-        {isLoading ? 'Submitting...' : 'Submit Request'}
+        {submitted ? '✓ Submitted — redirecting…' : isLoading ? 'Submitting…' : 'Submit Request'}
       </button>
     </form>
   );
