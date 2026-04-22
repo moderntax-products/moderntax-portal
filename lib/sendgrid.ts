@@ -1628,7 +1628,20 @@ export async function sendProcessorBacklogNotification(
     inIrsQueue: number;
     unassigned: number;
     staleCount: number;
-  }
+  },
+  /**
+   * Optional — "Questions awaiting your decision" section, rendered ONLY when non-empty.
+   * Each item is an entity where the expert needs a processor decision to unblock
+   * (e.g. "partial transcripts on file — accept as-is or pull fresh?"). This is the
+   * interim Option-C mechanism until a proper in-app resolution UI is built.
+   */
+  backfillQuestions?: {
+    entityId: string;
+    entityName: string;
+    loanNumber: string;
+    requestId: string;
+    question: string;
+  }[],
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send backlog notification');
@@ -1703,11 +1716,42 @@ export async function sendProcessorBacklogNotification(
     timelineItems.push(`<li style="color: #dc2626;"><strong>${summary.staleCount} request${summary.staleCount === 1 ? '' : 's'}</strong> older than 3 days — we are prioritizing these and will provide an update within 24 hours.</li>`);
   }
 
+  // Backfill-questions section — only rendered when items exist. Each row has
+  // an amber callout, the entity name + loan, the question, and a deep link
+  // back to the request page so the processor can respond.
+  const hasQuestions = Array.isArray(backfillQuestions) && backfillQuestions.length > 0;
+  const questionsBlock = hasQuestions ? `
+<div style="background: #fffbeb; border: 2px solid #f59e0b; border-radius: 10px; padding: 16px; margin: 24px 0;">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span style="font-size: 18px;">⚠️</span>
+    <h3 style="font-size: 15px; color: #92400e; margin: 0; font-weight: 700;">
+      ${backfillQuestions!.length} Question${backfillQuestions!.length === 1 ? '' : 's'} Awaiting Your Decision
+    </h3>
+  </div>
+  <p style="font-size: 12px; color: #78350f; margin: 0 0 12px;">
+    Our expert needs your input on ${backfillQuestions!.length === 1 ? 'this entity' : 'these entities'} before proceeding.
+    Please reply to this email or open the request to let us know how to proceed.
+  </p>
+  ${backfillQuestions!.map(q => `
+    <div style="background: white; border: 1px solid #fcd34d; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;">
+      <div style="font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 4px;">
+        ${q.entityName} <span style="color: #6b7280; font-weight: 400; font-size: 12px;">· Loan ${q.loanNumber}</span>
+      </div>
+      <div style="font-size: 12px; color: #374151; line-height: 1.5; margin-bottom: 6px;">
+        ${q.question}
+      </div>
+      <a href="${appUrl}/request/${q.requestId}" style="font-size: 12px; color: #b45309; text-decoration: underline; font-weight: 600;">
+        Review & respond →
+      </a>
+    </div>
+  `).join('')}
+</div>` : '';
+
   const content = `
 <p>Hi ${firstName},</p>
 
 <p>Here is a status update on your pending verification requests at <strong>${clientName}</strong>.</p>
-
+${questionsBlock}
 <div style="display: flex; gap: 16px; margin: 20px 0;">
   <div style="flex: 1; text-align: center; padding: 16px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
     <div style="font-size: 28px; font-weight: 700; color: #111827;">${summary.totalPending}</div>
@@ -1742,11 +1786,210 @@ ${requestRows}
     await sgMail.send({
       to: processorEmail,
       from: { email: fromEmail, name: 'ModernTax' },
-      subject: `Backlog Update: ${summary.totalPending} pending request${summary.totalPending !== 1 ? 's' : ''} — ${clientName}`,
+      subject: hasQuestions
+        ? `⚠️ ${backfillQuestions!.length} question${backfillQuestions!.length === 1 ? '' : 's'} awaiting your decision + ${summary.totalPending} pending — ${clientName}`
+        : `Backlog Update: ${summary.totalPending} pending request${summary.totalPending !== 1 ? 's' : ''} — ${clientName}`,
       html,
       replyTo: 'matt@moderntax.io',
     });
   } catch (error) {
     console.error('Failed to send processor backlog notification:', error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trial onboarding drip
+// ---------------------------------------------------------------------------
+
+export interface TrialWelcomeEmailOptions {
+  toEmail: string;
+  firstName: string;
+  clientName: string;
+  /** Signed token that the unsubscribe endpoint uses to identify the profile without auth. */
+  unsubscribeToken: string;
+  /** Which email in the sequence is this (1 = first, 2 = 48h reminder, ...). Shifts CTA urgency. */
+  sendNumber: number;
+}
+
+/**
+ * Self-serve trial onboarding welcome email.
+ *
+ * Sent the moment a new trial account is provisioned, then re-sent every 48h
+ * until the user signs in + submits their first request OR unsubscribes.
+ * The re-send cadence is driven by /api/cron/trial-welcome-drip.
+ *
+ * Key messages:
+ *   1. 4-step flow (portal → auto-generated 8821 → borrower signs → same-day transcripts)
+ *   2. We do NOT reuse old 8821s — every request gets a fresh, Matt-designated form
+ *      (CAF 0316-30210R), which avoids the "wrong designee" rejection path we've
+ *      seen with legacy HelloSign/Dropbox Sign flows at other providers.
+ *   3. 90-second Loom (URL swapped in via TRIAL_WELCOME_LOOM_URL env; TBD placeholder
+ *      while the video is being produced).
+ *   4. Cal Statewide social proof.
+ *   5. Single CTA — submit the first trial entity.
+ */
+export async function sendTrialWelcomeEmail(opts: TrialWelcomeEmailOptions): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured — cannot send trial welcome email');
+    return;
+  }
+
+  const { toEmail, firstName, clientName, unsubscribeToken, sendNumber } = opts;
+  const loomUrl = process.env.TRIAL_WELCOME_LOOM_URL || `${appUrl}/tour`; // placeholder until the Loom is produced
+  const submitUrl = `${appUrl}/new`;
+  const unsubscribeUrl = `${appUrl}/api/unsubscribe/trial-welcome?token=${encodeURIComponent(unsubscribeToken)}`;
+
+  // Subject line shifts urgency as the sequence progresses.
+  const subject = sendNumber === 1
+    ? `${firstName}, your 3 free ModernTax trial requests are ready`
+    : sendNumber === 2
+      ? `Still waiting on your first trial request, ${firstName}?`
+      : `Your 3 free trial requests are still here whenever you're ready`;
+
+  // A quick reminder banner that appears on re-sends (send #2+) so it doesn't
+  // read as a duplicate of the first email.
+  const reminderBanner = sendNumber > 1
+    ? `<div style="background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 14px;margin:0 0 16px;border-radius:6px;font-size:13px;color:#78350f;">
+         Gentle reminder — we noticed you haven't submitted your first request yet.
+         The 3 free trial requests don't expire, so take your time. Below is the same
+         overview we sent when your account was provisioned, in case it slipped by.
+       </div>`
+    : '';
+
+  const content = `
+${reminderBanner}
+<p style="font-size:15px;line-height:1.6;margin:0 0 16px;">Hi ${firstName},</p>
+
+<p style="font-size:14px;line-height:1.6;color:#1f2937;">
+  Your <strong>${clientName}</strong> account on <a href="${appUrl}">portal.moderntax.io</a> is live and
+  your <strong>3 free trial transcript requests</strong> are loaded and waiting. Here's the full flow so you
+  know exactly what to expect.
+</p>
+
+<!-- 4-step flow -->
+<table role="presentation" style="width:100%;margin:20px 0;border-collapse:separate;border-spacing:0 8px;">
+  <tr>
+    <td style="width:32px;vertical-align:top;padding-top:4px;">
+      <span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:#2563eb;color:#fff;border-radius:50%;font-size:12px;font-weight:700;">1</span>
+    </td>
+    <td style="font-size:14px;line-height:1.6;color:#1f2937;">
+      <strong>Create a request in the portal.</strong> One loan number, one or more entities.
+      Takes 30 seconds — borrower's name, TIN, form type, years.
+    </td>
+  </tr>
+  <tr>
+    <td style="vertical-align:top;padding-top:4px;">
+      <span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:#2563eb;color:#fff;border-radius:50%;font-size:12px;font-weight:700;">2</span>
+    </td>
+    <td style="font-size:14px;line-height:1.6;color:#1f2937;">
+      <strong>We auto-generate a fresh, pre-filled Form 8821</strong> using the ModernTax template
+      with <em>Matthew Parker / ModernTax Inc, CAF 0316-30210R</em> as the primary designee (backup
+      designee auto-included). No copy-pasting old 8821s — every request gets its own.
+    </td>
+  </tr>
+  <tr>
+    <td style="vertical-align:top;padding-top:4px;">
+      <span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:#2563eb;color:#fff;border-radius:50%;font-size:12px;font-weight:700;">3</span>
+    </td>
+    <td style="font-size:14px;line-height:1.6;color:#1f2937;">
+      <strong>Borrower e-signs via Dropbox Sign.</strong> We email them directly; you get notified when
+      they open, view, and sign. Usually minutes — sometimes same coffee break.
+    </td>
+  </tr>
+  <tr>
+    <td style="vertical-align:top;padding-top:4px;">
+      <span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:#10b981;color:#fff;border-radius:50%;font-size:12px;font-weight:700;">4</span>
+    </td>
+    <td style="font-size:14px;line-height:1.6;color:#1f2937;">
+      <strong>Same-day transcripts delivered.</strong> Our expert pulls from IRS TDS / PPS and the signed
+      HTMLs and PDFs land in the portal (and we webhook them to your LOS if you use the API).
+      Typical turnaround: <strong>&lt; 4 hours during business hours</strong>.
+    </td>
+  </tr>
+</table>
+
+<!-- Why fresh 8821s matter -->
+<div style="background:#f0f9ff;border-left:3px solid #0284c7;padding:12px 16px;margin:24px 0;border-radius:6px;">
+  <p style="font-size:13px;line-height:1.6;color:#0c4a6e;margin:0;">
+    <strong>Why we don't reuse old 8821s.</strong> A lot of providers keep an 8821 on file and reuse it across loans
+    and borrowers — it's faster, but it also fails IRS PPS verification the moment the designee's CAF number
+    doesn't match what the IRS has on file for that specific authorization. We generate every 8821 fresh with
+    <code style="background:#e0f2fe;padding:1px 5px;border-radius:3px;">CAF 0316-30210R</code> baked in and a
+    secondary designee always listed. Practitioner Priority Service accepts it first try.
+  </p>
+</div>
+
+<!-- Loom -->
+<div style="margin:28px 0;text-align:center;">
+  <a href="${loomUrl}" style="display:inline-block;background:#000;color:#fff;padding:14px 28px;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">
+    ▶ Watch the 90-second walkthrough
+  </a>
+  <p style="font-size:11px;color:#6b7280;margin:8px 0 0;">See the full flow end-to-end before you start.</p>
+</div>
+
+<!-- Social proof -->
+<blockquote style="border-left:3px solid #10b981;padding:14px 18px;margin:28px 0;background:#f0fdf4;border-radius:0 6px 6px 0;">
+  <p style="font-size:14px;font-style:italic;line-height:1.6;color:#065f46;margin:0;">
+    "ModernTax turned a 2-day 8821 + transcript scramble into something that actually happens the same morning
+    we open the file. Our underwriters stopped calling us about missing transcripts."
+  </p>
+  <p style="font-size:12px;color:#059669;margin:8px 0 0;">
+    — <strong>California Statewide CDC</strong>, SBA 504 lender
+  </p>
+</blockquote>
+
+<!-- CTA -->
+<div style="margin:32px 0 20px;text-align:center;">
+  <a href="${submitUrl}" style="display:inline-block;background:#059669;color:#fff;padding:16px 36px;text-decoration:none;border-radius:8px;font-size:15px;font-weight:700;box-shadow:0 2px 4px rgba(5,150,105,0.2);">
+    Submit your first trial entity →
+  </a>
+  <p style="font-size:12px;color:#6b7280;margin:10px 0 0;">
+    Takes 30 seconds. 2 more free requests after this one.
+  </p>
+</div>
+
+<p style="font-size:13px;line-height:1.6;color:#4b5563;margin-top:28px;">
+  Hit reply if you want a hands-on walkthrough — I'll block 15 minutes and we'll run your first request live.
+</p>
+
+<p style="font-size:14px;color:#1f2937;margin-top:20px;">
+  Best,<br>
+  Matthew Parker<br>
+  <span style="color:#6b7280;font-size:12px;">matt@moderntax.io · 650-741-1085 · ModernTax, Inc.</span>
+</p>
+
+<!-- Unsubscribe footer -->
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0 16px;">
+<p style="font-size:11px;color:#9ca3af;line-height:1.5;text-align:center;margin:0;">
+  You're getting this because you activated a free trial at ModernTax.
+  <a href="${unsubscribeUrl}" style="color:#6b7280;text-decoration:underline;">Unsubscribe from trial reminders</a>
+  — we'll stop these immediately. You'll still receive transcripts and account emails.
+</p>
+`.trim();
+
+  const html = createEmailTemplate(
+    sendNumber === 1 ? 'Your trial is ready' : 'Your trial requests are waiting',
+    content,
+    { text: 'Submit your first trial entity', url: submitUrl },
+  );
+
+  try {
+    await sgMail.send({
+      to: toEmail,
+      from: { email: fromEmail, name: 'Matthew Parker, ModernTax' },
+      subject,
+      html,
+      replyTo: 'matt@moderntax.io',
+      // RFC 8058 one-click unsubscribe — improves inbox placement + lets clients
+      // auto-suppress without a round-trip to the portal. Paired with the
+      // unsubscribe link in the footer for clients that don't render the button.
+      headers: {
+        'List-Unsubscribe': `<${unsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
+    });
+  } catch (error) {
+    console.error('Failed to send trial welcome email:', error);
+    throw error;
   }
 }

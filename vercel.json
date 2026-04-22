@@ -71,6 +71,10 @@
     {
       "path": "/api/cron/expert-daily-call-schedule",
       "schedule": "30 10 * * 1-5"
+    },
+    {
+      "path": "/api/cron/trial-welcome-drip",
+      "schedule": "0 15 * * *"
     }
   ],
   "headers": [

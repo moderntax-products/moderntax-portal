@@ -12,7 +12,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
-import { sendWelcomeEmail } from '@/lib/sendgrid';
+import { sendWelcomeEmail, sendTrialWelcomeEmail } from '@/lib/sendgrid';
+import { signUnsubscribeToken } from '@/lib/unsubscribe-tokens';
+import { consumeRateLimit, getClientIp } from '@/lib/rate-limit';
 
 function normalizeDomain(input: string): string {
   let domain = input.trim().toLowerCase();
@@ -141,6 +143,20 @@ async function syncToHubSpot(data: {
 
 export async function POST(request: NextRequest) {
   try {
+    // SOC 2 CC6.1 — throttle signups per IP to prevent automated account
+    // creation / resource abuse. Tighter cap than login because signups should
+    // be infrequent.
+    const clientIp = getClientIp(request);
+    const ipLimit = consumeRateLimit(clientIp, 'auth:signup:ip', {
+      max: 5, windowMs: 60 * 60_000, // 5 signups per hour per IP
+    });
+    if (!ipLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Too many signup attempts. Please wait and try again later.' },
+        { status: 429, headers: { 'Retry-After': String(ipLimit.retryAfter) } },
+      );
+    }
+
     const body = await request.json();
     const { fullName, title, companyName, companyWebsite, email, password } = body;
 
@@ -276,6 +292,40 @@ export async function POST(request: NextRequest) {
       );
     } catch (emailErr) {
       console.error('[signup] Welcome email failed:', emailErr);
+    }
+
+    // Trial onboarding drip — first-send fires immediately after provisioning.
+    // Re-sends every 48h are handled by /api/cron/trial-welcome-drip. Only
+    // triggered for brand-new trial clients; existing (non-trial) clients
+    // skip this entirely.
+    const isNewTrialClient = !existingClient; // newly created client with free_trial=true
+    if (isNewTrialClient) {
+      try {
+        await sendTrialWelcomeEmail({
+          toEmail: email.trim().toLowerCase(),
+          firstName: firstName || fullName.trim().split(/\s+/)[0],
+          clientName: companyName.trim(),
+          unsubscribeToken: signUnsubscribeToken(authData.user.id, 'trial_welcome'),
+          sendNumber: 1,
+        });
+        // Record the first send in audit_log so the cron's 48h cadence starts
+        // counting from this timestamp (not from account creation).
+        await admin.from('audit_log' as any).insert({
+          user_email: email.trim().toLowerCase(),
+          action: 'settings_changed',
+          entity_type: 'profile',
+          entity_id: authData.user.id,
+          details: {
+            action: 'trial_welcome_sent',
+            send_number: 1,
+            client_id: clientId,
+            client_name: companyName.trim(),
+          },
+        });
+      } catch (trialEmailErr) {
+        // Non-blocking — signup succeeds even if the drip email fails.
+        console.error('[signup] Trial welcome email failed:', trialEmailErr);
+      }
     }
 
     return NextResponse.json({
