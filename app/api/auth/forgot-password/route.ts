@@ -7,15 +7,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendPasswordResetEmail } from '@/lib/sendgrid';
+import { consumeRateLimit, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
+    // SOC 2 CC6.1 — throttle password-reset requests to prevent user enumeration
+    // and mailbox flooding. Per-IP + per-email buckets.
+    const clientIp = getClientIp(request);
+    const ipLimit = consumeRateLimit(clientIp, 'auth:forgot:ip', {
+      max: 10, windowMs: 60_000,
+    });
+    if (!ipLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Too many password reset requests. Please wait and try again.' },
+        { status: 429, headers: { 'Retry-After': String(ipLimit.retryAfter) } },
+      );
+    }
+
     const { email } = await request.json();
 
     if (!email || typeof email !== 'string') {
       return NextResponse.json(
         { error: 'Email is required' },
         { status: 400 }
+      );
+    }
+
+    const emailLimit = consumeRateLimit(email.trim().toLowerCase(), 'auth:forgot:email', {
+      max: 5, windowMs: 15 * 60_000, // 5 resets per 15 min per address
+    });
+    if (!emailLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Too many password reset requests for this email. Please wait.' },
+        { status: 429, headers: { 'Retry-After': String(emailLimit.retryAfter) } },
       );
     }
 

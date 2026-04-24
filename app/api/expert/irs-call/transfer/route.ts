@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { providerForCallId } from '@/lib/voice-provider';
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,12 +65,26 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', sessionId);
 
+    // Messaging adapts by provider. Retell has a real bridge_transfer tool
+    // the AI will invoke on agent detection; Bland's equivalent API was
+    // retired and we rely on the same AI-initiated behavior as a no-op.
+    const provider = providerForCallId(session.bland_call_id);
+    const message =
+      provider === 'retell'
+        ? `The Retell agent has the bridge_transfer tool armed. The moment it detects a live IRS agent, it will bridge this call to ${session.callback_phone} — your phone will ring within seconds. Keep the call tab open so you can see the live transcript highlight when the agent answers.`
+        : `Manual transfer is not supported by Bland's current API. The AI is configured to auto-bridge to ${session.callback_phone} the moment it detects an IRS agent greeting. Keep the call running and watch for your phone to ring.`;
+    const guidance =
+      provider === 'retell'
+        ? 'If the AI misses the agent, use End Call & Dial Direct below — you\'ll get the IRS number, CAF, and queued entities to dial yourself.'
+        : 'If the AI misses the agent greeting and the call ends in voicemail or silence, the only recovery is to end this call and dial IRS manually.';
+
     return NextResponse.json({
       success: true,
       requires_auto_transfer: true,
+      provider,
       callback_phone: session.callback_phone,
-      message: `Manual transfer is not supported by Bland's current API. The AI is configured to auto-bridge to ${session.callback_phone} the moment it detects an IRS agent greeting. Keep the call running and watch for your phone to ring.`,
-      guidance: 'If the AI misses the agent greeting and the call ends in voicemail or silence, the only recovery is to end this call and dial IRS manually. To avoid missing an agent, enable Live Listen on your Bland account (higher plan tier) so you can catch the agent yourself.',
+      message,
+      guidance,
     });
   } catch (error) {
     console.error('Manual transfer error:', error);

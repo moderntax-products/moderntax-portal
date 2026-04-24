@@ -609,6 +609,12 @@ export async function getCallStatus(blandCallId: string): Promise<BlandCallDetai
 
 /**
  * Stop an in-progress call.
+ *
+ * This is the ONLY mid-call control endpoint Bland's v1 API still exposes
+ * for us (transfer/inject/send-digit all return 404 as of April 2026). Used
+ * by /api/expert/irs-call/end-and-dial when the expert bails out of an AI
+ * call to dial IRS manually. Treats "Call not found" as a no-op so callers
+ * can always succeed when the call has already ended naturally.
  */
 export async function stopCall(blandCallId: string): Promise<void> {
   const apiKey = getApiKey();
@@ -622,6 +628,7 @@ export async function stopCall(blandCallId: string): Promise<void> {
 
   if (!response.ok) {
     const errorText = await response.text();
+    if (response.status === 404 && errorText.includes('Call not found')) return;
     throw new Error(`Bland AI stop call failed (${response.status}): ${errorText}`);
   }
 }

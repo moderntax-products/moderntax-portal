@@ -88,12 +88,52 @@ export async function POST(request: NextRequest) {
     // Get existing entity data
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, transcript_urls, request_id, form_type')
+      .select('id, entity_name, transcript_urls, request_id, form_type, years, signed_8821_url, requests(loan_number, client_id, clients(slug))')
       .eq('id', entityId)
-      .single();
+      .single() as { data: any; error: any };
 
     if (!entity) {
       return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+    }
+
+    // Hard guard: every transcript upload must trace back to a signed 8821
+    // (or Clearfirm's API-intake path, which delegates auth to the client).
+    // Previously this was unenforced — 163 production rows accumulated
+    // transcripts without an 8821, creating an authorization paper trail gap.
+    // Pre-portal HIST-* entities are exempt because their 8821s live in legacy
+    // records outside the portal (migration backfill); we rely on loan_number
+    // prefix to identify them.
+    const loanNumber: string = entity.requests?.loan_number || '';
+    const clientSlug: string = entity.requests?.clients?.slug || '';
+    const isPrePortalBackfill = loanNumber.startsWith('HIST-');
+    const isClearfirmApi = clientSlug === 'clearfirm' || /^CF-/i.test(loanNumber);
+    if (!entity.signed_8821_url && !isPrePortalBackfill && !isClearfirmApi && files.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Entity has no signed 8821 on file. Upload the signed 8821 before uploading transcripts.',
+          entity_id: entityId,
+          entity_name: entity.entity_name,
+        },
+        { status: 400 },
+      );
+    }
+
+    // Scope check: warn (don't block) if uploaded filenames reference a year
+    // outside the 8821-authorized `entity.years`. Stored as a flag on the
+    // response so the expert sees a notice but the upload still completes —
+    // hard-blocking would break the 25 already-overrun entities.
+    const scopeWarnings: string[] = [];
+    const authorizedYears = new Set<string>((entity.years || []).map((y: string) => String(y).trim()));
+    if (authorizedYears.size > 0 && files.length > 0) {
+      for (const f of files) {
+        const yearsInName = Array.from(f.name.matchAll(/\b(20\d{2})\b/g)).map(m => m[1]);
+        const unauthorized = yearsInName.filter(y => !authorizedYears.has(y));
+        if (unauthorized.length > 0) {
+          scopeWarnings.push(
+            `${f.name}: references year(s) ${unauthorized.join(', ')} not on the 8821 (authorized: ${[...authorizedYears].sort().join(', ')}).`,
+          );
+        }
+      }
     }
 
     // Upload transcript files (if any provided)
@@ -275,6 +315,7 @@ export async function POST(request: NextRequest) {
       transcript_urls: uploadedUrls,
       completed: shouldComplete,
       sla_met: slaMet,
+      scope_warnings: scopeWarnings.length > 0 ? scopeWarnings : undefined,
     });
   } catch (error) {
     console.error('Transcript upload error:', error);

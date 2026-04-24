@@ -50,7 +50,8 @@ export type AuditAction =
   | 'irs_call_initiated'
   | 'irs_call_completed'
   | 'irs_call_failed'
-  | 'irs_call_cancelled';
+  | 'irs_call_cancelled'
+  | 'entity_metadata_updated';
 
 export interface AuditEvent {
   action: AuditAction;

@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
+import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 
 interface EntityPayload {
   entity_name: string;
@@ -122,6 +123,11 @@ export async function POST(request: NextRequest) {
       if (ent.tid_kind && !['EIN', 'SSN'].includes(ent.tid_kind.toUpperCase())) {
         validationErrors.push(`${prefix}.tid_kind must be EIN or SSN`);
       }
+      // Form-type vs. tid_kind compatibility — reject e.g. EIN on 1040, SSN on 1120S.
+      if (ent.form_type && ent.tid_kind) {
+        const mismatch = validateFormTypeMatchesTidKind(ent.tid_kind, ent.form_type);
+        if (mismatch) validationErrors.push(`${prefix}: ${mismatch}`);
+      }
     });
 
     if (validationErrors.length > 0) {
@@ -207,14 +213,20 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Create entities ---
+    // No hard default to '1040' here — infer from tid_kind so EIN entities default
+    // to a business form. Explicit form_type in payload still wins (and was already
+    // validated for tid-kind compatibility in the block above).
     const entityRows = body.entities.map((ent) => {
       const tidKind = ent.tid_kind?.toUpperCase() === 'SSN' ? 'SSN' : 'EIN';
+      const ftInferred = ent.form_type
+        ? normalizeFormType(ent.form_type)
+        : inferFormTypeFromTidKind(tidKind);
       return {
         request_id: req.id,
         entity_name: ent.entity_name.trim(),
         tid: formatTid(ent.tid.trim(), tidKind),
         tid_kind: tidKind,
-        form_type: normalizeFormType(ent.form_type || '1040'),
+        form_type: ftInferred,
         years: ent.years,
         address: ent.address || null,
         city: ent.city || null,

@@ -186,6 +186,12 @@ export async function POST(request: NextRequest) {
           expert_sla_compliance: 92,
           total_entities_completed_today: 15,
           total_entities_pending: 19,
+          revenue_today: 1199.70,
+          free_trial_entities_today: 0,
+          revenue_breakdown: [
+            { client_name: 'California Statewide CDC', billable_entities: 10, free_entities: 0, amount: 799.80 },
+            { client_name: 'Centerstone CDC',           billable_entities: 5,  free_entities: 0, amount: 399.90 },
+          ],
         },
         new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
       )

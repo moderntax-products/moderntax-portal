@@ -326,6 +326,22 @@ export interface AdminDailySummaryStats {
   expert_sla_compliance: number; // percentage
   total_entities_completed_today: number;
   total_entities_pending: number;
+  /**
+   * Actual revenue for today's completions, computed from per-client
+   * billing_rate_* values (PDF vs CSV per intake method). Free-trial
+   * entities (first 3 completions all-time for a free_trial client) are
+   * excluded. Kept as dollars rounded to cents.
+   */
+  revenue_today: number;
+  /** Free-trial completions today — not billable, counted separately. */
+  free_trial_entities_today: number;
+  /** Per-client breakdown for the email template. */
+  revenue_breakdown: {
+    client_name: string;
+    billable_entities: number;
+    free_entities: number;
+    amount: number;
+  }[];
 }
 
 /**

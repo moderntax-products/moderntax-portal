@@ -43,3 +43,8 @@ Thumbs.db
 # Claude
 .claude/
 .vercel
+
+# Vercel env dumps (never commit — production secrets)
+.env.vercel-prod
+.env.vercel-tmp
+tsconfig.tsbuildinfo

@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { initiateCall } from '@/lib/bland';
+import { initiateCall as initiateCallViaProvider } from '@/lib/voice-provider';
 
 const MAX_ENTITIES_PER_CALL = 3; // IRS processes each 8821 individually — 3 keeps call under 45 min
 const DAILY_SPEND_CAP = parseFloat(process.env.BLAND_DAILY_SPEND_CAP || '50');
@@ -243,9 +243,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Immediate call — fire Bland AI now
+    // Immediate call — fire via active provider (bland or retell).
+    // The voice-provider router stores the call_id in the same `bland_call_id`
+    // column regardless of provider — downstream code uses providerForCallId()
+    // to detect which API to call for stop/status/listen.
     try {
-      const blandResponse = await initiateCall({
+      const blandResponse = await initiateCallViaProvider({
         expertName: profile.full_name || user.email!,
         cafNumber: profile.caf_number,
         expertFax: profile.fax_number || undefined,
@@ -258,6 +261,7 @@ export async function POST(request: NextRequest) {
           tidKind: e.tid_kind as 'SSN' | 'EIN',
           formType: e.form_type,
           years: e.years,
+          address: e.address || undefined,
         })),
         metadata: {
           sessionId: session.id,
@@ -270,7 +274,12 @@ export async function POST(request: NextRequest) {
         callbackPhone: resolvedCallbackPhone || undefined,
       });
 
-      // Update session with Bland call ID
+      console.log(`[irs-call/initiate] provider=${blandResponse.provider} call_id=${blandResponse.call_id}`);
+
+      // Update session with call ID. We still use the `bland_call_id` column
+      // for both providers — it's just a text field storing whichever id the
+      // active provider returned. Retell call_ids start with "call_" so we
+      // can detect provider downstream without a schema migration.
       await adminSupabase
         .from('irs_call_sessions' as any)
         .update({

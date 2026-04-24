@@ -211,12 +211,49 @@ async function processSignedEntity(
   signatureRequestId: string,
   signatureRequest: any
 ) {
+  // Helper: write a failure marker so /api/admin/reconcile-signatures can find
+  // signatures that completed at Dropbox Sign but whose PDFs never landed on
+  // our storage. Before this, failures were only console-logged — invisible
+  // once the container recycled.
+  const markPending = async (stage: 'download' | 'upload', err: unknown) => {
+    try {
+      await supabase.from('audit_log').insert({
+        user_email: '',
+        action: 'webhook_failed',
+        entity_type: 'request_entity',
+        entity_id: entity.id,
+        details: {
+          source: 'dropbox_sign',
+          stage,
+          signature_id: signatureRequestId,
+          request_id: entity.request_id,
+          error: err instanceof Error ? err.message : String(err),
+          needs_reconcile: true,
+          created_at: new Date().toISOString(),
+        },
+      });
+    } catch (auditErr) {
+      console.error(`[dropbox-sign] Could not write failure marker:`, auditErr);
+    }
+    // Also stamp signature_id on the entity so the reconcile endpoint can find
+    // the row even if the failure marker insert itself failed. This is the key
+    // signal used by the reconcile sweep.
+    try {
+      await supabase
+        .from('request_entities')
+        .update({ signature_id: signatureRequestId })
+        .eq('id', entity.id)
+        .is('signed_8821_url', null);
+    } catch { /* best effort */ }
+  };
+
   // Download signed PDF
   let pdfBuffer: Buffer;
   try {
     pdfBuffer = await downloadSignedPdf(signatureRequestId);
   } catch (dlError) {
     console.error(`[dropbox-sign] Failed to download PDF for ${signatureRequestId}:`, dlError);
+    await markPending('download', dlError);
     return;
   }
 
@@ -233,22 +270,37 @@ async function processSignedEntity(
 
   if (uploadError) {
     console.error(`[dropbox-sign] Failed to upload PDF:`, uploadError);
+    await markPending('upload', uploadError);
     return;
   }
 
-  // Update entity — backfill signature_id and signer_email if missing
+  // Update entity — backfill signer identity fields if missing. 14 production
+  // rows previously ended up with signed_8821_url set but signer_first_name,
+  // signer_last_name, and signature_id all null because this block only wrote
+  // signer_email. Now we pull the full signer block from Dropbox Sign's payload.
   const oldStatus = entity.status;
-  const signerEmail = signatureRequest?.signatures?.[0]?.signer_email_address || null;
+  const signerPayload = signatureRequest?.signatures?.[0] || {};
+  const signerEmail = signerPayload.signer_email_address || null;
+  const signerFullName: string | null = signerPayload.signer_name || null;
+  const [parsedFirstName, ...parsedRestName] = (signerFullName || '').trim().split(/\s+/);
+  const signerFirstName = parsedFirstName || null;
+  const signerLastName = parsedRestName.length ? parsedRestName.join(' ') : null;
+  // Prefer the platform-reported signed-at timestamp if present so the row
+  // reflects when the taxpayer actually signed, not when our webhook ran.
+  const signedAtIso = signerPayload.signed_at
+    ? new Date(signerPayload.signed_at * 1000).toISOString()
+    : new Date().toISOString();
+
   const updateData: Record<string, any> = {
     signed_8821_url: storagePath,
     status: '8821_signed',
     signature_id: signatureRequestId,
-    signature_created_at: new Date().toISOString(),
+    signature_created_at: signedAtIso,
   };
-  // Backfill signer_email if entity didn't have one
-  if (signerEmail) {
-    updateData.signer_email = signerEmail;
-  }
+  if (signerEmail) updateData.signer_email = signerEmail;
+  if (signerFirstName) updateData.signer_first_name = signerFirstName;
+  if (signerLastName) updateData.signer_last_name = signerLastName;
+
   const { error: updateError } = await supabase
     .from('request_entities')
     .update(updateData)
@@ -259,7 +311,32 @@ async function processSignedEntity(
     return;
   }
 
-  console.log(`[dropbox-sign] Entity ${entity.id} (${entity.entity_name}) → 8821_signed`);
+  console.log(`[dropbox-sign] Entity ${entity.id} (${entity.entity_name}) → 8821_signed (signer: ${signerFullName || signerEmail || 'unknown'})`);
+
+  // Audit log — every signature event gets a row so forensics aren't reliant on
+  // the entity column alone. Historically this handler wrote zero audit rows
+  // even on success, making it impossible to reconstruct who signed when.
+  try {
+    await supabase.from('audit_log').insert({
+      user_email: signerEmail || '',
+      action: 'file_uploaded',
+      entity_type: 'request_entity',
+      entity_id: entity.id,
+      details: {
+        action: '8821_signed_via_dropbox_sign',
+        signature_id: signatureRequestId,
+        signer_name: signerFullName,
+        signer_email: signerEmail,
+        signed_at: signedAtIso,
+        storage_path: storagePath,
+        request_id: entity.request_id,
+        prior_status: oldStatus,
+      },
+    });
+  } catch (auditErr) {
+    // Audit failure must not block the signed-status update — just log it.
+    console.error(`[dropbox-sign] Audit log insert failed:`, auditErr);
+  }
 
   // Check if all entities in the request are at least 8821_signed, update request status
   const { data: allEntities } = await supabase

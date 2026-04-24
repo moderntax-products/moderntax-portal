@@ -4,6 +4,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
+import { resolveFormType } from '@/lib/form-type-validation';
 
 export async function POST(request: NextRequest) {
   try {
@@ -44,10 +45,17 @@ export async function POST(request: NextRequest) {
     const entityName = formData.get('entity_name') as string | null;
     const tid = formData.get('tid') as string | null;
     const tidKind = (formData.get('tid_kind') as string) || 'EIN';
-    const formType = (formData.get('form_type') as string) || '1040';
+    const rawFormType = formData.get('form_type') as string | null;
     const years = formData.get('years') as string | null;
     const notes = formData.get('notes') as string | null;
     const entityTranscriptRequested = formData.get('entity_transcript') === 'true';
+
+    // Resolve form_type against tid_kind — rejects EIN→1040 and SSN→1120 mismatches.
+    const resolved = resolveFormType(rawFormType, tidKind);
+    if (resolved.error) {
+      return NextResponse.json({ error: resolved.error }, { status: 400 });
+    }
+    const formType = resolved.formType as string;
 
     // Get all PDF files
     const files: File[] = [];

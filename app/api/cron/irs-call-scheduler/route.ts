@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { initiateCall } from '@/lib/bland';
+import { loadPhonePool, isIrsOpenFor, pickFromNumber } from '@/lib/phone-pool';
 
 export const maxDuration = 30;
 
@@ -25,26 +26,33 @@ export async function GET(request: NextRequest) {
     const supabase = createAdminClient();
     const now = new Date();
 
-    // Check if we're in IRS PPS operating hours (7am-7pm ET, Mon-Fri)
-    // Convert to ET for the check
-    const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const hour = etTime.getHours();
-    const day = etTime.getDay();
-
-    if (day === 0 || day === 6) {
-      return NextResponse.json({
-        success: true,
-        message: 'IRS PPS closed on weekends',
-        skipped: true,
-      });
+    // IRS PPS hours check — but we no longer hardcode ET. The IRS honors
+    // business hours based on the area-code timezone of the CALLING number,
+    // so we're eligible as long as ANY pool number is currently in 7am-7pm
+    // local + weekday. This stretches our daily window from 12 hours to
+    // 15 hours (4am PT with an ET number → 7pm PT with a PT number).
+    const pool = loadPhonePool();
+    const anyOpen = pool.length > 0 && pool.some(p => isIrsOpenFor(p.tz, now));
+    if (!anyOpen) {
+      // No pool eligibility — fall back to ET weekday check for Bland mode.
+      const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const etDay = etTime.getDay();
+      const etHour = etTime.getHours();
+      if (etDay === 0 || etDay === 6) {
+        return NextResponse.json({ success: true, message: 'IRS PPS closed on weekends', skipped: true });
+      }
+      if (etHour < 7 || etHour >= 19) {
+        return NextResponse.json({
+          success: true,
+          message: `IRS PPS closed in all configured timezones (no pool entry in 7am-7pm local)`,
+          skipped: true,
+          pool_size: pool.length,
+        });
+      }
     }
-
-    if (hour < 7 || hour >= 19) {
-      return NextResponse.json({
-        success: true,
-        message: `IRS PPS closed (current ET hour: ${hour})`,
-        skipped: true,
-      });
+    const activePoolEntry = pool.length > 0 ? pickFromNumber(pool, now) : null;
+    if (activePoolEntry) {
+      console.log(`[irs-call-scheduler] active pool entry: ${activePoolEntry.label || activePoolEntry.phone} (${activePoolEntry.tz})`);
     }
 
     // ---------------------------------------------------------------

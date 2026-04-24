@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
-import { getCallStatus as getBlandStatus } from '@/lib/bland';
+import { getCallStatus as getProviderStatus, providerForCallId } from '@/lib/voice-provider';
 
 export async function GET(request: NextRequest) {
   try {
@@ -51,17 +51,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Not authorized for this session' }, { status: 403 });
     }
 
-    // If call is active, optionally poll Bland for live status
+    // If call is active, poll the active provider for live status. The
+    // provider router translates Bland/Retell responses into a unified shape
+    // so the rest of this function stays provider-agnostic.
     const activeStatuses = ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'];
-    let blandStatus = null;
+    let blandStatus: { completed: boolean; concatenated_transcript?: string; call_length?: number; recording_url?: string } | null = null;
 
     if (activeStatuses.includes(session.status) && session.bland_call_id) {
       try {
-        blandStatus = await getBlandStatus(session.bland_call_id);
+        const providerStatus = await getProviderStatus(providerForCallId(session.bland_call_id), session.bland_call_id);
+        // Map unified shape back to the local `blandStatus` variable name so
+        // the existing transcript-inference logic below still works unchanged.
+        blandStatus = {
+          completed: providerStatus.completed,
+          concatenated_transcript: providerStatus.transcript,
+          call_length: providerStatus.durationMs ? providerStatus.durationMs / 60_000 : undefined,
+          recording_url: providerStatus.recordingUrl,
+        };
 
-        // Completion fallback — webhook SHOULD handle this, but it's unreliable
-        // (see the 2026-04-21 incidents where the DB stayed on `ringing` for 29
-        // min after Bland marked the call `completed`). Force-reconcile here.
+        // Completion fallback — webhook SHOULD handle this, but it's unreliable.
         if (blandStatus.completed && session.status !== 'completed') {
           const elapsedMinutes = blandStatus.call_length || 0;
           await adminSupabase
@@ -78,11 +86,8 @@ export async function GET(request: NextRequest) {
           session.status = 'completed';
         }
 
-        // Intermediate-status reconciliation — same bug class as above but for
-        // transitions within the active lifecycle. The DB gets stuck on `ringing`
-        // for the entire call because the status-transition webhook from Bland
-        // isn't firing (or is being rejected). We infer the real state from the
-        // transcript and update the DB so the UI shows reality.
+        // Intermediate-status reconciliation — infer live state from transcript
+        // when webhook transitions don't fire.
         if (!blandStatus.completed && blandStatus.concatenated_transcript) {
           const t = String(blandStatus.concatenated_transcript).toLowerCase();
           let inferred: string | null = null;
@@ -127,15 +132,22 @@ export async function GET(request: NextRequest) {
     const elapsedSeconds = Math.round((Date.now() - initiatedAt.getTime()) / 1000);
     const runningCost = Math.round((elapsedSeconds / 60) * (session.cost_per_minute || 0.09) * 100) / 100;
 
+    // Live transcript — return whichever is freshest. Bland's poll wins if it
+    // returned something; otherwise fall back to whatever we last persisted.
+    // The UI uses this for the "Live Transcript" panel (replacement for the
+    // plan-gated Live Audio feature).
+    const liveTranscript: string | null =
+      blandStatus?.concatenated_transcript || session.concatenated_transcript || null;
+
     return NextResponse.json({
       session: {
         ...session,
         elapsed_seconds: activeStatuses.includes(session.status) ? elapsedSeconds : session.duration_seconds,
         running_cost: activeStatuses.includes(session.status) ? runningCost : session.estimated_cost,
+        concatenated_transcript: liveTranscript,
       },
       blandStatus: blandStatus ? {
         completed: blandStatus.completed,
-        answeredBy: blandStatus.answered_by,
       } : null,
     });
   } catch (error) {

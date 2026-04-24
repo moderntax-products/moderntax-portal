@@ -21,6 +21,55 @@ interface CallSession {
   callback_status: string | null;
   callback_phone: string | null;
   agent_answered_at: string | null;
+  /** Rolling transcript from Bland — used for the Live Transcript panel. */
+  concatenated_transcript: string | null;
+}
+
+interface DialDirectInfo {
+  phone: string;
+  ivr_path: string[];
+  caf_number: string | null;
+  expert_name: string | null;
+  expert_fax: string | null;
+  sor_inbox: string | null;
+  entities: {
+    taxpayer_name: string;
+    taxpayer_tid: string;
+    form_type: string;
+    tax_years: string[];
+  }[];
+}
+
+/**
+ * Keywords that suggest a live IRS agent has picked up the phone. Used to
+ * highlight the live transcript and fire a visual alert. These have to be
+ * tight enough to avoid false positives on the PPS recorded greeting.
+ */
+const AGENT_GREETING_PATTERNS: RegExp[] = [
+  /thank you for calling[^.]*practitioner/i,
+  /this is (mr|ms|mrs|miss)\.?\s+\w+/i,
+  /\bmy (id|badge) (number )?is\b/i,
+  /how (can|may) i help/i,
+  /may i have your (name|caf)/i,
+];
+
+function highlightTranscript(text: string): { html: string; agentDetected: boolean } {
+  // Escape then highlight the tail (last ~800 chars) so the freshest content
+  // is visible without scrolling. Marks agent-greeting matches in red.
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const tail = escaped.slice(-1200);
+  let agentDetected = false;
+  let html = tail;
+  for (const pattern of AGENT_GREETING_PATTERNS) {
+    if (pattern.test(tail)) {
+      agentDetected = true;
+      html = html.replace(pattern, m => `<mark class="bg-red-200 text-red-900 px-1 rounded">${m}</mark>`);
+    }
+  }
+  return { html, agentDetected };
 }
 
 interface IrsCallStatusPanelProps {
@@ -54,24 +103,23 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
   const [minimized, setMinimized] = useState(false);
   const [localElapsed, setLocalElapsed] = useState(0);
 
-  // Live audio state
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [audioConnected, setAudioConnected] = useState(false);
-  const [audioError, setAudioError] = useState<string | null>(null);
-  const [audioLevel, setAudioLevel] = useState(0);
+  // Transfer state — transferSuccess stays for auto-bridge visual; transferInfo
+  // carries the "auto-transfer is armed" message surfaced by the server route.
+  const [transferSuccess] = useState(false);
+  const [transferInfo] = useState<string | null>(null);
 
-  // Transfer state
-  const [transferring, setTransferring] = useState(false);
-  const [transferError, setTransferError] = useState<string | null>(null);
-  const [transferSuccess, setTransferSuccess] = useState(false);
-  const [transferInfo, setTransferInfo] = useState<string | null>(null);
+  // End-and-dial handoff state
+  const [endingAndDialing, setEndingAndDialing] = useState(false);
+  const [dialDirectInfo, setDialDirectInfo] = useState<DialDirectInfo | null>(null);
+  const [endError, setEndError] = useState<string | null>(null);
 
   // Cancel confirmation state — End Call is destructive (drops the IRS line),
   // so it requires an explicit confirmation step.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  // Audio refs retained for the disabled live-audio path (re-enabled on Bland
+  // plan upgrade). Safe to remove if we commit to no-audio permanently.
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
   const fetchStatus = useCallback(async () => {
@@ -116,84 +164,11 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
     return () => clearInterval(interval);
   }, [session?.status]);
 
-  // --- Live Audio WebSocket ---
-  const connectAudio = useCallback(async () => {
-    setAudioError(null);
-
-    try {
-      // Get WebSocket URL from our API
-      const res = await fetch(`/api/expert/irs-call/listen?sessionId=${sessionId}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed to get audio stream (${res.status})`);
-      }
-      const { wsUrl } = await res.json();
-      if (!wsUrl) throw new Error('No WebSocket URL returned');
-
-      // Create AudioContext
-      const audioCtx = new AudioContext({ sampleRate: 16000 });
-      audioCtxRef.current = audioCtx;
-
-      // Create analyser for volume visualization
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.connect(audioCtx.destination);
-      analyserRef.current = analyser;
-
-      // Connect WebSocket
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setAudioConnected(true);
-        setAudioEnabled(true);
-
-        // Start volume meter animation
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        const updateLevel = () => {
-          analyser.getByteFrequencyData(dataArray);
-          const avg = dataArray.reduce((sum, v) => sum + v, 0) / dataArray.length;
-          setAudioLevel(avg / 255);
-          animFrameRef.current = requestAnimationFrame(updateLevel);
-        };
-        updateLevel();
-      };
-
-      ws.onmessage = (event) => {
-        if (!(event.data instanceof ArrayBuffer)) return;
-
-        // Convert PCM Int16 to Float32 for Web Audio API
-        const int16 = new Int16Array(event.data);
-        const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i++) {
-          float32[i] = int16[i] / 32768;
-        }
-
-        // Play audio through AudioContext
-        const buffer = audioCtx.createBuffer(1, float32.length, 16000);
-        buffer.getChannelData(0).set(float32);
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(analyser);
-        source.start();
-      };
-
-      ws.onclose = () => {
-        setAudioConnected(false);
-      };
-
-      ws.onerror = () => {
-        setAudioError('Audio connection lost');
-        setAudioConnected(false);
-      };
-    } catch (err) {
-      setAudioError(err instanceof Error ? err.message : 'Failed to connect audio');
-      setAudioEnabled(false);
-    }
-  }, [sessionId]);
-
+  // --- Live Audio WebSocket —— DISABLED (Bland plan-gated) ---
+  // Kept intentionally as a stub so restoring audio is a one-line toggle if
+  // the Bland plan gets upgraded. Today /v1/calls/{id}/listen returns
+  // INVALID_ORG_PREFERENCES, so we replaced the audio panel with a live
+  // transcript viewer (highlightTranscript + AGENT_GREETING_PATTERNS above).
   const disconnectAudio = useCallback(() => {
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
@@ -207,17 +182,12 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
       audioCtxRef.current.close();
       audioCtxRef.current = null;
     }
-    setAudioConnected(false);
-    setAudioEnabled(false);
-    setAudioLevel(0);
   }, []);
 
-  // Clean up audio on unmount or call end
+  // Clean up any lingering audio context on unmount or call end.
   useEffect(() => {
     return () => disconnectAudio();
   }, [disconnectAudio]);
-
-  // Disconnect audio when call ends
   useEffect(() => {
     if (session && ['completed', 'failed', 'cancelled'].includes(session.status)) {
       disconnectAudio();
@@ -341,31 +311,39 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
     }
   };
 
-  const handleTransfer = async () => {
-    setTransferring(true);
-    setTransferError(null);
-    setTransferInfo(null);
+  // NOTE: The old handleTransfer() was removed — Bland retired the
+  // /v1/calls/{id}/transfer endpoint (now 404). Auto-bridge via
+  // transfer_phone_number is set at call-init time; the button above just
+  // explains that. When the AI misses, handleEndAndDial below is the
+  // reliable recovery path.
+
+  /**
+   * Real replacement for the deprecated transfer: end the Bland AI call and
+   * hand the expert a ready-to-dial block (IRS PPS number + IVR path + CAF
+   * + queued entities). Used when the AI is stuck or the expert wants to
+   * take the call over personally.
+   */
+  const handleEndAndDial = async () => {
+    if (!confirm('End the Bland AI call and dial IRS directly? You will lose the queue position but retain all context.')) {
+      return;
+    }
+    setEndingAndDialing(true);
+    setEndError(null);
     try {
-      const res = await fetch('/api/expert/irs-call/transfer', {
+      const res = await fetch('/api/expert/irs-call/end-and-dial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Transfer failed');
-      // Bland removed the /transfer endpoint — manual push is not supported.
-      // Server returns requires_auto_transfer=true with a message explaining
-      // that the AI will bridge automatically on agent greeting.
-      if (data.requires_auto_transfer) {
-        setTransferInfo(data.message || 'Auto-transfer is configured — your phone will ring when the AI detects an agent.');
-      } else {
-        setTransferSuccess(true);
-      }
+      if (!res.ok) throw new Error(data.error || 'Failed to end call');
+      setDialDirectInfo(data.dialDirect);
+      // Call status update will flip to cancelled via the usual poll.
       fetchStatus();
     } catch (err) {
-      setTransferError(err instanceof Error ? err.message : 'Transfer failed');
+      setEndError(err instanceof Error ? err.message : 'Failed to end call');
     } finally {
-      setTransferring(false);
+      setEndingAndDialing(false);
     }
   };
 
@@ -398,12 +376,6 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
           )}
           <span className="text-sm font-medium">{config.label}</span>
           <span className="text-xs opacity-75">{formatDuration(localElapsed)}</span>
-          {audioConnected && (
-            <span className="flex items-center gap-1 text-xs text-green-600">
-              <span className="w-2 h-2 rounded-full bg-green-500" />
-              Live
-            </span>
-          )}
         </div>
         <span className="text-xs">Expand</span>
       </button>
@@ -457,90 +429,53 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
       </div>
 
       {/* Live Audio Panel */}
-      {canListen && (
-        <div className="bg-white/60 border border-black/10 rounded-lg p-3 mb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-              </svg>
-              <span className="text-xs font-semibold">Live Call Audio</span>
-              {audioConnected && (
+      {/* Live Transcript — replaces the plan-gated Live Audio feature.
+          Polls every 1.5-3s (adaptive) via /status and highlights agent-greeting
+          keywords in red so the expert can catch a missed transfer instantly. */}
+      {canListen && (() => {
+        const transcript = session.concatenated_transcript || '';
+        const { html: highlightedHtml, agentDetected } = highlightTranscript(transcript);
+        return (
+          <div className={`border rounded-lg p-3 mb-3 ${agentDetected ? 'bg-red-50 border-red-300' : 'bg-white/60 border-black/10'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                <span className="text-xs font-semibold">Live Transcript</span>
                 <span className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                  <span className="text-[10px] text-green-700 font-medium">Connected</span>
+                  <span className={`w-2 h-2 rounded-full ${transcript ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
+                  <span className="text-[10px] text-gray-600">
+                    {transcript ? 'Streaming' : 'Waiting for audio…'}
+                  </span>
+                </span>
+              </div>
+              {agentDetected && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white animate-pulse">
+                  AGENT DETECTED
                 </span>
               )}
             </div>
 
-            {!audioEnabled ? (
-              <button
-                onClick={connectAudio}
-                className="px-3 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-1.5"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                </svg>
-                Listen In
-              </button>
+            {transcript ? (
+              <div
+                className="text-[11px] text-gray-700 font-mono leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap bg-white/70 rounded p-2"
+                dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+              />
             ) : (
-              <button
-                onClick={disconnectAudio}
-                className="px-3 py-1.5 text-xs font-medium bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-              >
-                Mute
-              </button>
-            )}
-          </div>
-
-          {/* Audio level indicator */}
-          {audioConnected && (
-            <div className="mt-2 flex items-center gap-1.5">
-              {Array.from({ length: 20 }).map((_, i) => (
-                <div
-                  key={i}
-                  className={`w-1 rounded-full transition-all duration-75 ${
-                    i / 20 < audioLevel
-                      ? i / 20 < 0.3 ? 'bg-green-500' : i / 20 < 0.7 ? 'bg-yellow-500' : 'bg-red-500'
-                      : 'bg-gray-300'
-                  }`}
-                  style={{ height: `${8 + (i / 20 < audioLevel ? audioLevel * 16 : 0)}px` }}
-                />
-              ))}
-              <span className="text-[10px] text-gray-500 ml-1">
-                {session.status === 'on_hold' ? 'Hold music / IRS messages' : 'IRS agent speaking'}
-              </span>
-            </div>
-          )}
-
-          {audioError && (
-            <div className="mt-1.5">
-              <p className="text-[10px] text-red-600">
-                {audioError.includes('Org preferences') || audioError.includes('live listening') ? (
-                  <>
-                    <strong>Live listen requires a Bland plan upgrade.</strong>{' '}
-                    Enable on your Bland account at{' '}
-                    <a href="https://bland.ai/pricing" target="_blank" rel="noreferrer" className="underline">
-                      bland.ai/pricing
-                    </a>
-                    . Until then, the AI will auto-bridge to your cell when it detects an IRS agent greeting —
-                    no manual action required. If the AI misses the agent, the call cannot be salvaged via
-                    the API and you&apos;ll need to end this call and dial IRS manually.
-                  </>
-                ) : (
-                  audioError
-                )}
+              <p className="text-[11px] text-gray-500 italic">
+                Transcript will appear as the AI progresses through the IVR.
               </p>
-            </div>
-          )}
+            )}
 
-          {!audioEnabled && !audioError && session.status === 'on_hold' && (
-            <p className="mt-2 text-[10px] opacity-60">
-              Click &ldquo;Listen In&rdquo; to hear the IRS line. You&apos;ll hear when an agent picks up so you&apos;re ready.
+            <p className="mt-2 text-[10px] text-gray-500">
+              Live audio is gated behind a Bland plan upgrade. Live transcript + agent-keyword detection
+              is running instead — if the AI misses the agent, you&apos;ll see the red alert and can use
+              <strong> End Call &amp; Dial Direct</strong> below.
             </p>
-          )}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {/* Agent answered alert */}
       {session.status === 'speaking_to_agent' && (
@@ -563,30 +498,100 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
         </div>
       )}
 
-      {/* Transfer button — available when on hold or speaking to agent */}
-      {canTransfer && !transferSuccess && (
-        <div className="mb-3">
+      {/* Transfer bail-out — real fix for the plan-gated "Transfer to My Phone".
+          Auto-bridge still runs (AI detects agent greeting → dials callback phone).
+          If that misses, this button kills Bland's call and hands the expert a
+          ready-to-dial block with IRS PPS number + CAF + queued entities. */}
+      {canTransfer && !transferSuccess && !dialDirectInfo && (
+        <div className="mb-3 space-y-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p className="text-xs text-blue-900">
+              <strong>Auto-transfer is armed.</strong> The AI is configured to bridge this call to{' '}
+              <span className="font-mono">{session.callback_phone || 'your phone'}</span> the moment it
+              detects an IRS agent greeting. Keep this tab open and watch for your phone to ring.
+            </p>
+            {transferInfo && <p className="mt-2 text-xs text-amber-700">{transferInfo}</p>}
+          </div>
           <button
-            onClick={handleTransfer}
-            disabled={transferring}
-            className="w-full px-4 py-2.5 text-sm font-bold bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+            onClick={handleEndAndDial}
+            disabled={endingAndDialing}
+            className="w-full px-4 py-2.5 text-sm font-bold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.05 12.55l3.182-3.182a2 2 0 012.828 0l.07.07a2 2 0 010 2.829l-3.182 3.182m-2.828 0l-3.182 3.182a2 2 0 01-2.828 0l-.07-.07a2 2 0 010-2.829l3.182-3.182m9.9-9.9L3 20.999" />
+            </svg>
+            {endingAndDialing ? 'Ending call…' : 'End Call & Dial Direct'}
+          </button>
+          {endError && (
+            <p className="text-xs text-red-600">{endError}</p>
+          )}
+          <p className="text-[10px] text-gray-500 text-center">
+            Use this if the AI is stuck or misses the agent greeting. The Bland call ends, and you get
+            the IRS PPS number + your CAF + queued entities to dial yourself.
+          </p>
+          {/* Legacy disabled button — kept for audit surface with the limitation explicit */}
+          <details className="text-[10px] text-gray-500">
+            <summary className="cursor-pointer hover:text-gray-700">Why is &ldquo;Transfer to My Phone&rdquo; not a button?</summary>
+            <p className="mt-1 pl-3 border-l-2 border-gray-300">
+              Bland AI retired the programmatic mid-call transfer endpoint (all
+              <code className="mx-1">/calls/&#123;id&#125;/transfer</code> variants now return 404). The
+              only supported transfer path is the AI triggering itself on agent detection, which is what
+              the auto-bridge above does. If Bland restores the endpoint, this button comes back.
+            </p>
+          </details>
+        </div>
+      )}
+
+      {/* Dial-direct handoff block — rendered after End Call & Dial Direct */}
+      {dialDirectInfo && (
+        <div className="mb-3 border-2 border-emerald-400 bg-emerald-50 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <svg className="w-5 h-5 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
             </svg>
-            {transferring ? 'Transferring...' : 'Transfer to My Phone'}
-          </button>
-          {transferError && (
-            <p className="mt-1 text-xs text-red-600">{transferError}</p>
-          )}
-          {transferInfo && (
-            <p className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              <strong>Manual transfer unavailable.</strong> {transferInfo}
-            </p>
-          )}
-          <p className="mt-1 text-[10px] opacity-60 text-center">
-            When you hear the IRS agent answer, click to transfer the call to your phone.
-          </p>
+            <h3 className="text-sm font-bold text-emerald-900">Dial IRS PPS Directly</h3>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div className="flex items-center justify-between bg-white rounded p-2">
+              <span className="text-gray-600">Phone</span>
+              <a href={`tel:${dialDirectInfo.phone}`} className="font-mono font-bold text-mt-dark text-lg">
+                {dialDirectInfo.phone}
+              </a>
+            </div>
+            <div className="bg-white rounded p-2">
+              <p className="text-gray-600 mb-1">IVR path</p>
+              <ol className="list-decimal ml-4 text-mt-dark">
+                {dialDirectInfo.ivr_path.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {dialDirectInfo.caf_number && (
+                <div className="bg-white rounded p-2">
+                  <p className="text-gray-600">CAF</p>
+                  <p className="font-mono font-bold text-mt-dark">{dialDirectInfo.caf_number}</p>
+                </div>
+              )}
+              {dialDirectInfo.sor_inbox && (
+                <div className="bg-white rounded p-2">
+                  <p className="text-gray-600">SOR inbox</p>
+                  <p className="font-mono font-bold text-mt-dark">{dialDirectInfo.sor_inbox}</p>
+                </div>
+              )}
+            </div>
+            {dialDirectInfo.entities.length > 0 && (
+              <div className="bg-white rounded p-2">
+                <p className="text-gray-600 mb-1">Entities queued ({dialDirectInfo.entities.length})</p>
+                <ul className="space-y-1">
+                  {dialDirectInfo.entities.map((e, i) => (
+                    <li key={i} className="text-mt-dark">
+                      <span className="font-semibold">{e.taxpayer_name}</span>
+                      <span className="text-gray-500"> · {e.taxpayer_tid} · {e.form_type} · {e.tax_years.join(', ')}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

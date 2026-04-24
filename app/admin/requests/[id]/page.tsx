@@ -10,6 +10,7 @@ import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
+import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -152,6 +153,10 @@ export default async function AdminRequestManagePage({ params }: Props) {
 
       {/* Main Content */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        <PrePortalDeliveryBanner
+          isPrePortal={!!request.loan_number?.startsWith('HIST-')}
+          loanNumber={request.loan_number}
+        />
 
         {/* Request Status & Notes Management */}
         <div className="bg-white rounded-lg shadow p-6">
@@ -529,6 +534,8 @@ export default async function AdminRequestManagePage({ params }: Props) {
                         status: entity.status,
                         signed_8821_url: entity.signed_8821_url,
                         signer_email: entity.signer_email,
+                        years: entity.years,
+                        tid_kind: entity.tid_kind,
                       }}
                       requestId={request.id}
                     />

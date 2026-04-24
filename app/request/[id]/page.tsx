@@ -8,6 +8,7 @@ import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
+import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -119,6 +120,10 @@ export default async function RequestDetailPage({ params }: Props) {
 
       {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <PrePortalDeliveryBanner
+          isPrePortal={!!request.loan_number?.startsWith('HIST-')}
+          loanNumber={request.loan_number}
+        />
         <div className="space-y-12">
           {/* Timeline */}
           <div className="bg-white rounded-lg shadow p-8">
@@ -245,6 +250,8 @@ export default async function RequestDetailPage({ params }: Props) {
                         status: entity.status,
                         signed_8821_url: entity.signed_8821_url,
                         signer_email: entity.signer_email,
+                        years: entity.years,
+                        tid_kind: entity.tid_kind,
                       }}
                       requestId={request.id}
                     />

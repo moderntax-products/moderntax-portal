@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { logAuditFromRequest } from '@/lib/audit';
 import JSZip from 'jszip';
 
 export const maxDuration = 30;
@@ -134,6 +135,28 @@ export async function GET(request: NextRequest) {
     }
 
     const zipBuffer = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+
+    // SOC 2: log bulk PII export — single audit row covering the entire zip.
+    try {
+      await logAuditFromRequest(adminSupabase, request, {
+        action: 'data_exported',
+        userId: user.id,
+        userEmail: user.email || '',
+        resourceType: 'request',
+        resourceId: requestId,
+        details: {
+          export_kind: 'bulk_transcripts_zip',
+          loan_number: req.loan_number,
+          file_count: fileCount,
+          entity_count: entities.length,
+          role: profile.role,
+          client_id: profile.client_id,
+          zip_bytes: zipBuffer.byteLength,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[download-all-transcripts] audit log failed:', auditErr);
+    }
 
     return new NextResponse(zipBuffer as ArrayBuffer, {
       status: 200,

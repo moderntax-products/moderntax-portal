@@ -158,7 +158,8 @@ export async function buildCompletedPayload(
             continue;
           }
 
-          const htmlContent = await data.text();
+          // Strip NUL bytes — Postgres JSONB refuses them (error 22P05).
+          const htmlContent = (await data.text()).replace(/\u0000/g, '');
           const filename = htmlPath.split('/').pop() || '';
           const { transcriptType, reportType, taxPeriod } = categorizeTranscript(filename, entity.form_type);
 
@@ -312,6 +313,12 @@ export async function buildIncrementalPayload(
     console.error(`[webhook-incremental] Error reading ${htmlStoragePath}:`, err);
     return null;
   }
+
+  // IRS TDS HTML files occasionally contain NUL bytes (U+0000), which Postgres
+  // rejects in JSONB columns with error `22P05: unsupported Unicode escape
+  // sequence`. This quietly bricked 13 prior deliveries for CF-cherrytech-271.
+  // Strip NULs in place — they have no semantic meaning in rendered HTML.
+  htmlContent = htmlContent.replace(/\u0000/g, '');
 
   const filename = htmlStoragePath.split('/').pop() || '';
   const cleanFilename = filename.replace(/^\d+-/, ''); // Remove timestamp prefix

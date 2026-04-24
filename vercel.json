@@ -45,6 +45,10 @@
       "schedule": "0 6 1 * *"
     },
     {
+      "path": "/api/admin/mercury-reconcile",
+      "schedule": "0 5 * * *"
+    },
+    {
       "path": "/api/cron/webhook-retry",
       "schedule": "0 18 * * *"
     },
@@ -62,7 +66,7 @@
     },
     {
       "path": "/api/cron/irs-call-scheduler",
-      "schedule": "0 14 * * 1-5"
+      "schedule": "*/30 * * * 1-5"
     },
     {
       "path": "/api/cron/compliance-drip",

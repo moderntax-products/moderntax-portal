@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
+import { logAuditFromRequest } from '@/lib/audit';
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -89,6 +90,30 @@ export async function PATCH(request: NextRequest) {
 
     if (updateError) {
       return NextResponse.json({ error: 'Failed to update role', details: updateError.message }, { status: 500 });
+    }
+
+    // SOC 2 CC6.3: permission changes must be logged with before/after snapshot.
+    try {
+      await logAuditFromRequest(admin, request, {
+        action: 'settings_changed',
+        userId: user.id,
+        userEmail: user.email || '',
+        resourceType: 'profile',
+        resourceId: userId,
+        details: {
+          action: 'role_changed',
+          target_user_id: userId,
+          target_email: targetProfile.email,
+          target_full_name: targetProfile.full_name,
+          target_client_id: targetProfile.client_id,
+          previous_role: targetProfile.role,
+          new_role: newRole,
+          actor_role: callerProfile.role,
+          actor_client_id: callerProfile.client_id,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[update-role] audit log failed:', auditErr);
     }
 
     return NextResponse.json({

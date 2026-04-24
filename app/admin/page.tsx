@@ -6,6 +6,7 @@ import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { FreeTrialToggle } from '@/components/FreeTrialToggle';
 import { NotifyProcessorsButton } from '@/components/NotifyProcessorsButton';
 import { FireAllPending8821sButton } from '@/components/FireAllPending8821sButton';
+import { computeRevenueMetrics, formatDollars } from '@/lib/revenue-metrics';
 
 interface PageProps {
   searchParams: Promise<{
@@ -92,6 +93,15 @@ export default async function AdminPage({ searchParams }: PageProps) {
     .select('*, clients(name, slug)')
     .order('billing_period_start', { ascending: false })
     .limit(10) as { data: any[] | null; error: any };
+
+  // Real-time revenue + AR metrics pulled from the invoices table (kept in
+  // sync with Mercury by the daily mercury-reconcile cron at 05:00 UTC).
+  const revenueMetrics = await computeRevenueMetrics(supabase as any);
+  const q2ProgressPct = Math.min(
+    100,
+    (revenueMetrics.totals.projected_q2 / revenueMetrics.q2_target_dollars) * 100,
+  );
+  const q2GapDollars = Math.max(0, revenueMetrics.q2_target_dollars - revenueMetrics.totals.projected_q2);
 
   // Query stuck entities — entities in non-terminal statuses for too long
   const now = new Date();
@@ -470,8 +480,9 @@ export default async function AdminPage({ searchParams }: PageProps) {
   const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
   const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-  const prevMonthLabel = prevMonthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const currentMonthLabel = currentMonthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  // prev/current month labels — retained for potential future use by the
+  // per-client rows; no longer headline display.
+  void prevMonthStart; void currentMonthStart;
 
   // Per-client revenue: current month + previous month + all-time
   const clientRevenueCurrent: Record<string, number> = {};
@@ -531,21 +542,9 @@ export default async function AdminPage({ searchParams }: PageProps) {
     });
   });
 
-  const totalRevenueCurrent = Object.values(clientRevenueCurrent).reduce((sum, v) => sum + v, 0);
-  const totalBillableEntitiesCurrent = Object.values(clientRevenueEntitiesCurrent).reduce((sum, v) => sum + v, 0);
-  const totalRevenuePrev = Object.values(clientRevenuePrev).reduce((sum, v) => sum + v, 0);
-  const totalBillableEntitiesPrev = Object.values(clientRevenueEntitiesPrev).reduce((sum, v) => sum + v, 0);
-  const totalRevenueAllTime = Object.values(clientRevenueAllTime).reduce((sum, v) => sum + v, 0);
-  const totalBillableEntitiesAllTime = Object.values(clientRevenueEntitiesAllTime).reduce((sum, v) => sum + v, 0);
-
-  // Invoice stats
-  const outstandingAR = (allInvoices || [])
-    .filter((i: any) => i.status === 'sent' || i.status === 'overdue')
-    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
-  const overdueAR = (allInvoices || [])
-    .filter((i: any) => i.status === 'overdue')
-    .reduce((sum: number, i: any) => sum + (i.total_amount || 0), 0);
-  const overdueInvoices = (allInvoices || []).filter((i: any) => i.status === 'overdue').length;
+  // NOTE: Headline revenue + AR totals moved to computeRevenueMetrics()
+  // (Mercury-synced source of truth). Keep clientRevenuePrev/Current for the
+  // per-client breakdown row tooltip below.
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -675,33 +674,231 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         </div>
 
-        {/* Billing & Revenue Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-12">
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-mt-green">
-            <p className="text-gray-600 text-sm font-medium">{prevMonthLabel} Revenue</p>
-            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenuePrev)}</p>
-            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesPrev} billable entities</p>
+        {/* ===== REVENUE & Q2 PROGRESS (real-time, Mercury-synced) ===== */}
+        <div className="mb-8 sm:mb-12">
+          {/* Q2 Progress Bar */}
+          <div className="bg-white rounded-lg shadow p-5 sm:p-6 mb-6 border border-mt-green/20">
+            <div className="flex flex-wrap items-baseline justify-between mb-3 gap-2">
+              <h2 className="text-lg sm:text-xl font-bold text-mt-dark">
+                {revenueMetrics.quarter_label} Revenue Target
+              </h2>
+              <div className="text-right">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Target</p>
+                <p className="text-xl font-bold text-mt-dark">{formatDollars(revenueMetrics.q2_target_dollars)}</p>
+              </div>
+            </div>
+            <div className="relative h-6 bg-gray-100 rounded-full overflow-hidden mb-3">
+              <div
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-mt-green to-emerald-400 rounded-full transition-all duration-500"
+                style={{ width: `${q2ProgressPct}%` }}
+              />
+              <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-mt-dark">
+                {q2ProgressPct.toFixed(1)}% · {formatDollars(revenueMetrics.totals.projected_q2)} booked
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-gray-500">Q2 paid</p>
+                <p className="font-semibold text-emerald-600">{formatDollars(revenueMetrics.totals.paid_q2)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Q2 open AR</p>
+                <p className="font-semibold text-amber-600">{formatDollars(revenueMetrics.totals.open_ar_q2)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Subscription baseline</p>
+                <p className="font-semibold text-blue-600">
+                  {formatDollars(revenueMetrics.totals.projected_q2 - revenueMetrics.totals.booked_q2)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Gap to target</p>
+                <p className="font-semibold text-red-600">{formatDollars(q2GapDollars)}</p>
+              </div>
+            </div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-emerald-300">
-            <p className="text-gray-600 text-sm font-medium">{currentMonthLabel} Revenue</p>
-            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenueCurrent)}</p>
-            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesCurrent} billable entities</p>
+
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-8">
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-emerald-500">
+              <p className="text-gray-600 text-sm font-medium">Q2 Paid</p>
+              <p className="text-xl sm:text-3xl font-bold text-emerald-600 mt-1 sm:mt-2">
+                {formatDollars(revenueMetrics.totals.paid_q2)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Mercury-confirmed</p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-amber-400">
+              <p className="text-gray-600 text-sm font-medium">Open AR</p>
+              <p className="text-xl sm:text-3xl font-bold text-amber-600 mt-1 sm:mt-2">
+                {formatDollars(revenueMetrics.totals.open_ar_q2)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {revenueMetrics.ar_aging.rows.length} open invoice{revenueMetrics.ar_aging.rows.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-red-400">
+              <p className="text-gray-600 text-sm font-medium">Overdue 15+ days</p>
+              <p className={`text-xl sm:text-3xl font-bold mt-1 sm:mt-2 ${revenueMetrics.ar_aging.overdue_15_30.amount + revenueMetrics.ar_aging.overdue_30_plus.amount > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {formatDollars(revenueMetrics.ar_aging.overdue_15_30.amount + revenueMetrics.ar_aging.overdue_30_plus.amount)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {revenueMetrics.ar_aging.overdue_15_30.invoice_count + revenueMetrics.ar_aging.overdue_30_plus.invoice_count} overdue
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-mt-green">
+              <p className="text-gray-600 text-sm font-medium">2026 YTD Paid</p>
+              <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">
+                {formatDollars(revenueMetrics.totals.paid_ytd)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Jan 1 → today</p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-blue-400">
+              <p className="text-gray-600 text-sm font-medium">All-Time Paid</p>
+              <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">
+                {formatDollars(revenueMetrics.totals.paid_all_time)}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Since inception</p>
+            </div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-yellow-400">
-            <p className="text-gray-600 text-sm font-medium">Outstanding AR</p>
-            <p className="text-xl sm:text-3xl font-bold text-yellow-600 mt-1 sm:mt-2">{formatCurrency(outstandingAR)}</p>
-            <p className="text-xs text-gray-400 mt-1">Sent &amp; awaiting payment</p>
+
+          {/* Per-Client Billing Table */}
+          <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-base sm:text-lg font-bold text-mt-dark">Revenue by Client</h3>
+              <span className="text-xs text-gray-500">Synced from Mercury · {revenueMetrics.today_iso}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-semibold">Client</th>
+                    <th className="px-4 py-2 text-left font-semibold">Model</th>
+                    <th className="px-4 py-2 text-right font-semibold">All-Time Paid</th>
+                    <th className="px-4 py-2 text-right font-semibold">YTD Paid</th>
+                    <th className="px-4 py-2 text-right font-semibold">Q2 Paid</th>
+                    <th className="px-4 py-2 text-right font-semibold">Open AR</th>
+                    <th className="px-4 py-2 text-center font-semibold">MTD Usage</th>
+                    <th className="px-4 py-2 text-left font-semibold">Last Payment</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {revenueMetrics.client_rows.length === 0 ? (
+                    <tr><td colSpan={8} className="px-4 py-6 text-center text-gray-500">No client revenue yet.</td></tr>
+                  ) : revenueMetrics.client_rows.map(row => (
+                    <tr key={row.client_id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-mt-dark">
+                        {row.client_name}
+                        {row.pending_signature && (
+                          <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700">pending sig</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.billing_model === 'subscription' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                            Sub · {formatDollars(row.subscription_monthly_amount || 0)}/mo
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
+                            PAYG
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-mt-dark">{formatDollars(row.paid_all_time)}</td>
+                      <td className="px-4 py-3 text-right font-mono">{formatDollars(row.paid_ytd)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-600">{formatDollars(row.paid_q2)}</td>
+                      <td className={`px-4 py-3 text-right font-mono ${row.open_ar > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                        {row.open_ar > 0 ? formatDollars(row.open_ar) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center text-gray-700">
+                        {row.billing_model === 'subscription' && row.subscription_included ? (
+                          <span className={row.entities_mtd > row.subscription_included ? 'text-red-600 font-semibold' : ''}>
+                            {row.entities_mtd}/{row.subscription_included}
+                          </span>
+                        ) : (
+                          row.entities_mtd || '—'
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-600">
+                        {row.last_paid_at ? (
+                          <>
+                            {new Date(row.last_paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            <span className="text-gray-400"> · {formatDollars(row.last_paid_amount || 0)}</span>
+                          </>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-red-400">
-            <p className="text-gray-600 text-sm font-medium">Overdue</p>
-            <p className={`text-xl sm:text-3xl font-bold mt-1 sm:mt-2 ${overdueAR > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(overdueAR)}</p>
-            <p className="text-xs text-gray-400 mt-1">{overdueInvoices} overdue invoice{overdueInvoices !== 1 ? 's' : ''}</p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-blue-400">
-            <p className="text-gray-600 text-sm font-medium">All-Time Revenue</p>
-            <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{formatCurrency(totalRevenueAllTime)}</p>
-            <p className="text-xs text-gray-400 mt-1">{totalBillableEntitiesAllTime} entities total</p>
-          </div>
+
+          {/* AR Aging */}
+          {revenueMetrics.ar_aging.rows.length > 0 && (
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-200">
+                <h3 className="text-base sm:text-lg font-bold text-mt-dark">Open AR Aging</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-xs">
+                  <div className="bg-emerald-50 rounded px-3 py-2">
+                    <p className="text-gray-600">Current (≤14 days)</p>
+                    <p className="font-bold text-emerald-700">{formatDollars(revenueMetrics.ar_aging.current.amount)} · {revenueMetrics.ar_aging.current.invoice_count}</p>
+                  </div>
+                  <div className="bg-amber-50 rounded px-3 py-2">
+                    <p className="text-gray-600">15-30 days late</p>
+                    <p className="font-bold text-amber-700">{formatDollars(revenueMetrics.ar_aging.overdue_15_30.amount)} · {revenueMetrics.ar_aging.overdue_15_30.invoice_count}</p>
+                  </div>
+                  <div className="bg-red-50 rounded px-3 py-2">
+                    <p className="text-gray-600">30+ days late</p>
+                    <p className="font-bold text-red-700">{formatDollars(revenueMetrics.ar_aging.overdue_30_plus.amount)} · {revenueMetrics.ar_aging.overdue_30_plus.invoice_count}</p>
+                  </div>
+                  <div className="bg-gray-100 rounded px-3 py-2">
+                    <p className="text-gray-600">Pending signature</p>
+                    <p className="font-bold text-gray-700">{formatDollars(revenueMetrics.ar_aging.pending_signature.amount)} · {revenueMetrics.ar_aging.pending_signature.invoice_count}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-semibold">Invoice</th>
+                      <th className="px-4 py-2 text-left font-semibold">Client</th>
+                      <th className="px-4 py-2 text-right font-semibold">Amount</th>
+                      <th className="px-4 py-2 text-left font-semibold">Due</th>
+                      <th className="px-4 py-2 text-right font-semibold">Days</th>
+                      <th className="px-4 py-2 text-left font-semibold">Bucket</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {revenueMetrics.ar_aging.rows.map(row => (
+                      <tr key={row.invoice_id} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 font-mono text-xs">{row.invoice_number}</td>
+                        <td className="px-4 py-2">{row.client_name}</td>
+                        <td className="px-4 py-2 text-right font-mono">{formatDollars(row.amount)}</td>
+                        <td className="px-4 py-2 text-xs text-gray-600">{row.due_date || '—'}</td>
+                        <td className={`px-4 py-2 text-right text-xs ${row.days_overdue > 30 ? 'text-red-600 font-semibold' : row.days_overdue > 14 ? 'text-amber-600' : 'text-gray-600'}`}>
+                          {row.days_overdue > 0 ? `+${row.days_overdue}` : row.days_overdue}
+                        </td>
+                        <td className="px-4 py-2 text-xs">
+                          {row.bucket === 'pending_signature' ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-700">pending sig</span>
+                          ) : row.bucket === 'overdue_30_plus' ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">30+ late</span>
+                          ) : row.bucket === 'overdue_15_30' ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">15-30 late</span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">current</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Bottleneck Resolution Center */}

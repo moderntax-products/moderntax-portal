@@ -6,6 +6,7 @@ import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
+import { inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -59,7 +60,10 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
       normalized['loan#'] ||
       '',
     years: normalized['years'] || normalized['year'] || '',
-    form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '1040',
+    // No hard '1040' default — let form-type resolution run against tid_kind later.
+    // Passing '' here means `validateFormType` falls through and the entity-build
+    // code infers from tid_kind instead of blindly stamping 1040.
+    form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '',
   };
 }
 
@@ -73,17 +77,20 @@ function findEmailValue(normalized: Record<string, string>): string {
   return '';
 }
 
-function validateFormType(form: string): string {
+/**
+ * Parse the CSV's "form" column. Returns null if unparseable, letting the
+ * caller infer from tid_kind instead of blindly returning '1040'.
+ */
+function validateFormType(form: string): string | null {
+  if (!form || !form.trim()) return null;
   // Take only the part before the first comma (e.g., "1120-S, tax transcripts" → "1120-S")
   const formPart = form.split(',')[0].trim();
-  // Strip whitespace, hyphens, and normalize
   const normalized = formPart.replace(/[\s-]/g, '').toUpperCase();
   const valid = ['1040', '1065', '1120', '1120S'];
   if (valid.includes(normalized)) return normalized;
-  // Try matching with "FORM" prefix stripped
   const stripped = normalized.replace('FORM', '');
   if (valid.includes(stripped)) return stripped;
-  return '1040'; // default
+  return null;
 }
 
 function parseYears(years: string): string[] {
@@ -264,16 +271,20 @@ export async function POST(request: NextRequest) {
 
     // Create entities from CSV rows
     const entities = rows.map((row, idx) => {
+      const resolvedTidKind: 'SSN' | 'EIN' =
+        ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN';
+      // Form-type resolution: explicit column wins, otherwise infer from tid_kind.
+      const explicitForm = validateFormType(row.form);
       const entityData: Record<string, any> = {
         request_id: req.id,
         entity_name: row.legal_name,
         tid: row.tid,
-        tid_kind: ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN',
+        tid_kind: resolvedTidKind,
         address: row.address || null,
         city: row.city || null,
         state: row.state || null,
         zip_code: row.zip_code || null,
-        form_type: validateFormType(row.form),
+        form_type: explicitForm || inferFormTypeFromTidKind(resolvedTidKind),
         years: parseYears(row.years),
         signer_first_name: row['first name'] || null,
         signer_last_name: row['last name'] || null,

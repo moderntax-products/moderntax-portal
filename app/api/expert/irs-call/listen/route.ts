@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
-import { getLiveListenUrl } from '@/lib/bland';
+import { getLiveListenUrl, providerForCallId } from '@/lib/voice-provider';
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Call is not active' }, { status: 400 });
     }
 
-    const wsUrl = await getLiveListenUrl(session.bland_call_id);
+    const wsUrl = await getLiveListenUrl(providerForCallId(session.bland_call_id), session.bland_call_id);
 
     return NextResponse.json({ wsUrl });
   } catch (error) {

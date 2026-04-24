@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { logAuditFromRequest } from '@/lib/audit';
 
 export async function GET(request: NextRequest) {
   try {
@@ -112,6 +113,27 @@ export async function GET(request: NextRequest) {
         { error: 'Failed to generate download link' },
         { status: 500 }
       );
+    }
+
+    // SOC 2: log every PII export (signed 8821s and transcripts both contain
+    // taxpayer identifiers and financial data). Do not block on audit failure.
+    try {
+      await logAuditFromRequest(adminSupabase, request, {
+        action: 'transcript_downloaded',
+        userId: user.id,
+        userEmail: user.email || '',
+        resourceType: 'request_entity',
+        resourceId: entityId,
+        details: {
+          file_path: filePath,
+          file_kind: isSignedDoc ? 'signed_8821' : 'transcript',
+          role: profile.role,
+          client_id: profile.client_id,
+          signed_url_ttl_seconds: 3600,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[download-transcript] audit log failed:', auditErr);
     }
 
     return NextResponse.json({ url: signedUrlData.signedUrl });

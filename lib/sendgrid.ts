@@ -1181,9 +1181,12 @@ export async function sendAdminDailySummary(
   <li>Expert SLA compliance rate: <strong>${stats.expert_sla_compliance}%</strong></li>
 </ul>
 
-<p><strong>Estimated Revenue:</strong></p>
+<p><strong>Revenue from today's completions</strong> <span style="color:#6b7280;font-size:12px;">(live, per-client billing rates)</span></p>
 <ul>
-  <li>Entities completed today: ${stats.total_entities_completed_today} &times; $50 = <strong>$${(stats.total_entities_completed_today * 50).toLocaleString()}</strong></li>
+${stats.revenue_breakdown.length === 0
+  ? '  <li style="color:#6b7280;">No billable completions today.</li>'
+  : stats.revenue_breakdown.map(b => `  <li>${b.client_name.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))}: ${b.billable_entities} billable${b.free_entities > 0 ? ` + ${b.free_entities} free-trial` : ''} = <strong>$${b.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></li>`).join('\n')}
+  <li style="border-top:1px solid #e5e7eb;padding-top:6px;margin-top:6px;"><strong>Total billable revenue: $${stats.revenue_today.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>${stats.free_trial_entities_today > 0 ? ` <span style="color:#6b7280;">(${stats.free_trial_entities_today} free-trial entit${stats.free_trial_entities_today === 1 ? 'y' : 'ies'} excluded)</span>` : ''}</li>
 </ul>
 
 <p>Visit the admin dashboard for full details and to manage assignments.</p>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { logAuditFromRequest } from '@/lib/audit';
 
 export async function GET(request: NextRequest) {
   try {
@@ -73,6 +74,28 @@ export async function GET(request: NextRequest) {
         { error: 'Failed to generate download link' },
         { status: 500 }
       );
+    }
+
+    // SOC 2: log signed 8821 downloads — these contain SSN, signature, and
+    // taxpayer identity data.
+    try {
+      await logAuditFromRequest(adminSupabase, request, {
+        action: 'transcript_downloaded',
+        userId: user.id,
+        userEmail: user.email || '',
+        resourceType: 'request_entity',
+        resourceId: entityId,
+        details: {
+          file_kind: 'signed_8821',
+          file_path: entity.signed_8821_url,
+          entity_name: entity.entity_name,
+          assignment_id: assignment.id,
+          role: 'expert',
+          signed_url_ttl_seconds: 3600,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[download-8821] audit log failed:', auditErr);
     }
 
     return NextResponse.json({

@@ -96,11 +96,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invoice already exists for this period', invoice_id: existing.id }, { status: 409 });
     }
 
-    // Get all completed entities for this client in this billing period
-    const { data: completedRequests } = await admin
+    // Get all completed entities for this client in this billing period.
+    // Select non_billable if available; fall back to the audit_log path if the
+    // column hasn't been migrated yet (see supabase/migration-non-billable-entities.sql).
+    let completedRequests: any[] | null = null;
+    const withCol = await admin
       .from('requests')
-      .select('id, intake_method, request_entities(id, status, completed_at)')
-      .eq('client_id', client_id) as { data: any[] | null; error: any };
+      .select('id, intake_method, request_entities(id, status, completed_at, non_billable)')
+      .eq('client_id', client_id);
+    if (withCol.error && /non_billable/i.test(withCol.error.message || '')) {
+      const fallback = await admin
+        .from('requests')
+        .select('id, intake_method, request_entities(id, status, completed_at)')
+        .eq('client_id', client_id) as { data: any[] | null; error: any };
+      completedRequests = fallback.data;
+    } else {
+      completedRequests = withCol.data;
+    }
 
     // Filter to entities completed in the billing period
     const periodStartDate = new Date(periodStart);
@@ -110,6 +122,34 @@ export async function POST(request: NextRequest) {
     let totalAmount = 0;
     const ratePdf = client.billing_rate_pdf || 59.98;
     const rateCsv = client.billing_rate_csv || 69.98;
+
+    // --- Non-billable entity exclusion ---
+    // Two sources of truth, evaluated in order:
+    //   1. request_entities.non_billable column (if the proper SQL migration has been
+    //      applied — see supabase/migration-non-billable-entities.sql).
+    //   2. audit_log fallback: any entity with an entry where
+    //      action='entity_metadata_updated' AND details->>'tag'='non_billable'.
+    //      This is the bootstrap path used until the column migration is applied;
+    //      the cleanup script for the Centerstone Dropbox migration writes these
+    //      audit rows.
+    // An entity marked non-billable by EITHER source is excluded from the invoice.
+    const entityIdsForThisClient = (completedRequests || []).flatMap((r: any) =>
+      (r.request_entities || []).map((e: any) => e.id)
+    );
+    const nonBillableFromAudit = new Set<string>();
+    if (entityIdsForThisClient.length > 0) {
+      const { data: auditRows } = await admin
+        .from('audit_log')
+        .select('entity_id, details')
+        .eq('action', 'entity_metadata_updated')
+        .eq('entity_type', 'request_entity')
+        .in('entity_id', entityIdsForThisClient) as { data: any[] | null; error: any };
+      for (const row of auditRows || []) {
+        if (row?.details?.tag === 'non_billable') {
+          nonBillableFromAudit.add(row.entity_id);
+        }
+      }
+    }
 
     // If free trial, get the first 3 entities across all time to exclude them
     let freeEntityIds = new Set<string>();
@@ -132,6 +172,8 @@ export async function POST(request: NextRequest) {
         const completedDate = new Date(entity.completed_at);
         if (completedDate < periodStartDate || completedDate > periodEndDate) return;
         if (freeEntityIds.has(entity.id)) return;
+        if (entity.non_billable === true) return; // post-migration column path
+        if (nonBillableFromAudit.has(entity.id)) return; // pre-migration audit_log path
 
         totalEntities += 1;
         const rate = req.intake_method === 'csv' ? rateCsv : ratePdf;
