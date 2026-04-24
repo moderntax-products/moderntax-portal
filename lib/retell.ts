@@ -286,15 +286,21 @@ export interface CreateWebCallResponse {
   call_type: 'web_call';
 }
 
+/**
+ * Create an outbound phone call. IMPORTANT: use the /v2/ endpoint —
+ * /create-phone-call (v1) silently drops `retell_llm_dynamic_variables`,
+ * causing the LLM to read raw template tokens like "{{expert_name}}"
+ * as words. The v2 endpoint stores and applies them correctly.
+ */
 export async function createPhoneCall(req: CreatePhoneCallRequest): Promise<CreatePhoneCallResponse> {
-  return retellFetch<CreatePhoneCallResponse>('/create-phone-call', {
+  return retellFetch<CreatePhoneCallResponse>('/v2/create-phone-call', {
     method: 'POST',
     body: JSON.stringify(req),
   });
 }
 
 export async function createWebCall(req: CreateWebCallRequest): Promise<CreateWebCallResponse> {
-  return retellFetch<CreateWebCallResponse>('/create-web-call', {
+  return retellFetch<CreateWebCallResponse>('/v2/create-web-call', {
     method: 'POST',
     body: JSON.stringify(req),
   });
