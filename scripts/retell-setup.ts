@@ -81,10 +81,10 @@ async function main() {
   const agentConfig = {
     agent_name: AGENT_NAME,
     voice_id: '11labs-Adrian',                 // clean US male practitioner voice
-    voice_temperature: 0.8,
-    voice_speed: 1.0,
-    responsiveness: 0.85,                      // fast enough to catch a quick agent greeting
-    interruption_sensitivity: 0.9,             // let the AI finish bridging script; avoid mid-word cutoffs
+    voice_temperature: 0.6,                    // lowered from 0.8 — reduces prosody jitter that caused echo complaints
+    voice_speed: 0.95,                         // slightly slow — IRS agents preferred this in 4/24 test
+    responsiveness: 0.8,                       // fast enough to catch a quick agent greeting
+    interruption_sensitivity: 0.6,             // lowered from 0.9 — fewer false "agent interrupted" triggers on the phone line
     enable_backchannel: false,                 // don't say "uh-huh" to IRS — unprofessional
     language: 'en-US',
     response_engine: { type: 'retell-llm' as const, llm_id: llmId },

@@ -16,6 +16,8 @@
 import * as bland from './bland';
 import * as retell from './retell';
 import { pickFromNumber } from './phone-pool';
+import { decryptCredential, formatSSNForSpeech, formatDOBForSpeech } from './crypto';
+import { createAdminClient } from './supabase-server';
 
 export type VoiceProvider = 'bland' | 'retell';
 
@@ -102,6 +104,36 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
     const fromNumber = picked.phone;
     console.log(`[voice-provider] using from=${picked.label || fromNumber} (${picked.tz})`);
 
+    // Load expert's stored SSN + DOB — the IRS requires the practitioner to
+    // authenticate themselves (not just the client) before releasing
+    // transcripts to the SOR inbox. Decrypt here and pass as dynamic
+    // variables; Retell holds these in-memory only for the duration of the
+    // call, never at rest. Never log plaintext.
+    let expertSsnForSpeech = '';
+    let expertDobForSpeech = '';
+    try {
+      const admin = createAdminClient();
+      const { data: profile } = await (admin.from('profiles' as any) as any)
+        .select('ssn_encrypted, dob_encrypted, irs_credentials_consented_at, irs_credentials_used_count')
+        .eq('id', params.metadata.expertId)
+        .single();
+      if (profile?.ssn_encrypted && profile?.dob_encrypted && profile?.irs_credentials_consented_at) {
+        const ssn = decryptCredential(profile.ssn_encrypted);
+        const dob = decryptCredential(profile.dob_encrypted);
+        expertSsnForSpeech = formatSSNForSpeech(ssn);
+        expertDobForSpeech = formatDOBForSpeech(dob);
+        // Increment usage counter — non-blocking, non-critical.
+        await (admin.from('profiles' as any) as any)
+          .update({ irs_credentials_used_count: (profile.irs_credentials_used_count || 0) + 1 })
+          .eq('id', params.metadata.expertId);
+      } else {
+        console.warn(`[voice-provider] expert ${params.metadata.expertId} has no stored SSN/DOB — IRS may refuse to release transcripts`);
+      }
+    } catch (err) {
+      console.error('[voice-provider] failed to load expert credentials:', err);
+      // Proceed with empty credentials — the prompt will handle the refusal gracefully.
+    }
+
     const res = await retell.createPhoneCall({
       from_number: fromNumber,
       to_number: '+18668604259',
@@ -124,6 +156,12 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
           years: e.years,
           address: e.address,
         }))),
+        // IRS PPS agent will ask the practitioner to verify their own SSN+DOB
+        // before releasing transcripts to the SOR inbox. These are formatted
+        // for digit-by-digit speech (already pause-separated).
+        expert_ssn_for_speech: expertSsnForSpeech,
+        expert_dob_for_speech: expertDobForSpeech,
+        expert_credentials_available: expertSsnForSpeech ? 'true' : 'false',
       },
       metadata: {
         sessionId: params.metadata.sessionId,
