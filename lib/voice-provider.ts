@@ -16,7 +16,13 @@
 import * as bland from './bland';
 import * as retell from './retell';
 import { pickFromNumber } from './phone-pool';
-import { decryptCredential, formatSSNForSpeech, formatDOBForSpeech } from './crypto';
+import {
+  decryptCredential,
+  formatSSNForSpeech, formatDOBForSpeech,
+  formatCafForSpeech, formatDigitsForSpeech,
+  formatFormForSpeech, formatYearsForSpeech,
+  formatNATOSpelling, ordinalWord,
+} from './crypto';
 import { createAdminClient } from './supabase-server';
 
 export type VoiceProvider = 'bland' | 'retell';
@@ -138,31 +144,62 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
       from_number: fromNumber,
       to_number: '+18668604259',
       override_agent_id: agentId,
-      retell_llm_dynamic_variables: {
-        expert_name: params.expertName,
-        caf_number: params.cafNumber,
-        expert_fax: params.expertFax || '',
-        expert_phone: params.expertPhone || '',
-        expert_address: params.expertAddress || '',
-        sor_inbox: params.sorInbox || 'MCA-R-31',
-        callback_phone: (params.callbackPhone || '').replace(/\D/g, ''),
-        session_id: params.metadata.sessionId,
-        entity_count: String(params.entities.length),
-        entity_json: JSON.stringify(params.entities.map(e => ({
-          name: e.taxpayerName,
-          tid: e.taxpayerTid,
-          tidKind: e.tidKind,
-          formType: e.formType,
-          years: e.years,
-          address: e.address,
-        }))),
-        // IRS PPS agent will ask the practitioner to verify their own SSN+DOB
-        // before releasing transcripts to the SOR inbox. These are formatted
-        // for digit-by-digit speech (already pause-separated).
-        expert_ssn_for_speech: expertSsnForSpeech,
-        expert_dob_for_speech: expertDobForSpeech,
-        expert_credentials_available: expertSsnForSpeech ? 'true' : 'false',
-      },
+      retell_llm_dynamic_variables: (() => {
+        // Flatten every piece of context into speech-ready flat variables.
+        // The LLM only has to substitute {{name}} — no JSON parsing, no
+        // bracketed expressions, no runtime logic. Up to MAX_ENTITIES supported.
+        const MAX_ENTITIES = 5;
+        const sor = params.sorInbox || 'MCA-R-31';
+        const vars: Record<string, string> = {
+          // Practitioner identity
+          expert_name:          params.expertName,
+          caf_number:           params.cafNumber,
+          caf_number_speech:    formatCafForSpeech(params.cafNumber),
+          expert_fax:           params.expertFax || '',
+          expert_fax_speech:    formatDigitsForSpeech((params.expertFax || '').slice(0, 3)),
+          expert_phone:         params.expertPhone || '',
+          expert_address:       params.expertAddress || '',
+
+          // SOR inbox — already pre-rendered in NATO
+          sor_inbox:            sor,
+          sor_inbox_nato:       formatNATOSpelling(sor),
+
+          // Callback phone for IRS callback entry
+          callback_phone:       (params.callbackPhone || '').replace(/\D/g, ''),
+
+          // Session + routing
+          session_id:           params.metadata.sessionId,
+          entity_count:         String(params.entities.length),
+          entity_count_word:    ordinalWord(params.entities.length), // not used but handy
+
+          // Practitioner identity verification (Phase 4 STEP D)
+          expert_ssn_for_speech:        expertSsnForSpeech,
+          expert_dob_for_speech:        expertDobForSpeech,
+          expert_credentials_available: expertSsnForSpeech ? 'true' : 'false',
+
+          // Phone-tree routing hint for PHASE 1
+          phone_tree_menu_digit: params.entities[0]?.tidKind === 'SSN' ? '2' : '3',
+        };
+
+        // Per-entity flat variables: entity_1_name, entity_1_tid_speech, etc.
+        // Up to MAX_ENTITIES; unused slots left empty so {{entity_5_name}}
+        // interpolates to "" rather than being dropped.
+        for (let i = 0; i < MAX_ENTITIES; i++) {
+          const n = i + 1;
+          const e = params.entities[i];
+          vars[`entity_${n}_ordinal`]     = e ? ordinalWord(n) : '';
+          vars[`entity_${n}_name`]        = e ? e.taxpayerName : '';
+          vars[`entity_${n}_tid_raw`]     = e ? e.taxpayerTid : '';
+          vars[`entity_${n}_tid_speech`]  = e ? formatDigitsForSpeech(e.taxpayerTid) : '';
+          vars[`entity_${n}_tid_kind`]    = e ? (e.tidKind === 'SSN' ? 'Social' : 'EIN') : '';
+          vars[`entity_${n}_form`]        = e ? e.formType : '';
+          vars[`entity_${n}_form_speech`] = e ? formatFormForSpeech(e.formType) : '';
+          vars[`entity_${n}_years`]       = e ? e.years.join(', ') : '';
+          vars[`entity_${n}_years_speech`] = e ? formatYearsForSpeech(e.years) : '';
+          vars[`entity_${n}_address`]     = e && e.address ? e.address : '';
+        }
+        return vars;
+      })(),
       metadata: {
         sessionId: params.metadata.sessionId,
         expertId: params.metadata.expertId,

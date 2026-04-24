@@ -117,12 +117,188 @@ export function formatSSNForSpeech(ssn: string): string {
 }
 
 /**
- * Format DOB for speech: "August twenty-fourth, nineteen eighty-seven" OR
- * "eight, twenty-four, nineteen eighty-seven" (MM DD YYYY). We prefer the
- * numeric MM DD YYYY form since that's exactly how IRS agents expect to
- * hear DOBs — less ambiguous than month names.
+ * Format DOB for natural speech: "August twenty-fourth, nineteen eighty-seven"
+ * This is the format IRS agents are most used to hearing and is unambiguous.
  */
 export function formatDOBForSpeech(isoDob: string): string {
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  const ordinals = [
+    '', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth',
+    'eleventh', 'twelfth', 'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth',
+    'eighteenth', 'nineteenth', 'twentieth', 'twenty-first', 'twenty-second', 'twenty-third',
+    'twenty-fourth', 'twenty-fifth', 'twenty-sixth', 'twenty-seventh', 'twenty-eighth',
+    'twenty-ninth', 'thirtieth', 'thirty-first',
+  ];
+  const yearWords = (y: number) => {
+    if (y < 2000) {
+      const mid = Math.floor((y - 1900) / 10);
+      const ones = (y - 1900) % 10;
+      const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'][mid] || '';
+      const ward = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][ones];
+      const teensMap: Record<number, string> = {
+        10: 'ten', 11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen',
+        16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen',
+      };
+      const last2 = y - 1900;
+      const last2Words = last2 in teensMap ? teensMap[last2] : `${tens}${ones ? '-' + ward : ''}`;
+      return `nineteen ${last2Words}`;
+    }
+    // 2000+ — "two thousand twenty-three"
+    const yMod = y - 2000;
+    if (yMod === 0) return 'two thousand';
+    const tensMap: Record<number, string> = { 2: 'twenty', 3: 'thirty', 4: 'forty' };
+    const ones = yMod % 10;
+    const tensDigit = Math.floor(yMod / 10);
+    const teensMap: Record<number, string> = {
+      10: 'ten', 11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen',
+      16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen',
+    };
+    if (yMod < 10) return `two thousand ${['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][ones]}`;
+    if (yMod in teensMap) return `two thousand ${teensMap[yMod]}`;
+    const onesWord = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][ones];
+    return `two thousand ${tensMap[tensDigit]}${ones ? '-' + onesWord : ''}`;
+  };
+
   const [y, mo, d] = isoDob.split('-').map(Number);
-  return `${mo} ${d} ${y}`;
+  return `${months[mo - 1]} ${ordinals[d]}, ${yearWords(y)}`;
+}
+
+/**
+ * Digit-by-digit speech with pauses after groups of 3 or at hyphens.
+ * Used for EINs, CAF numbers, phone numbers.
+ */
+export function formatDigitsForSpeech(input: string): string {
+  const digits = (input || '').replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  const chunks: string[] = [];
+  // Natural grouping: 3-3-3 for 9-digit, 3-4 for 7-digit, etc.
+  if (digits.length === 9) {
+    chunks.push(digits.slice(0, 3), digits.slice(3, 6), digits.slice(6));
+  } else if (digits.length === 10) {
+    chunks.push(digits.slice(0, 3), digits.slice(3, 6), digits.slice(6));
+  } else {
+    // 3-digit groups generally
+    for (let i = 0; i < digits.length; i += 3) chunks.push(digits.slice(i, i + 3));
+  }
+  return chunks.map(c => c.split('').join(' ')).join(', ');
+}
+
+/**
+ * Speech form of CAF number — e.g. "0316-30210R" → "zero three one six,
+ * three zero two one zero, Romeo". Handles the trailing letter separately
+ * so the AI says the NATO phonetic for it.
+ */
+export function formatCafForSpeech(caf: string): string {
+  const cleaned = (caf || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) return '';
+  const letterMatch = cleaned.match(/^([0-9]+)([A-Z])$/);
+  const digits = letterMatch ? letterMatch[1] : cleaned.replace(/[A-Z]/g, '');
+  const letter = letterMatch ? letterMatch[2] : '';
+  const nato: Record<string, string> = {
+    A: 'Alpha', B: 'Bravo', C: 'Charlie', D: 'Delta', E: 'Echo', F: 'Foxtrot',
+    G: 'Golf', H: 'Hotel', I: 'India', J: 'Juliet', K: 'Kilo', L: 'Lima',
+    M: 'Mike', N: 'November', O: 'Oscar', P: 'Papa', Q: 'Quebec', R: 'Romeo',
+    S: 'Sierra', T: 'Tango', U: 'Uniform', V: 'Victor', W: 'Whiskey', X: 'X-ray',
+    Y: 'Yankee', Z: 'Zulu',
+  };
+  const digitWords = digits.split('').map(d => ({
+    '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+    '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
+  }[d] || d));
+  // Group digits into 4-4 for a 10-char CAF + letter
+  const groups: string[] = [];
+  for (let i = 0; i < digitWords.length; i += 4) {
+    groups.push(digitWords.slice(i, i + 4).join(' '));
+  }
+  return letter ? `${groups.join(', ')}, ${nato[letter]}` : groups.join(', ');
+}
+
+/**
+ * Render any string character-by-character in NATO phonetic. Letters become
+ * their NATO word, digits become their English number word, hyphens become
+ * "dash". E.g. "MCA-R-31" → "Mike, Charlie, Alpha, dash, Romeo, dash,
+ * three, one".
+ */
+export function formatNATOSpelling(s: string): string {
+  const nato: Record<string, string> = {
+    A: 'Alpha', B: 'Bravo', C: 'Charlie', D: 'Delta', E: 'Echo', F: 'Foxtrot',
+    G: 'Golf', H: 'Hotel', I: 'India', J: 'Juliet', K: 'Kilo', L: 'Lima',
+    M: 'Mike', N: 'November', O: 'Oscar', P: 'Papa', Q: 'Quebec', R: 'Romeo',
+    S: 'Sierra', T: 'Tango', U: 'Uniform', V: 'Victor', W: 'Whiskey', X: 'X-ray',
+    Y: 'Yankee', Z: 'Zulu',
+  };
+  const digits: Record<string, string> = {
+    '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+    '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
+  };
+  return s.toUpperCase().split('').map(ch => {
+    if (nato[ch]) return nato[ch];
+    if (digits[ch]) return digits[ch];
+    if (ch === '-' || ch === '_') return 'dash';
+    if (ch === '.') return 'dot';
+    return '';
+  }).filter(Boolean).join(', ');
+}
+
+/**
+ * Speech form for tax form numbers. "1120S" → "eleven-twenty-S",
+ * "1040" → "ten-forty", "941" → "nine-forty-one".
+ */
+export function formatFormForSpeech(form: string): string {
+  const s = (form || '').toUpperCase().trim();
+  const map: Record<string, string> = {
+    '1040':  'ten-forty',
+    '1040X': 'ten-forty-X',
+    '1065':  'ten-sixty-five',
+    '1120':  'eleven-twenty',
+    '1120S': 'eleven-twenty-S',
+    '941':   'nine-forty-one',
+    '940':   'nine-forty',
+    '2848':  'twenty-eight-forty-eight',
+    '8821':  'eighty-eight-twenty-one',
+  };
+  return map[s] || s;
+}
+
+/**
+ * Speech form for a year like 2022. "twenty twenty-two".
+ */
+export function formatYearForSpeech(year: string): string {
+  const y = parseInt(year, 10);
+  if (!y || y < 1900 || y > 2099) return year;
+  if (y >= 2000 && y <= 2009) return `two thousand ${['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][y - 2000]}`;
+  if (y >= 2010 && y <= 2019) {
+    const w: Record<number, string> = { 10: 'ten', 11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen' };
+    return `twenty ${w[y - 2000]}`;
+  }
+  if (y >= 2020 && y <= 2099) {
+    const ones = y % 10;
+    const tensWord = Math.floor((y % 100) / 10);
+    const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'][tensWord] || '';
+    const ow = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][ones];
+    return `twenty ${tens}${ones ? '-' + ow : ''}`;
+  }
+  return year;
+}
+
+/**
+ * Join year strings into a natural speech pattern: "twenty twenty-two,
+ * twenty twenty-three, and twenty twenty-four".
+ */
+export function formatYearsForSpeech(years: string[]): string {
+  if (years.length === 0) return '';
+  if (years.length === 1) return formatYearForSpeech(years[0]);
+  const spoken = years.map(formatYearForSpeech);
+  if (spoken.length === 2) return `${spoken[0]} and ${spoken[1]}`;
+  return `${spoken.slice(0, -1).join(', ')}, and ${spoken[spoken.length - 1]}`;
+}
+
+/**
+ * Ordinal in English for list position (1-indexed). Used when the AI
+ * introduces each client: "For my first client...", "For my second client...".
+ */
+export function ordinalWord(n: number): string {
+  const words = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+  return words[n] || `${n}th`;
 }
