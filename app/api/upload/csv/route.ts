@@ -189,26 +189,105 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'File contains no data rows' }, { status: 400 });
     }
 
-    // Map and validate rows
+    // Map rows from raw spreadsheet
     const rows = rawRows.map(mapRow);
-    const errors: string[] = [];
 
+    // -----------------------------------------------------------------
+    // Year-extension carve-out: when a TID already exists with a signed
+    // 8821 on file, the row is treated as a "request more years for an
+    // existing borrower" — we don't need to re-collect first name / last
+    // name / email / address because they're already on the prior entity.
+    //
+    // This unblocks the common Tim/processor flow where they upload a slim
+    // file (just legal_name + tid + tid_kind + address + years + form) for
+    // borrowers we've already worked. Without this carve-out the upload
+    // bounces with "missing first name / email / etc." even though we
+    // already have everything needed.
+    //
+    // We also auto-derive first/last from `Legal Name` when those columns
+    // aren't present, so a fresh single-name "Lillian Aguirre" entry can
+    // still build a valid 8821 if needed.
+    // -----------------------------------------------------------------
+    const adminForLookup = createAdminClient();
+    const candidateTids = rows.map(r => (r.tid || '').replace(/\D/g, '')).filter(Boolean);
+    const existingByTid = new Map<string, { signer_first_name: string | null; signer_last_name: string | null; signer_email: string | null; address: string | null; city: string | null; state: string | null; zip_code: string | null; signed_8821_url: string | null }>();
+    if (candidateTids.length > 0) {
+      const { data: priorEntities } = await adminForLookup
+        .from('request_entities')
+        .select('tid, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, signed_8821_url, status')
+        .in('tid', candidateTids)
+        .not('signed_8821_url', 'is', null) as { data: any[] | null };
+      for (const e of (priorEntities || [])) {
+        const tidNorm = (e.tid || '').replace(/\D/g, '');
+        if (!tidNorm) continue;
+        // Keep the most-completely-populated record we find for this TID
+        const existing = existingByTid.get(tidNorm);
+        if (!existing || (!existing.signer_email && e.signer_email)) {
+          existingByTid.set(tidNorm, {
+            signer_first_name: e.signer_first_name,
+            signer_last_name: e.signer_last_name,
+            signer_email: e.signer_email,
+            address: e.address,
+            city: e.city,
+            state: e.state,
+            zip_code: e.zip_code,
+            signed_8821_url: e.signed_8821_url,
+          });
+        }
+      }
+    }
+
+    // Backfill missing fields per-row from prior matches + Legal Name parsing
+    rows.forEach((row) => {
+      const tidNorm = (row.tid || '').replace(/\D/g, '');
+      const prior = existingByTid.get(tidNorm);
+      // Auto-derive first/last from "Legal Name" when split fields are missing
+      if ((!row['first name'] || !row['last name']) && row.legal_name) {
+        const parts = row.legal_name.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          if (!row['first name']) row['first name'] = parts[0];
+          if (!row['last name'])  row['last name']  = parts.slice(1).join(' ');
+        }
+      }
+      // Year-extension: pull anything still missing from the prior entity
+      if (prior) {
+        if (!row['first name'] && prior.signer_first_name) row['first name'] = prior.signer_first_name;
+        if (!row['last name']  && prior.signer_last_name)  row['last name']  = prior.signer_last_name;
+        if (!row.email         && prior.signer_email)      row.email         = prior.signer_email;
+        if (!row.address       && prior.address)           row.address       = prior.address;
+        if (!row.city          && prior.city)              row.city          = prior.city;
+        if (!row.state         && prior.state)             row.state         = prior.state;
+        if (!row.zip_code      && prior.zip_code)          row.zip_code      = prior.zip_code;
+      }
+    });
+
+    // Validate after backfill — anything still missing is genuinely
+    // ungenerable. Year-extension rows with prior 8821 + email get a pass
+    // on email since the 8821 is already on file.
+    const errors: string[] = [];
     rows.forEach((row, idx) => {
       const rowNum = idx + 2;
+      const tidNorm = (row.tid || '').replace(/\D/g, '');
+      const isYearExtension = !!existingByTid.get(tidNorm);
       if (!row.legal_name) errors.push(`Row ${rowNum}: missing legal_name`);
       if (!row.tid) errors.push(`Row ${rowNum}: missing tid`);
-      if (!row.email) errors.push(`Row ${rowNum}: missing email (required for 8821 delivery)`);
-      if (!row['first name']) errors.push(`Row ${rowNum}: missing first name (required for 8821 form)`);
-      if (!row['last name']) errors.push(`Row ${rowNum}: missing last name (required for 8821 form)`);
-      if (!row.address) errors.push(`Row ${rowNum}: missing address (required for 8821 form)`);
-      if (!row.city) errors.push(`Row ${rowNum}: missing city (required for 8821 form)`);
-      if (!row.state) errors.push(`Row ${rowNum}: missing state (required for 8821 form)`);
-      if (!row.zip_code) errors.push(`Row ${rowNum}: missing zip_code (required for 8821 form)`);
+      // For year-extension rows we don't strictly need email — the existing
+      // 8821 carries forward. For new borrowers, email is required.
+      if (!isYearExtension && !row.email) errors.push(`Row ${rowNum}: missing email (required for 8821 delivery — TID ${row.tid} not previously verified)`);
+      if (!row['first name']) errors.push(`Row ${rowNum}: missing first name (legal_name must contain at least two words)`);
+      if (!row['last name'])  errors.push(`Row ${rowNum}: missing last name (legal_name must contain at least two words)`);
+      if (!row.address) errors.push(`Row ${rowNum}: missing address`);
+      if (!row.city) errors.push(`Row ${rowNum}: missing city`);
+      if (!row.state) errors.push(`Row ${rowNum}: missing state`);
+      if (!row.zip_code) errors.push(`Row ${rowNum}: missing zip_code`);
     });
 
     if (errors.length > 0) {
       return NextResponse.json(
-        { error: 'Validation errors — all fields are required to generate 8821 forms', details: errors.slice(0, 20) },
+        {
+          error: 'Validation errors — fix the listed rows or include the missing columns. Borrowers with TIDs we have on file from prior loans can skip first/last/email/address — the system reuses prior 8821 data automatically.',
+          details: errors.slice(0, 20),
+        },
         { status: 400 }
       );
     }
