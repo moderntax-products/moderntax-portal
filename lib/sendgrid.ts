@@ -2073,3 +2073,150 @@ ${reminderBanner}
     throw error;
   }
 }
+
+/**
+ * Feature-update broadcast — Spring 2026 release announcement.
+ *
+ * Role-aware: managers see billing + team copy, processors see ordering
+ * + compliance copy, admins see both. Subject + CTA are identical so
+ * reply-tracking groups all responses together.
+ *
+ * Triggered by /api/admin/send-feature-update (admin-only, dryRun=true
+ * by default). Each call accepts one recipient; the endpoint loops over
+ * the targeted user list and sends in batches.
+ */
+export async function sendFeatureUpdateEmail(
+  toEmail: string,
+  recipientName: string,
+  role: 'manager' | 'processor' | 'admin',
+): Promise<void> {
+  const tourUrl = `${appUrl}/onboarding`;
+  const subject = "What's new in ModernTax — take the 5-min tour";
+
+  const isManagerLike = role === 'manager' || role === 'admin';
+
+  // Role-tailored highlight blocks
+  const orderingBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">Three ways to order, each with its own page</h3>
+    <p style="margin:0 0 8px;">CSV / Excel batch upload, signed-8821 PDF upload, and manual entry now live at their own URLs (<code>/new/csv</code>, <code>/new/pdf</code>, <code>/new/manual</code>). Pick whatever fits the deal — repeat-borrower auto-fill, validation preview, and double-click guard built in.</p>
+  `;
+
+  const teamSearchBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">See your whole team's work</h3>
+    <p style="margin:0 0 8px;">The dashboard now defaults to <strong>whole-team view</strong>. Search by loan #, borrower name, or last 4 of TID — works across every processor and manager on your account so you can pick up cover work or answer borrower questions on a coworker's loan.</p>
+  `;
+
+  const complianceBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">Resolve IRS issues with one click</h3>
+    <p style="margin:0 0 8px;">New <strong>Compliance</strong> page surfaces every flagged borrower (unfiled, lien, balance due, audit, civil penalty). One click sends a pre-written email with a 15-min Calendly link to our resolution team. The borrower books, we resolve, your loan moves.</p>
+  `;
+
+  const monitoringBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">Continuous transcript monitoring</h3>
+    <p style="margin:0 0 8px;">Auto-pull fresh transcripts on a cadence (weekly / monthly / quarterly) for active loans. <strong>$19.99 enrollment + $59.98 per delivered transcript</strong> — no-record-found pulls aren't billed. Full pull history logged for SBA audit defense.</p>
+  `;
+
+  const billingBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">Pay invoices in-app via Mercury</h3>
+    <p style="margin:0 0 8px;">Open <strong>Invoicing</strong> → fill in your billing address → click <strong>"Save & Enroll in Auto-Pay"</strong>. Future Mercury invoices auto-debit ACH on the due date. Need to settle now? <strong>"Pay Now"</strong> in the "This Month So Far" panel opens a Mercury hosted page (ACH or wire).</p>
+  `;
+
+  const trialCreditBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">$239.94 in trial credits, visible everywhere</h3>
+    <p style="margin:0 0 8px;">Your first 3 transcript pulls are on us — now surfaced as a $239.94 trial credit banner on the dashboard so the whole team can see what's left.</p>
+  `;
+
+  const sampleBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">See a sample completed order</h3>
+    <p style="margin:0 0 8px;">Curious what a finished request looks like? <a href="${appUrl}/sample-request" style="color:#00C48C;">Open the sample</a> — fictional borrower, real-shaped artifacts (Tax Return Transcript, Record of Account, Civil Penalties, plus our branded Compliance Report).</p>
+  `;
+
+  const cancelBlock = `
+    <h3 style="margin:24px 0 8px;font-size:16px;color:#0A1929;">Cancel mistakes without a support ticket</h3>
+    <p style="margin:0 0 8px;">Submitted the wrong borrower? Open the request → <strong>Cancel Request</strong>. Cleans up pending entities, assignments, and any active monitoring automatically.</p>
+  `;
+
+  // Compose role-specific body
+  let highlights: string;
+  if (isManagerLike) {
+    highlights =
+      orderingBlock +
+      billingBlock +
+      teamSearchBlock +
+      complianceBlock +
+      monitoringBlock +
+      trialCreditBlock +
+      sampleBlock +
+      cancelBlock;
+  } else {
+    // processor
+    highlights =
+      orderingBlock +
+      teamSearchBlock +
+      complianceBlock +
+      monitoringBlock +
+      sampleBlock +
+      cancelBlock;
+  }
+
+  const content = `
+<p>Hi ${recipientName || 'there'},</p>
+
+<p>A bunch of useful stuff just shipped to the ModernTax portal — small enough that you can hit the ground running, big enough that the time-to-first-transcript is meaningfully faster.</p>
+
+<p>The fastest way to see it all is the new <strong>5-minute interactive tour</strong>. It's a click-through that opens the actual feature pages in new tabs so you can try things as you go.</p>
+
+${highlights}
+
+<p style="margin-top:28px;">Hit reply if anything's unclear or you want a hands-on walkthrough — happy to block 15 minutes and run through it live.</p>
+
+<p style="font-size:14px;color:#1f2937;margin-top:20px;">
+  Best,<br>
+  Matthew Parker<br>
+  <span style="color:#6b7280;font-size:12px;">matt@moderntax.io · 650-741-1085 · ModernTax, Inc.</span>
+</p>
+`.trim();
+
+  const html = createEmailTemplate(
+    "What's new in ModernTax",
+    content,
+    { text: 'Take the 5-minute tour →', url: tourUrl },
+  );
+
+  // Plain-text fallback — simple, no HTML, all the same links spelled out.
+  const text = `Hi ${recipientName || 'there'},
+
+A bunch of useful stuff just shipped to the ModernTax portal. The fastest way to see it all is the new 5-minute interactive tour: ${tourUrl}
+
+What's new:
+- Three dedicated ordering pages: /new/csv, /new/pdf, /new/manual
+- Cross-team search on the dashboard (loan #, borrower name, or last 4 of TID)
+- Compliance page with one-click outreach templates + Calendly resolution link
+- Continuous transcript monitoring ($19.99 enrollment + $59.98/pull)
+- Sample completed order to preview: ${appUrl}/sample-request
+- Cancel-request flow on stuck submissions
+${isManagerLike ? `- In-app Mercury Pay Now + auto-pay enrollment in Invoicing
+- $239.94 trial credit banner on the dashboard
+` : ''}
+Take the tour: ${tourUrl}
+
+Reply if you want a hands-on walkthrough.
+
+Matt
+matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
+`.trim();
+
+  try {
+    await sgMail.send({
+      to: toEmail,
+      from: { email: fromEmail, name: 'Matthew Parker, ModernTax' },
+      subject,
+      html,
+      text,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send feature update email:', error);
+    throw error;
+  }
+}
