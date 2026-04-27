@@ -205,7 +205,17 @@ export async function GET(request: NextRequest) {
           totalEntities = periodEntities;          // for visibility on the invoice
           totalAmount = subscriptionAmount + subscriptionOverageAmount;
         } else {
-          // Per-TIN: sum rates for each completed entity in the period
+          // Per-TIN: sum rates for each completed entity in the period.
+          //
+          // Rate selection by intake_method:
+          //   csv               → billing_rate_csv (default $69.98)
+          //   monitoring_repull → flat $59.98 per pull (Matt 4/26 spec)
+          //   anything else (pdf/manual/api/email) → billing_rate_pdf (default $59.98)
+          //
+          // Monitoring re-pulls are first-class requests created by the
+          // /api/cron/monitoring-repull cron — billed per delivered transcript.
+          // The MONITORING_PER_PULL_FEE is matched to /api/monitoring/route.ts.
+          const MONITORING_PER_PULL_FEE = 59.98;
           (completedRequests || []).forEach((req: any) => {
             const entities = req.request_entities || [];
             entities.forEach((entity: any) => {
@@ -215,7 +225,11 @@ export async function GET(request: NextRequest) {
               if (freeEntityIds.has(entity.id)) return;
 
               totalEntities += 1;
-              const rate = req.intake_method === 'csv' ? rateCsv : ratePdf;
+              const rate = req.intake_method === 'monitoring_repull'
+                ? MONITORING_PER_PULL_FEE
+                : req.intake_method === 'csv'
+                  ? rateCsv
+                  : ratePdf;
               totalAmount += rate;
             });
           });

@@ -16,7 +16,17 @@ interface MonitoringSubscription {
   per_pull_fee: number;
   total_pulls_completed: number;
   total_billed: number;
-  pull_history: { date: string; status: string; transcript_count: number }[];
+  pull_history: {
+    date: string;
+    status: 'queued' | 'completed' | 'no_record_found' | 'failed' | string;
+    transcript_count: number;
+    /** Newer pulls record whether the pull was billed (false = no transcript returned, audit defense). */
+    billable?: boolean;
+    billed_amount?: number;
+    new_request_id?: string;
+    new_entity_id?: string;
+    assigned_to?: string;
+  }[];
   latest_summary: string | null;
   latest_summary_at: string | null;
 }
@@ -351,29 +361,71 @@ export function MonitoringPanel({ requestId, entities }: MonitoringPanelProps) {
                 {/* Expanded enrollment/settings form */}
                 {isExpanded && (
                   <div className="border-t border-gray-200 bg-gray-50 p-4 space-y-4">
-                    {/* Pull history (if existing subscription) */}
+                    {/* Pull history — audit-defense view (Robert/Enterprise Bank
+                        Apr 27 ask). Shows EVERY pull including "no record found"
+                        attempts, with date + status + billable flag so the
+                        manager can demonstrate consistent monitoring effort
+                        during SBA audits even when no new transcript was
+                        returned. */}
                     {sub && sub.pull_history && sub.pull_history.length > 0 && (
                       <div className="mb-4">
-                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
-                          Pull History ({sub.total_pulls_completed} completed — ${sub.total_billed.toFixed(2)} total billed)
-                        </p>
-                        <div className="space-y-1">
-                          {sub.pull_history.slice(-5).reverse().map((pull, i) => (
-                            <div key={i} className="flex items-center gap-2 text-xs bg-white px-3 py-1.5 rounded border border-gray-100">
-                              <span className={`w-2 h-2 rounded-full ${
-                                pull.status === 'completed' ? 'bg-green-500' :
-                                pull.status === 'queued' ? 'bg-blue-500' :
-                                'bg-red-500'
-                              }`} />
-                              <span className="text-gray-700">{new Date(pull.date).toLocaleDateString()}</span>
-                              <span className="text-gray-400">—</span>
-                              <span className="text-gray-600">{pull.status}</span>
-                              {pull.transcript_count > 0 && (
-                                <span className="text-gray-400">({pull.transcript_count} files)</span>
-                              )}
-                            </div>
-                          ))}
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                            Pull History — {sub.pull_history.length} attempts · {sub.total_pulls_completed} delivered · ${sub.total_billed.toFixed(2)} billed
+                          </p>
+                          {sub.pull_history.length > 5 && (
+                            <span className="text-[10px] text-gray-400">showing latest 5 of {sub.pull_history.length}</span>
+                          )}
                         </div>
+                        <div className="space-y-1">
+                          {sub.pull_history.slice(-5).reverse().map((pull, i) => {
+                            const isNoRecord = pull.status === 'no_record_found';
+                            const isCompleted = pull.status === 'completed';
+                            const isQueued = pull.status === 'queued';
+                            return (
+                              <div key={i} className="flex items-center gap-2 text-xs bg-white px-3 py-1.5 rounded border border-gray-100">
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isCompleted ? 'bg-green-500' :
+                                  isQueued ? 'bg-blue-500' :
+                                  isNoRecord ? 'bg-amber-500' :
+                                  'bg-red-500'
+                                }`} />
+                                <span className="text-gray-700 font-mono">{new Date(pull.date).toLocaleDateString()}</span>
+                                <span className="text-gray-400">—</span>
+                                <span className="text-gray-700">
+                                  {isCompleted   ? 'Delivered' :
+                                   isQueued     ? 'Queued' :
+                                   isNoRecord   ? 'No record found' :
+                                   pull.status}
+                                </span>
+                                {pull.transcript_count > 0 && (
+                                  <span className="text-gray-400">· {pull.transcript_count} files</span>
+                                )}
+                                {pull.billable === false && (
+                                  <span className="ml-auto inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">
+                                    not billed
+                                  </span>
+                                )}
+                                {pull.billable && pull.billed_amount && (
+                                  <span className="ml-auto text-gray-500">${pull.billed_amount.toFixed(2)}</span>
+                                )}
+                                {pull.new_request_id && (
+                                  <a
+                                    href={`/request/${pull.new_request_id}`}
+                                    className="text-blue-600 hover:underline ml-1"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    view →
+                                  </a>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-2">
+                          Audit-defense: every monitoring attempt is logged here including no-record-found results. Export available from <a href="/invoicing" className="text-blue-600 hover:underline">Invoicing</a>.
+                        </p>
                       </div>
                     )}
 

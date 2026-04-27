@@ -11,8 +11,8 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 
-const ENROLLMENT_FEE = 19.99;
-const PER_PULL_FEE = 39.99;
+const ENROLLMENT_FEE = 19.99;  // one-time when monitoring is enrolled
+const PER_PULL_FEE   = 59.98;  // billed only when a new transcript is delivered (not on no-record-found pulls)
 
 function computeNextPullDate(frequency: string, customDays?: number | null, fromDate?: Date): string {
   const base = fromDate || new Date();

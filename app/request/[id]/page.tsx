@@ -8,6 +8,7 @@ import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
+import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 
 interface Props {
@@ -105,9 +106,16 @@ export default async function RequestDetailPage({ params }: Props) {
                 </span>
               </p>
             </div>
-            <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium">
-              &larr; Back to Dashboard
-            </Link>
+            <div className="flex items-center gap-3">
+              <CancelRequestButton
+                requestId={request.id}
+                loanNumber={request.loan_number}
+                status={request.status}
+              />
+              <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium">
+                &larr; Back to Dashboard
+              </Link>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <span className={`inline-block px-4 py-2 rounded-full text-sm font-semibold ${getStatusBadgeColor(request.status)}`}>
