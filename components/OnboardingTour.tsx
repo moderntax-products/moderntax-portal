@@ -265,11 +265,14 @@ export function OnboardingTour({ userRole, alreadyCompleted }: Props) {
   const [stepIndex, setStepIndex] = useState(0);
   const [completing, setCompleting] = useState(false);
 
-  // Filter steps by role — processor takes the manager-only steps out
+  // Filter steps by role — processor takes the manager-only steps out.
+  // Admins don't see manager-only steps either: the manager pages
+  // (/invoicing, /team) are scoped to a manager's client_id and bounce
+  // admins back to the dashboard, which would make those tour CTAs
+  // dead-end. Admins have /admin as their equivalent surface.
   const visibleSteps = STEPS.filter(s => {
     if (s.role === 'all') return true;
     if (s.role === 'manager' && userRole === 'manager') return true;
-    if (s.role === 'manager' && userRole === 'admin') return true;
     if (s.role === 'processor' && userRole === 'processor') return true;
     return false;
   });

@@ -20,7 +20,11 @@ export default async function ManagerTeamPage() {
     .eq('id', user.id)
     .single() as { data: { role: string; client_id: string | null } | null; error: any };
 
-  if (!profile || profile.role !== 'manager' || !profile.client_id) redirect('/');
+  // Manager-only page (scoped to client_id). Admins land on /admin which
+  // has the cross-client team view; processors don't see team management.
+  if (!profile) redirect('/');
+  if (profile.role === 'admin') redirect('/admin');
+  if (profile.role !== 'manager' || !profile.client_id) redirect('/');
 
   // Fetch client name
   const { data: client } = await supabase
