@@ -38,9 +38,11 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
   }
 
   // Get client with billing settings + Mercury enrollment + address fields
+  // + subscription billing fields (for clients on a flat-monthly model
+  // like Clearfirm at $2,499/mo + overage; default model is per_tin).
   const { data: client } = await supabase
     .from('clients')
-    .select('id, name, slug, free_trial, intake_methods, billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv, address_line1, address_line2, address_city, address_state, address_postal_code, mercury_customer_id')
+    .select('id, name, slug, free_trial, intake_methods, billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv, address_line1, address_line2, address_city, address_state, address_postal_code, mercury_customer_id, billing_model, subscription_monthly_amount, subscription_included_entities, subscription_overage_rate, billing_effective_from')
     .eq('id', profile.client_id)
     .single() as { data: any | null; error: any };
 
@@ -48,6 +50,10 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
 
   const ratePdf = client.billing_rate_pdf || 59.98;
   const rateCsv = client.billing_rate_csv || 69.98;
+  const isSubscription = client.billing_model === 'subscription';
+  const subMonthly = Number(client.subscription_monthly_amount) || 0;
+  const subIncluded = Number(client.subscription_included_entities) || 0;
+  const subOverageRate = Number(client.subscription_overage_rate) || 0;
 
   // Get all client requests with entities
   const { data: allRequests } = await supabase
@@ -123,10 +129,24 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
     ? allCompletedEntities.filter((e) => e.month === activeMonth)
     : [];
 
-  // Calculate totals for selected month
+  // Calculate totals for selected month.
+  // - Per-TIN model: sum each entity's rate (free-trial entities excluded).
+  // - Subscription model: flat monthly + overage above included cap.
   const billableEntities = monthEntities.filter((e) => !freeEntityIds.has(e.id));
   const freeEntities = monthEntities.filter((e) => freeEntityIds.has(e.id));
-  const monthTotal = billableEntities.reduce((sum, e) => sum + e.rate, 0);
+
+  let monthTotal: number;
+  let monthOverageEntities = 0;
+  let monthOverageAmount = 0;
+  if (isSubscription) {
+    // Subscription clients pay the flat fee any month they're active.
+    // Overage = entities above subscription_included cap, billed at overage rate.
+    monthOverageEntities = Math.max(0, monthEntities.length - subIncluded);
+    monthOverageAmount = monthOverageEntities * subOverageRate;
+    monthTotal = subMonthly + monthOverageAmount;
+  } else {
+    monthTotal = billableEntities.reduce((sum, e) => sum + e.rate, 0);
+  }
 
   // Group by processor
   const byProcessor: Record<string, { name: string; entities: typeof monthEntities; total: number }> = {};
@@ -168,14 +188,30 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
   const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const thisMonthEntities = allCompletedEntities.filter(e => e.month === thisMonthKey);
   const thisMonthBillable = thisMonthEntities.filter(e => !freeEntityIds.has(e.id));
-  const thisMonthTotal = thisMonthBillable.reduce((sum, e) => sum + e.rate, 0);
   const thisMonthFreeCount = thisMonthEntities.length - thisMonthBillable.length;
-  // Daily run rate = entities so far / days elapsed → projected to month-end
+
+  let thisMonthTotal: number;
+  let thisMonthOverageEntities = 0;
+  let projectedTotal: number;
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const projectedTotal = dayOfMonth > 0
-    ? Math.round((thisMonthTotal / dayOfMonth) * daysInMonth * 100) / 100
-    : thisMonthTotal;
+
+  if (isSubscription) {
+    // Subscription: live total = flat fee + accrued overage so far.
+    // Projection extrapolates today's overage entity count to month-end.
+    thisMonthOverageEntities = Math.max(0, thisMonthEntities.length - subIncluded);
+    thisMonthTotal = subMonthly + thisMonthOverageEntities * subOverageRate;
+    const projectedEntities = dayOfMonth > 0
+      ? Math.round((thisMonthEntities.length / dayOfMonth) * daysInMonth)
+      : thisMonthEntities.length;
+    const projectedOverage = Math.max(0, projectedEntities - subIncluded);
+    projectedTotal = subMonthly + projectedOverage * subOverageRate;
+  } else {
+    thisMonthTotal = thisMonthBillable.reduce((sum, e) => sum + e.rate, 0);
+    projectedTotal = dayOfMonth > 0
+      ? Math.round((thisMonthTotal / dayOfMonth) * daysInMonth * 100) / 100
+      : thisMonthTotal;
+  }
 
   // Find invoice for active month
   const activeInvoice = activeMonth
@@ -326,6 +362,42 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
           </div>
         </div>
 
+        {/* Subscription billing summary — only for clients on a flat
+            monthly model (Clearfirm, future resellers). Makes the
+            pricing model unambiguous so a manager doesn't try to
+            reverse-engineer the total from per-entity rates. */}
+        {isSubscription && (
+          <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-5 mb-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-bold uppercase tracking-wide text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">Subscription Plan</span>
+                  <h3 className="text-base font-bold text-mt-dark">Flat Monthly Billing</h3>
+                </div>
+                <p className="text-sm text-gray-700">
+                  <span className="font-bold text-2xl text-blue-700">${subMonthly.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span className="text-gray-600 ml-1">/ month</span>
+                  <span className="text-gray-500 mx-2">·</span>
+                  <span>{subIncluded.toLocaleString()} entities included</span>
+                  <span className="text-gray-500 mx-2">·</span>
+                  <span>${subOverageRate.toFixed(2)} per overage entity</span>
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-500 uppercase">Usage this month</p>
+                <p className="text-2xl font-bold text-mt-dark">
+                  {thisMonthEntities.length}<span className="text-base text-gray-500"> / {subIncluded}</span>
+                </p>
+                {thisMonthOverageEntities > 0 ? (
+                  <p className="text-xs text-amber-700 font-semibold">+{thisMonthOverageEntities} overage</p>
+                ) : (
+                  <p className="text-xs text-emerald-700 font-semibold">{subIncluded - thisMonthEntities.length} remaining in plan</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Live "This Month" Projection — refreshes every page load (server component).
             Mercury auto-invoice fires on the 1st of each month at 06:00 UTC; this
             panel shows what that invoice will look like BEFORE it fires. Replaces
@@ -352,14 +424,27 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
             <div className="bg-white rounded p-3">
               <p className="text-xs text-gray-500 uppercase">Completed</p>
               <p className="text-lg font-bold text-mt-dark mt-1">{thisMonthEntities.length}</p>
-              <p className="text-xs text-gray-500">{thisMonthBillable.length} billable, {thisMonthFreeCount} free-trial</p>
+              {isSubscription ? (
+                <p className="text-xs text-gray-500">
+                  {Math.min(thisMonthEntities.length, subIncluded)} of {subIncluded} included{thisMonthOverageEntities > 0 ? ` · ${thisMonthOverageEntities} overage` : ''}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500">{thisMonthBillable.length} billable, {thisMonthFreeCount} free-trial</p>
+              )}
             </div>
             <div className="bg-white rounded p-3">
-              <p className="text-xs text-gray-500 uppercase">Billed so far</p>
+              <p className="text-xs text-gray-500 uppercase">{isSubscription ? 'Subscription + overage' : 'Billed so far'}</p>
               <p className="text-lg font-bold text-mt-dark mt-1">
                 ${thisMonthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
-              <p className="text-xs text-gray-500">at ${ratePdf.toFixed(2)}/PDF · ${rateCsv.toFixed(2)}/CSV</p>
+              {isSubscription ? (
+                <p className="text-xs text-gray-500">
+                  ${subMonthly.toFixed(2)}/mo flat
+                  {thisMonthOverageEntities > 0 && ` + ${thisMonthOverageEntities} × $${subOverageRate.toFixed(2)}`}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500">at ${ratePdf.toFixed(2)}/PDF · ${rateCsv.toFixed(2)}/CSV</p>
+              )}
             </div>
             <div className="bg-white rounded p-3">
               <p className="text-xs text-gray-500 uppercase">Next invoice fires</p>
@@ -405,10 +490,23 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                     <p className="text-3xl font-bold text-mt-dark mt-2">{monthEntities.length}</p>
                   </div>
                   <div className="bg-white rounded-lg shadow p-6">
-                    <p className="text-gray-600 text-sm font-medium">Billable</p>
-                    <p className="text-3xl font-bold text-mt-dark mt-2">{billableEntities.length}</p>
-                    {freeEntities.length > 0 && (
-                      <p className="text-xs text-green-600 mt-1">{freeEntities.length} free (trial)</p>
+                    <p className="text-gray-600 text-sm font-medium">{isSubscription ? 'Plan Usage' : 'Billable'}</p>
+                    {isSubscription ? (
+                      <>
+                        <p className="text-3xl font-bold text-mt-dark mt-2">
+                          {Math.min(monthEntities.length, subIncluded)}<span className="text-base text-gray-500"> / {subIncluded}</span>
+                        </p>
+                        {monthOverageEntities > 0 && (
+                          <p className="text-xs text-amber-700 mt-1 font-semibold">+{monthOverageEntities} overage @ ${subOverageRate.toFixed(2)}</p>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-3xl font-bold text-mt-dark mt-2">{billableEntities.length}</p>
+                        {freeEntities.length > 0 && (
+                          <p className="text-xs text-green-600 mt-1">{freeEntities.length} free (trial)</p>
+                        )}
+                      </>
                     )}
                   </div>
                   <div className="bg-white rounded-lg shadow p-6">
@@ -416,6 +514,11 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                     <p className="text-3xl font-bold text-mt-dark mt-2">
                       ${monthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
+                    {isSubscription && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        ${subMonthly.toFixed(2)} subscription{monthOverageAmount > 0 ? ` + $${monthOverageAmount.toFixed(2)} overage` : ''}
+                      </p>
+                    )}
                   </div>
                   <div className="bg-white rounded-lg shadow p-6">
                     <p className="text-gray-600 text-sm font-medium">Payment Status</p>
@@ -437,11 +540,17 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                   </div>
                 </div>
 
-                {/* Breakdown by Processor */}
+                {/* Breakdown by Processor — under subscription, the
+                    per-processor dollar attribution is meaningless
+                    (everyone pulls from the same flat plan), so we hide
+                    the Amount column and surface a "share of plan" % instead. */}
                 {Object.keys(byProcessor).length > 0 && (
                   <div className="bg-white rounded-lg shadow overflow-hidden mb-8">
                     <div className="px-6 py-4 border-b border-gray-200">
                       <h2 className="text-lg font-semibold text-mt-dark">By Processor</h2>
+                      {isSubscription && (
+                        <p className="text-xs text-gray-500 mt-0.5">Volume only — subscription pricing is flat across the team.</p>
+                      )}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full">
@@ -449,27 +558,33 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                           <tr>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Processor</th>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Entities</th>
-                            <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Amount</th>
+                            {!isSubscription && (
+                              <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Amount</th>
+                            )}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
                           {Object.values(byProcessor)
-                            .sort((a, b) => b.total - a.total)
+                            .sort((a, b) => b.entities.length - a.entities.length)
                             .map((proc) => (
                               <tr key={proc.name} className="hover:bg-gray-50">
                                 <td className="px-6 py-4 text-sm font-semibold text-mt-dark">{proc.name}</td>
                                 <td className="px-6 py-4 text-sm text-gray-600">{proc.entities.length}</td>
-                                <td className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">
-                                  ${proc.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
+                                {!isSubscription && (
+                                  <td className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">
+                                    ${proc.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                )}
                               </tr>
                             ))}
                           <tr className="bg-gray-50 font-semibold">
                             <td className="px-6 py-3 text-sm text-mt-dark">TOTAL</td>
                             <td className="px-6 py-3 text-sm text-gray-900">{monthEntities.length}</td>
-                            <td className="px-6 py-3 text-sm text-gray-900 text-right">
-                              ${monthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
+                            {!isSubscription && (
+                              <td className="px-6 py-3 text-sm text-gray-900 text-right">
+                                ${monthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            )}
                           </tr>
                         </tbody>
                       </table>
@@ -493,12 +608,14 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Form</th>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Completed</th>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Source</th>
-                            <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Amount</th>
+                            {!isSubscription && (
+                              <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Amount</th>
+                            )}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
                           {Object.values(byLoan)
-                            .sort((a, b) => b.total - a.total)
+                            .sort((a, b) => b.entities.length - a.entities.length)
                             .flatMap((loan) =>
                               loan.entities.map((entity, idx) => (
                                 <tr key={entity.id} className="hover:bg-gray-50">
@@ -524,23 +641,27 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                                       {entity.intake_method.toUpperCase()}
                                     </span>
                                   </td>
-                                  <td className="px-6 py-3 text-sm text-right">
-                                    {freeEntityIds.has(entity.id) ? (
-                                      <span className="text-green-600 font-medium">Free</span>
-                                    ) : (
-                                      <span className="font-semibold text-gray-900">
-                                        ${entity.rate.toFixed(2)}
-                                      </span>
-                                    )}
-                                  </td>
+                                  {!isSubscription && (
+                                    <td className="px-6 py-3 text-sm text-right">
+                                      {freeEntityIds.has(entity.id) ? (
+                                        <span className="text-green-600 font-medium">Free</span>
+                                      ) : (
+                                        <span className="font-semibold text-gray-900">
+                                          ${entity.rate.toFixed(2)}
+                                        </span>
+                                      )}
+                                    </td>
+                                  )}
                                 </tr>
                               ))
                             )}
                           <tr className="bg-gray-50 font-semibold">
                             <td className="px-6 py-3 text-sm text-mt-dark" colSpan={6}>TOTAL</td>
-                            <td className="px-6 py-3 text-sm text-gray-900 text-right">
-                              ${monthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
+                            {!isSubscription && (
+                              <td className="px-6 py-3 text-sm text-gray-900 text-right">
+                                ${monthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            )}
                           </tr>
                         </tbody>
                       </table>
