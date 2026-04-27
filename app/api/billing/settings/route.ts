@@ -25,7 +25,7 @@ export async function GET() {
 
     const { data: client, error } = await supabase
       .from('clients')
-      .select('billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv')
+      .select('billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv, address_line1, address_line2, address_city, address_state, address_postal_code, mercury_customer_id')
       .eq('id', profile.client_id)
       .single();
 
@@ -54,7 +54,16 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { billing_payment_method, billing_ap_email, billing_ap_phone } = body;
+    const {
+      billing_payment_method,
+      billing_ap_email,
+      billing_ap_phone,
+      address_line1,
+      address_line2,
+      address_city,
+      address_state,
+      address_postal_code,
+    } = body;
 
     // Validate payment method
     if (billing_payment_method && !['ach', 'wire'].includes(billing_payment_method)) {
@@ -65,6 +74,11 @@ export async function PATCH(request: NextRequest) {
     if (billing_payment_method !== undefined) updateData.billing_payment_method = billing_payment_method;
     if (billing_ap_email !== undefined) updateData.billing_ap_email = billing_ap_email;
     if (billing_ap_phone !== undefined) updateData.billing_ap_phone = billing_ap_phone;
+    if (address_line1 !== undefined) updateData.address_line1 = address_line1;
+    if (address_line2 !== undefined) updateData.address_line2 = address_line2;
+    if (address_city !== undefined) updateData.address_city = address_city;
+    if (address_state !== undefined) updateData.address_state = address_state;
+    if (address_postal_code !== undefined) updateData.address_postal_code = address_postal_code;
 
     const { error } = await supabase
       .from('clients')

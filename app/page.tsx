@@ -534,58 +534,68 @@ export default async function DashboardPage({
           </div>
         )}
 
-        {/* Trial Progress Banner — manager-facing only, while client.free_trial is true.
-            Free trial = first 3 completed entities are not billed. Once they're used up,
-            the next entity is billable at the per-TIN rate. The CTA pushes them toward
-            adding a payment method (M5 in the engagement roadmap). */}
+        {/* Trial Progress Banner — manager + processor visible (so the
+            whole team sees the credits they share). Surfaces the dollar
+            value ($239.94 = 3 × $79.98 per-TIN reference rate) so the
+            credit feels real, not abstract. Visible to processors too —
+            credits are account-wide, anyone on the team can use them. */}
         {(isManager || isProcessor) && clientFreeTrial && (() => {
-          // Count entities the client has actually completed so far (across the whole org).
           const completedCount = (allClientRequests || [])
             .flatMap((r: any) => r.request_entities || [])
             .filter((e: any) => e.status === 'completed').length;
           const FREE = 3;
+          const TRIAL_RATE = 79.98;
+          const TRIAL_TOTAL = FREE * TRIAL_RATE; // $239.94
           const usedFree = Math.min(FREE, completedCount);
           const remainingFree = Math.max(0, FREE - usedFree);
+          const remainingValue = remainingFree * TRIAL_RATE;
           const pct = Math.round((usedFree / FREE) * 100);
           const exhausted = remainingFree === 0;
           return (
-            <div className={`rounded-lg shadow p-5 mb-6 border-l-4 ${exhausted ? 'bg-amber-50 border-amber-500' : 'bg-emerald-50 border-emerald-500'}`}>
+            <div className={`rounded-xl shadow p-5 mb-6 border ${exhausted ? 'bg-amber-50 border-amber-300' : 'bg-gradient-to-br from-emerald-50 to-emerald-100/40 border-emerald-300'}`}>
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">{exhausted ? '⏰' : '🎁'}</span>
-                    <h3 className="font-bold text-mt-dark">
-                      {exhausted ? 'Free trial complete' : 'Free trial active'}
-                    </h3>
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${exhausted ? 'bg-amber-200 text-amber-900' : 'bg-emerald-200 text-emerald-900'}`}>
-                      {usedFree} of {FREE} used
-                    </span>
+                <div className="flex items-start gap-4 flex-1">
+                  <div className="shrink-0 w-12 h-12 rounded-lg bg-white shadow-sm flex items-center justify-center">
+                    <span className="text-2xl">{exhausted ? '⏰' : '🎁'}</span>
                   </div>
-                  <p className="text-sm text-gray-700">
-                    {exhausted
-                      ? 'You\'ve used all 3 free transcripts. New requests will be billed at your contract rate.'
-                      : `${remainingFree} free transcript${remainingFree === 1 ? '' : 's'} remaining. Submit a request to use them — the first 3 completed entities are on us.`
-                    }
-                  </p>
-                  <div className="mt-3 h-2 bg-white/60 rounded-full overflow-hidden border border-black/5">
-                    <div
-                      className={`h-full transition-all ${exhausted ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                      style={{ width: `${pct}%` }}
-                    />
+                  <div className="flex-1">
+                    <div className="flex flex-wrap items-baseline gap-2 mb-1">
+                      <h3 className={`text-lg font-bold ${exhausted ? 'text-amber-900' : 'text-emerald-900'}`}>
+                        {exhausted ? 'Free trial complete' : 'Free trial credit'}
+                      </h3>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${exhausted ? 'bg-amber-200 text-amber-900' : 'bg-emerald-200/60 text-emerald-700'}`}>
+                        {usedFree} of {FREE} used
+                      </span>
+                    </div>
+                    {exhausted ? (
+                      <p className="text-sm text-amber-900">
+                        You&apos;ve used all 3 free transcripts (${TRIAL_TOTAL.toFixed(2)} value). New requests bill at your contract rate.
+                      </p>
+                    ) : (
+                      <p className="text-sm text-emerald-900">
+                        <span className="font-bold text-2xl">${remainingValue.toFixed(2)}</span>
+                        <span className="ml-1.5 text-emerald-800">remaining</span>
+                        <span className="ml-2 text-xs text-emerald-700">· {remainingFree} free request{remainingFree === 1 ? '' : 's'} for your entire team{isProcessor ? '' : ' (processors + managers)'}</span>
+                      </p>
+                    )}
+                    <div className="mt-3 h-2 bg-white/60 rounded-full overflow-hidden border border-black/5">
+                      <div
+                        className={`h-full transition-all ${exhausted ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-                {isManager && (
-                  <Link
-                    href="/invoicing"
-                    className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
-                      exhausted
-                        ? 'bg-amber-600 text-white hover:bg-amber-700'
-                        : 'bg-white text-mt-dark border border-gray-200 hover:bg-gray-50'
-                    }`}
-                  >
-                    {exhausted ? 'Set up billing →' : 'View billing'}
-                  </Link>
-                )}
+                <Link
+                  href={exhausted && isManager ? '/invoicing' : '/new'}
+                  className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg transition-colors ${
+                    exhausted
+                      ? 'bg-amber-600 text-white hover:bg-amber-700'
+                      : 'bg-mt-green text-white hover:bg-mt-green/90'
+                  }`}
+                >
+                  {exhausted ? (isManager ? 'Set up billing →' : 'Submit request →') : 'Use credit →'}
+                </Link>
               </div>
             </div>
           );

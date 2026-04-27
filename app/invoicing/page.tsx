@@ -3,6 +3,14 @@ import { createServerComponentClient } from '@/lib/supabase-server';
 import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { BillingSettingsForm } from '@/components/BillingSettingsForm';
+import { PayNowButton } from '@/components/PayNowButton';
+
+// Free trial: each new client gets 3 free entities — surfaced as
+// "$239.94 trial credit" so managers see the dollar value of what
+// their team already has on tap. $79.98 per-entity is the per-TIN
+// reference rate (matches Cal Statewide MSA), used only for display.
+const TRIAL_ENTITIES_PER_CLIENT = 3;
+const TRIAL_DISPLAY_RATE_PER_ENTITY = 79.98;
 
 interface PageProps {
   searchParams: Promise<{ month?: string }>;
@@ -29,10 +37,10 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
     redirect('/');
   }
 
-  // Get client with billing settings
+  // Get client with billing settings + Mercury enrollment + address fields
   const { data: client } = await supabase
     .from('clients')
-    .select('id, name, slug, free_trial, intake_methods, billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv')
+    .select('id, name, slug, free_trial, intake_methods, billing_payment_method, billing_ap_email, billing_ap_phone, billing_rate_pdf, billing_rate_csv, address_line1, address_line2, address_city, address_state, address_postal_code, mercury_customer_id')
     .eq('id', profile.client_id)
     .single() as { data: any | null; error: any };
 
@@ -208,6 +216,13 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
   };
 
   const billingSetup = client.billing_payment_method && client.billing_ap_email;
+  const mercuryEnrolled = !!client.mercury_customer_id;
+
+  // Free trial credit display for the top-of-page banner
+  const totalCompletedAcrossAllTime = allCompletedEntities.length;
+  const trialUsed = Math.min(TRIAL_ENTITIES_PER_CLIENT, totalCompletedAcrossAllTime);
+  const trialRemaining = Math.max(0, TRIAL_ENTITIES_PER_CLIENT - trialUsed);
+  const trialRemainingValue = trialRemaining * TRIAL_DISPLAY_RATE_PER_ENTITY;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -241,19 +256,57 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* FREE TRIAL CREDITS — top-of-page so managers see the dollar
+            value of what their team already has on tap. Hidden once the
+            trial is exhausted. */}
+        {client.free_trial && trialRemaining > 0 && (
+          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/40 rounded-xl border border-emerald-300 p-5 mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className="shrink-0 w-12 h-12 rounded-lg bg-white shadow-sm flex items-center justify-center">
+                  <span className="text-2xl">🎁</span>
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-baseline gap-2 mb-1">
+                    <h3 className="text-lg font-bold text-emerald-900">Free trial credit</h3>
+                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-200/60 px-2 py-0.5 rounded-full">
+                      {trialUsed} of {TRIAL_ENTITIES_PER_CLIENT} used
+                    </span>
+                  </div>
+                  <p className="text-sm text-emerald-900">
+                    <span className="font-bold text-2xl">${trialRemainingValue.toFixed(2)}</span>
+                    <span className="ml-1.5 text-emerald-800">remaining</span>
+                    <span className="ml-2 text-xs text-emerald-700">· {trialRemaining} free request{trialRemaining === 1 ? '' : 's'} for your entire team (processors + managers)</span>
+                  </p>
+                </div>
+              </div>
+              <Link href="/new" className="shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-mt-green text-white text-sm font-bold rounded-lg hover:bg-mt-green/90">
+                Use credit →
+              </Link>
+            </div>
+            <div className="mt-4 h-2 bg-white/60 rounded-full overflow-hidden border border-emerald-200">
+              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${(trialUsed / TRIAL_ENTITIES_PER_CLIENT) * 100}%` }} />
+            </div>
+          </div>
+        )}
+
         {/* Billing Settings Card */}
         <div className="bg-white rounded-lg shadow mb-8">
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-mt-dark">Payment Settings</h2>
-            {billingSetup ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">
+            {mercuryEnrolled ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                Configured
+                Mercury Auto-Pay Enrolled
+              </span>
+            ) : billingSetup ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                Saved — enroll to enable Pay Now
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
                 Setup Required
               </span>
             )}
@@ -263,6 +316,12 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
               initialPaymentMethod={client.billing_payment_method || ''}
               initialApEmail={client.billing_ap_email || ''}
               initialApPhone={client.billing_ap_phone || ''}
+              initialAddressLine1={client.address_line1 || ''}
+              initialAddressLine2={client.address_line2 || ''}
+              initialAddressCity={client.address_city || ''}
+              initialAddressState={client.address_state || ''}
+              initialAddressPostalCode={client.address_postal_code || ''}
+              mercuryCustomerId={client.mercury_customer_id || null}
             />
           </div>
         </div>
@@ -272,19 +331,22 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
             panel shows what that invoice will look like BEFORE it fires. Replaces
             the old "wait until invoice arrives to know what you owe" experience. */}
         <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/40 border border-emerald-200 rounded-lg p-5 mb-6">
-          <div className="flex flex-wrap items-baseline justify-between mb-3 gap-2">
+          <div className="flex flex-wrap items-start justify-between mb-3 gap-4">
             <div>
               <h2 className="text-lg font-bold text-mt-dark">This Month So Far</h2>
               <p className="text-xs text-gray-600">
                 {formatMonth(thisMonthKey)} · day {dayOfMonth} of {daysInMonth} · live count
               </p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Projected total</p>
+              <p className="text-xs text-gray-500 uppercase tracking-wide mt-3">Projected month-end</p>
               <p className="text-2xl font-bold text-emerald-700">
                 ${projectedTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
+            <PayNowButton
+              billableThisMonth={thisMonthBillable.length}
+              amountThisMonth={thisMonthTotal}
+              mercuryEnrolled={mercuryEnrolled}
+            />
           </div>
           <div className="grid grid-cols-3 gap-3 text-sm">
             <div className="bg-white rounded p-3">
