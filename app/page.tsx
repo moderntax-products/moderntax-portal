@@ -33,7 +33,7 @@ export default async function DashboardPage({
     .from('profiles')
     .select()
     .eq('id', user.id)
-    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null } | null; error: any };
+    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null } | null; error: any };
 
   if (profileError || !profile) {
     redirect('/login');
@@ -43,6 +43,10 @@ export default async function DashboardPage({
   const isAdmin = profile.role === 'admin';
   const isProcessor = profile.role === 'processor';
   const isExpert = profile.role === 'expert';
+  // True until the user finishes or dismisses the /onboarding tour.
+  // Drives the "Take the tour" banner on the dashboard. Help link in
+  // nav stays visible even after dismissal so they can re-take it.
+  const showOnboardingBanner = !profile.onboarding_completed_at && !profile.onboarding_dismissed_at;
 
   // Experts have their own dashboard
   if (isExpert) {
@@ -371,6 +375,15 @@ export default async function DashboardPage({
                 </Link>
               </>
             )}
+            {/* Help — re-take the product tour any time. Visible to all
+                non-expert users (processor/manager/admin). */}
+            <Link
+              href="/onboarding"
+              className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              title="Take the product tour"
+            >
+              Help
+            </Link>
             <Link
               href="/account/security"
               className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -406,6 +419,121 @@ export default async function DashboardPage({
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* PLACE A NEW ORDER — primary workflow for every user type
+            (processor, manager, admin, and any future role). Three big
+            cards show the three submission paths at a glance. We keep
+            this above EVERYTHING else (stats, trial banner, request
+            table) because the entire portal exists to serve this one
+            action: order an IRS transcript verification. */}
+        <section className="mb-8">
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-mt-dark">Place a new order</h2>
+              <p className="text-sm text-gray-600 mt-0.5">
+                Pick your fastest path. Each route ends in transcripts delivered to your portal in 24-48h.
+              </p>
+            </div>
+            {showOnboardingBanner && (
+              <Link
+                href="/onboarding"
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs font-semibold text-mt-green hover:underline"
+              >
+                Take the 5-min tour →
+              </Link>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Link
+              href="/new"
+              className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                  </svg>
+                </div>
+                <h3 className="font-bold text-mt-dark">CSV / Excel Upload</h3>
+              </div>
+              <p className="text-sm text-gray-600 flex-1">
+                Multiple borrowers at once. We auto-generate the 8821s and send them for signature.
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold">Recommended for batches</span>
+                <span className="text-mt-green font-semibold ml-auto group-hover:translate-x-0.5 transition-transform">Start →</span>
+              </div>
+            </Link>
+
+            <Link
+              href="/new"
+              className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 rounded-lg bg-amber-50 text-amber-600 group-hover:bg-amber-100 transition-colors">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <h3 className="font-bold text-mt-dark">Signed 8821 PDF</h3>
+              </div>
+              <p className="text-sm text-gray-600 flex-1">
+                Already have the borrower&apos;s signature? Upload the PDF and we go straight to IRS pulling.
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold">Skips signature step</span>
+                <span className="text-mt-green font-semibold ml-auto group-hover:translate-x-0.5 transition-transform">Start →</span>
+              </div>
+            </Link>
+
+            <Link
+              href="/new"
+              className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 rounded-lg bg-purple-50 text-purple-600 group-hover:bg-purple-100 transition-colors">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                  </svg>
+                </div>
+                <h3 className="font-bold text-mt-dark">Manual Entry</h3>
+              </div>
+              <p className="text-sm text-gray-600 flex-1">
+                One borrower? Type the details directly — fastest path for a single transcript request.
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold">~30 seconds</span>
+                <span className="text-mt-green font-semibold ml-auto group-hover:translate-x-0.5 transition-transform">Start →</span>
+              </div>
+            </Link>
+          </div>
+        </section>
+
+        {/* "Take the tour" — gentle nudge for users who haven't onboarded.
+            Sits below the order paths so it never blocks the primary CTA. */}
+        {showOnboardingBanner && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-full bg-white">
+                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-blue-900">New here? Take the 5-minute tour.</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  Walks you through ordering, compliance flags, monitoring, billing, and team setup.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/onboarding"
+              className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Start tour →
+            </Link>
+          </div>
+        )}
+
         {/* Trial Progress Banner — manager-facing only, while client.free_trial is true.
             Free trial = first 3 completed entities are not billed. Once they're used up,
             the next entity is billable at the per-TIN rate. The CTA pushes them toward
