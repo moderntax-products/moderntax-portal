@@ -313,6 +313,41 @@ async function processSignedEntity(
 
   console.log(`[dropbox-sign] Entity ${entity.id} (${entity.entity_name}) → 8821_signed (signer: ${signerFullName || signerEmail || 'unknown'})`);
 
+  // ─────────────────────────────────────────────────────────────────
+  // EXPERT SLA CLOCK START (Phase 1)
+  //
+  // Per matt 2026-04-27 directive: the expert's SLA clock should start
+  // only when the 8821 is signed AND verified to carry that expert's
+  // specific credentials (CAF, name, address, PTIN, phone).
+  //
+  // Phase 1 (now): close approximation — start the clock at signed_at
+  // for any active assignment on this entity. Since 8821s are generated
+  // via lib/8821-pdf.ts using the assigned expert's designee preset
+  // (DESIGNEES.parker / DESIGNEES.default), the expert's creds ARE on
+  // the signed PDF in the typical case. The exception is manually-sent
+  // 8821s that bypass our generator.
+  //
+  // Phase 2 (backlog): a verification bot will read the signed PDF,
+  // OCR/parse the appointee section, and confirm the creds match the
+  // assigned expert before stamping expert_clock_started_at. Until then,
+  // we accept the small precision loss in exchange for the clock
+  // working at all (vs. blocking every assignment's clock indefinitely).
+  // ─────────────────────────────────────────────────────────────────
+  try {
+    const { error: clockErr } = await supabase
+      .from('expert_assignments')
+      .update({ expert_clock_started_at: signedAtIso })
+      .eq('entity_id', entity.id)
+      .in('status', ['assigned', 'in_progress'])
+      .is('expert_clock_started_at', null); // only set if not already running
+    if (clockErr) {
+      console.warn(`[dropbox-sign] Failed to set expert_clock_started_at for entity ${entity.id}:`, clockErr);
+    }
+  } catch (clockErr) {
+    // Column may not exist yet (pre-migration). Don't block the webhook.
+    console.warn(`[dropbox-sign] expert_clock_started_at update skipped:`, clockErr);
+  }
+
   // Audit log — every signature event gets a row so forensics aren't reliant on
   // the entity column alone. Historically this handler wrote zero audit rows
   // even on success, making it impossible to reconstruct who signed when.

@@ -1,74 +1,90 @@
 /**
  * SLA Warning Cron Job
- * Checks for expert assignments approaching their SLA deadline (< 4 hours remaining)
- * and sends warning emails to experts.
- * GET /api/cron/sla-warning
  *
- * Expected to be called by Vercel Cron with CRON_SECRET in headers
+ * Sends warning emails to experts when their assignment is within
+ * 4 business hours of the SLA deadline. The deadline is computed live
+ * via lib/expert-sla — Mon–Fri 7am–7pm in the expert's local timezone,
+ * starting from expert_clock_started_at (the verified-signed-8821 ts).
+ *
+ * Replaces the old logic that read a static sla_deadline column with
+ * naive wall-clock math. Assignments where the clock hasn't started
+ * (expert_clock_started_at IS NULL) are skipped entirely — they're not
+ * yet on the hook.
+ *
+ * GET /api/cron/sla-warning  (Authorization: Bearer CRON_SECRET)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendSlaWarningNotification } from '@/lib/sendgrid';
+import { businessHoursRemaining, slaDeadlineMs, SLA_DEFAULTS } from '@/lib/expert-sla';
 
 export const maxDuration = 60;
 
+const WARN_WITHIN_BUSINESS_HOURS = 4;
+
 export async function GET(request: NextRequest) {
   try {
-    // Validate CRON_SECRET
     const cronSecret = request.headers.get('Authorization');
     const expectedSecret = process.env.CRON_SECRET;
-
     if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized: Invalid CRON_SECRET' }, { status: 401 });
     }
 
     const supabase = createAdminClient();
+    const now = Date.now();
 
-    // Find active assignments where SLA deadline is within the next 4 hours
-    const fourHoursFromNow = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
-    const now = new Date().toISOString();
-
-    const { data: urgentAssignments, error: assignmentsError } = await supabase
+    // Pull active assignments where the clock IS running (signed 8821 verified).
+    // We over-fetch and filter in JS because the deadline is a function of the
+    // expert's tz — can't be expressed as a SQL predicate cleanly.
+    const { data: liveAssignments, error: assignmentsError } = await supabase
       .from('expert_assignments')
       .select(`
-        id, sla_deadline, expert_id, entity_id,
-        expert_profile:profiles!expert_assignments_expert_id_fkey(email, full_name),
+        id,
+        expert_clock_started_at,
+        sla_business_hours,
+        expert_id,
+        entity_id,
+        expert_profile:profiles!expert_assignments_expert_id_fkey(email, full_name, iana_timezone),
         request_entities(entity_name)
       `)
       .in('status', ['assigned', 'in_progress'])
-      .lte('sla_deadline', fourHoursFromNow)
-      .gte('sla_deadline', now) as { data: any[] | null; error: any };
+      .not('expert_clock_started_at', 'is', null) as { data: any[] | null; error: any };
 
     if (assignmentsError) {
-      console.error('Failed to fetch urgent assignments:', assignmentsError);
-      return NextResponse.json(
-        { error: 'Failed to fetch assignments' },
-        { status: 500 }
-      );
+      console.error('[sla-warning] Failed to fetch assignments:', assignmentsError);
+      return NextResponse.json({ error: 'Failed to fetch assignments' }, { status: 500 });
     }
 
-    if (!urgentAssignments || urgentAssignments.length === 0) {
+    if (!liveAssignments || liveAssignments.length === 0) {
       return NextResponse.json({
-        success: true,
-        warningsSent: 0,
-        message: 'No assignments approaching SLA deadline',
-        processedAt: now,
+        success: true, warningsSent: 0,
+        message: 'No assignments with running SLA clock',
+        processedAt: new Date(now).toISOString(),
       });
     }
+
+    // Filter to assignments approaching deadline (within 4 business hours, but not yet past)
+    const urgent = liveAssignments.filter(a => {
+      const tz = a.expert_profile?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ;
+      const startedMs = new Date(a.expert_clock_started_at).getTime();
+      const slaHours = a.sla_business_hours ?? SLA_DEFAULTS.DEFAULT_SLA_BUSINESS_HOURS;
+      const remaining = businessHoursRemaining(startedMs, slaHours, tz, now);
+      if (remaining === null) return false;
+      return remaining > 0 && remaining <= WARN_WITHIN_BUSINESS_HOURS;
+    });
 
     let warningsSent = 0;
     const errors: { assignmentId: string; error: string }[] = [];
 
-    for (const assignment of urgentAssignments) {
+    for (const assignment of urgent) {
       try {
         const expertEmail = assignment.expert_profile?.email;
+        const tz = assignment.expert_profile?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ;
         const entityName = assignment.request_entities?.entity_name || 'Unknown Entity';
-        const deadline = new Date(assignment.sla_deadline);
-        const hoursRemaining = Math.max(0, (deadline.getTime() - Date.now()) / (1000 * 60 * 60));
+        const startedMs = new Date(assignment.expert_clock_started_at).getTime();
+        const slaHours = assignment.sla_business_hours ?? SLA_DEFAULTS.DEFAULT_SLA_BUSINESS_HOURS;
+        const hoursRemaining = businessHoursRemaining(startedMs, slaHours, tz, now) || 0;
 
         if (expertEmail) {
           await sendSlaWarningNotification(
@@ -80,7 +96,7 @@ export async function GET(request: NextRequest) {
         }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        console.error(`Error sending SLA warning for assignment ${assignment.id}:`, errorMessage);
+        console.error(`[sla-warning] Failed for assignment ${assignment.id}:`, errorMessage);
         errors.push({ assignmentId: assignment.id, error: errorMessage });
       }
     }
@@ -88,16 +104,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       warningsSent,
-      totalUrgent: urgentAssignments.length,
-      processedAt: new Date().toISOString(),
+      totalUrgent: urgent.length,
+      totalLiveClock: liveAssignments.length,
+      processedAt: new Date(now).toISOString(),
       errors: errors.length > 0 ? errors : undefined,
+      // Diagnostic: show a sample deadline so on-call can sanity-check
+      sample: urgent[0] ? {
+        assignmentId: urgent[0].id,
+        deadlineUtc: new Date(slaDeadlineMs(
+          new Date(urgent[0].expert_clock_started_at).getTime(),
+          urgent[0].sla_business_hours ?? SLA_DEFAULTS.DEFAULT_SLA_BUSINESS_HOURS,
+          urgent[0].expert_profile?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ,
+        ) || 0).toISOString(),
+      } : undefined,
     });
   } catch (error) {
-    console.error('SLA warning cron error:', error);
+    console.error('[sla-warning] cron error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json(
-      { error: 'Cron job failed', details: errorMessage },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Cron job failed', details: errorMessage }, { status: 500 });
   }
 }

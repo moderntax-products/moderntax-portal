@@ -18,6 +18,7 @@ import {
   sendExpertOverdueReminder,
   sendAdminExpertAccountabilityDigest,
 } from '@/lib/sendgrid';
+import { isOverdue, businessHoursElapsed, SLA_DEFAULTS } from '@/lib/expert-sla';
 
 export const maxDuration = 60;
 
@@ -36,33 +37,46 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
     const now = new Date();
+    const nowMs = now.getTime();
 
-    // Find all active expert assignments that are past SLA deadline
-    const { data: overdueAssignments, error: assignmentsError } = await supabase
+    // Pull active assignments where the SLA clock IS running (signed
+    // 8821 verified — tracked by expert_clock_started_at). Filter to
+    // overdue in JS because the deadline is a function of the expert's
+    // local timezone (lib/expert-sla applies weekend + 7pm-7am skips).
+    const { data: liveAssignments, error: assignmentsError } = await supabase
       .from('expert_assignments')
       .select(`
-        id, sla_deadline, status, created_at, expert_id, entity_id,
-        expert_profile:profiles!expert_assignments_expert_id_fkey(id, email, full_name),
+        id, status, created_at, expert_id, entity_id,
+        expert_clock_started_at, sla_business_hours,
+        expert_profile:profiles!expert_assignments_expert_id_fkey(id, email, full_name, iana_timezone),
         request_entities(id, entity_name, status, request_id)
       `)
       .in('status', ['assigned', 'in_progress'])
-      .lt('sla_deadline', now.toISOString()) as { data: any[] | null; error: any };
+      .not('expert_clock_started_at', 'is', null) as { data: any[] | null; error: any };
 
     if (assignmentsError) {
-      console.error('Failed to fetch overdue assignments:', assignmentsError);
+      console.error('Failed to fetch live-clock assignments:', assignmentsError);
       return NextResponse.json(
-        { error: 'Failed to fetch overdue assignments' },
+        { error: 'Failed to fetch live-clock assignments' },
         { status: 500 }
       );
     }
 
-    if (!overdueAssignments || overdueAssignments.length === 0) {
+    const overdueAssignments = (liveAssignments || []).filter((a: any) => {
+      const tz = a.expert_profile?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ;
+      const startedMs = new Date(a.expert_clock_started_at).getTime();
+      const slaHours = a.sla_business_hours ?? SLA_DEFAULTS.DEFAULT_SLA_BUSINESS_HOURS;
+      return isOverdue(startedMs, slaHours, tz, nowMs);
+    });
+
+    if (overdueAssignments.length === 0) {
       return NextResponse.json({
         success: true,
         expertReminders: 0,
         adminDigests: 0,
-        message: 'No overdue assignments found',
+        message: 'No overdue assignments (using business-hours SLA clock)',
         processedAt: now.toISOString(),
+        totalLiveClock: liveAssignments?.length || 0,
       });
     }
 
@@ -136,9 +150,14 @@ export async function GET(request: NextRequest) {
       const clientName = reqInfo?.client_id ? (clientMap.get(reqInfo.client_id) || 'Unknown Client') : 'Unknown Client';
       const loanNumber = reqInfo?.loan_number || 'N/A';
 
-      // Calculate days overdue (from SLA deadline, not assignment date)
-      const slaDeadline = new Date(assignment.sla_deadline);
-      const stuckDays = Math.max(1, Math.floor((now.getTime() - slaDeadline.getTime()) / (1000 * 60 * 60 * 24)));
+      // Calculate "stuck days" based on business-hours elapsed since the
+      // SLA clock started (Mon–Fri 7am–7pm in expert tz). Round up to
+      // at least 1 so the digest never says "0 days" for an overdue row.
+      // 12 business hours = 1 stuck "day" by this convention.
+      const tz = assignment.expert_profile?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ;
+      const startedMs = new Date(assignment.expert_clock_started_at).getTime();
+      const elapsedBusinessHours = businessHoursElapsed(startedMs, nowMs, tz);
+      const stuckDays = Math.max(1, Math.floor(elapsedBusinessHours / 12));
 
       if (!expertGroups.has(expertId)) {
         expertGroups.set(expertId, {

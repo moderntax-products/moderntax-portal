@@ -297,8 +297,11 @@ export interface ExpertPerformanceStats {
   completed: number;
   failed: number;
   in_progress: number;
+  /** Subset of in_progress past the business-hours SLA deadline right now */
+  overdue_in_progress?: number;
   sla_met_count: number;
   sla_missed_count: number;
+  /** Mean turnaround in BUSINESS hours (Mon-Fri 7am-7pm in expert tz) */
   avg_completion_hours: number;
   completion_rate: number;
   sla_compliance_rate: number;
