@@ -444,7 +444,7 @@ export default async function DashboardPage({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Link
-              href="/new"
+              href="/new/csv"
               className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
             >
               <div className="flex items-center gap-3 mb-2">
@@ -465,7 +465,7 @@ export default async function DashboardPage({
             </Link>
 
             <Link
-              href="/new"
+              href="/new/pdf"
               className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
             >
               <div className="flex items-center gap-3 mb-2">
@@ -486,7 +486,7 @@ export default async function DashboardPage({
             </Link>
 
             <Link
-              href="/new"
+              href="/new/manual"
               className="group relative bg-white rounded-xl border-2 border-gray-200 hover:border-mt-green hover:shadow-md transition-all p-5 flex flex-col"
             >
               <div className="flex items-center gap-3 mb-2">

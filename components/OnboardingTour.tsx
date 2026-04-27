@@ -68,7 +68,7 @@ const STEPS: Step[] = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
       </svg>
     ),
-    cta: { label: 'Try CSV upload →', href: '/new' },
+    cta: { label: 'Try CSV upload →', href: '/new/csv' },
   },
   {
     id: 'pdf-upload',
@@ -86,7 +86,7 @@ const STEPS: Step[] = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
       </svg>
     ),
-    cta: { label: 'Try PDF upload →', href: '/new' },
+    cta: { label: 'Try PDF upload →', href: '/new/pdf' },
   },
   {
     id: 'manual-entry',
@@ -105,7 +105,7 @@ const STEPS: Step[] = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
       </svg>
     ),
-    cta: { label: 'Try manual entry →', href: '/new' },
+    cta: { label: 'Try manual entry →', href: '/new/manual' },
   },
   {
     id: 'cross-team-search',
