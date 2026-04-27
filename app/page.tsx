@@ -7,11 +7,12 @@ import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ search?: string; status?: string }>;
+  searchParams?: Promise<{ search?: string; status?: string; mine?: string }>;
 }) {
-  const params: { search?: string; status?: string } = searchParams ? await searchParams : {};
+  const params: { search?: string; status?: string; mine?: string } = searchParams ? await searchParams : {};
   const searchQuery = (params.search ?? '').trim();
   const statusFilter = params.status ?? 'all';
+  const mineOnly = params.mine === '1';
   let supabase;
   try {
     supabase = await createServerComponentClient();
@@ -78,16 +79,17 @@ export default async function DashboardPage({
   }
 
   if (profile.client_id) {
-    // Build the query — all client requests for managers, own-only for processors
-    let query = supabase
+    // Cross-team visibility (B3.1 MVP, Robert/Enterprise Bank Apr 27 ask):
+    // every team member — processor, manager, admin — gets the FULL list of
+    // client requests so they can search across the org. Submission ownership
+    // is preserved via requested_by (only owner can edit/cancel) but visibility
+    // is now org-wide. Robert: "anyone on the team should be able to search a
+    // profile and see all recent pulls."
+    const query = supabase
       .from('requests')
-      .select('*, request_entities(id, status, completed_at, created_at)')
+      .select('*, request_entities(id, status, completed_at, created_at, entity_name, tid)')
       .eq('client_id', profile.client_id)
       .order('created_at', { ascending: false });
-
-    if (isProcessor) {
-      query = query.eq('requested_by', user.id);
-    }
 
     const { data: fetchedRequests, error: requestsError } = await query as { data: any[] | null; error: any };
 
@@ -247,10 +249,30 @@ export default async function DashboardPage({
   // Apply search and status filters to the requests shown in the table
   const pendingStatuses = ['submitted', '8821_sent', '8821_signed', 'irs_queue', 'processing'];
 
+  // Cross-team search (B3.1): match loan_number AND any entity name AND any
+  // last-4-digit TID. Lets a processor type "Aguirre" or "44592" and find the
+  // request even if a teammate created it.
   if (searchQuery) {
-    requests = requests.filter((r: any) =>
-      r.loan_number?.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const q = searchQuery.toLowerCase();
+    requests = requests.filter((r: any) => {
+      if (r.loan_number?.toLowerCase().includes(q)) return true;
+      const ents = r.request_entities || [];
+      for (const e of ents) {
+        if ((e.entity_name || '').toLowerCase().includes(q)) return true;
+        // TID search: match by full TID OR last 4 digits
+        const tidDigits = (e.tid || '').replace(/\D/g, '');
+        const queryDigits = q.replace(/\D/g, '');
+        if (queryDigits && (tidDigits.includes(queryDigits) || tidDigits.endsWith(queryDigits))) return true;
+      }
+      return false;
+    });
+  }
+
+  // "Mine only" toggle — when set, narrows back to requests this user created.
+  // Default for processors is full-team view (B3.1); they can opt back into
+  // single-user view via the toggle.
+  if (mineOnly) {
+    requests = requests.filter((r: any) => r.requested_by === user.id);
   }
 
   if (statusFilter === 'pending') {
@@ -319,6 +341,17 @@ export default async function DashboardPage({
                 className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 ⚙️ Admin
+              </Link>
+            )}
+            {/* Compliance — visible to manager + processor (cross-team B3.1).
+                Links to /compliance which shows flagged borrower entities + lets
+                anyone fire a resolution-template email. */}
+            {(isManager || isProcessor) && (
+              <Link
+                href="/compliance"
+                className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Compliance
               </Link>
             )}
             {/* Manager Navigation */}
@@ -565,23 +598,42 @@ export default async function DashboardPage({
         {/* Recent Requests Table */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 space-y-4">
-            <h2 className="text-lg font-semibold text-mt-dark">
-              {isProcessor ? 'My Requests' : 'All Requests'}
-            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-mt-dark">
+                {mineOnly ? 'My Requests' : 'All Team Requests'}
+                <span className="ml-2 text-xs font-normal text-gray-500">{requests.length} shown</span>
+              </h2>
+              {/* Mine vs Team toggle — every team member can see the full org's
+                  request list now (B3.1 cross-team visibility). They can flip
+                  to "Mine only" if they prefer the single-user view. */}
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                <Link
+                  href={`/${searchQuery ? `?search=${encodeURIComponent(searchQuery)}` : ''}${searchQuery && statusFilter !== 'all' ? '&' : (statusFilter !== 'all' ? '?' : '')}${statusFilter !== 'all' ? `status=${statusFilter}` : ''}`}
+                  className={`px-3 py-1.5 font-semibold transition-colors ${!mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                >
+                  Whole Team
+                </Link>
+                <Link
+                  href={`/?mine=1${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''}${statusFilter !== 'all' ? `&status=${statusFilter}` : ''}`}
+                  className={`px-3 py-1.5 font-semibold transition-colors border-l border-gray-200 ${mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                >
+                  Mine Only
+                </Link>
+              </div>
+            </div>
 
             {/* Search and Filter Controls */}
             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-              {/* Search by loan number */}
+              {/* Search across loan number, entity name, TID — works whole-team */}
               <form method="GET" className="flex gap-2">
-                {statusFilter !== 'all' && (
-                  <input type="hidden" name="status" value={statusFilter} />
-                )}
+                {statusFilter !== 'all' && <input type="hidden" name="status" value={statusFilter} />}
+                {mineOnly && <input type="hidden" name="mine" value="1" />}
                 <input
                   type="text"
                   name="search"
-                  placeholder="Search by loan number..."
+                  placeholder="Search by loan, borrower name, or TID..."
                   defaultValue={searchQuery}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent w-64"
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent w-72"
                 />
                 <button
                   type="submit"
@@ -591,7 +643,7 @@ export default async function DashboardPage({
                 </button>
                 {searchQuery && (
                   <Link
-                    href={statusFilter !== 'all' ? `/?status=${statusFilter}` : '/'}
+                    href={`/${mineOnly ? '?mine=1' : ''}${mineOnly && statusFilter !== 'all' ? '&' : (statusFilter !== 'all' && !mineOnly ? '?' : '')}${statusFilter !== 'all' ? `status=${statusFilter}` : ''}`}
                     className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     Clear

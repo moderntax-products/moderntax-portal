@@ -50,11 +50,12 @@ export default async function RequestDetailPage({ params }: Props) {
 
   if (!profile) redirect('/');
 
-  // Admins can access any request; other roles must belong to the same client
+  // Admins can access any request; other roles must belong to the same client.
+  // Cross-team visibility (B3.1 MVP, Apr 27 Robert/Enterprise Bank): every
+  // team member on the same client can VIEW any request from their org so
+  // they can answer borrower questions / pick up co-worker work. Submission
+  // ownership is still enforced for edit/cancel actions via /api/expert/cancel-request.
   if (profile.role !== 'admin' && profile.client_id !== request.client_id) redirect('/');
-
-  // Processors can only view their own requests
-  if (profile.role === 'processor' && request.requested_by !== user.id) redirect('/');
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
