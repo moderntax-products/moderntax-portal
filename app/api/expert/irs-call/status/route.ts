@@ -139,6 +139,35 @@ export async function GET(request: NextRequest) {
     const liveTranscript: string | null =
       blandStatus?.concatenated_transcript || session.concatenated_transcript || null;
 
+    // Pending fax requests — when the AI fires send_fax mid-call, the entity's
+    // outcome flips to 'fax_pending_manual'. Surface those entities here so
+    // the live UI can show a "FAX NEEDED" banner with the 8821 PDF + fax #.
+    // Expert manually fires fax then clicks "Mark Sent" → flips to 'fax_sent'.
+    const pendingFaxes = await (async () => {
+      const callEnts = (session.irs_call_entities || []).filter(
+        (e: any) => e.outcome === 'fax_pending_manual',
+      );
+      if (callEnts.length === 0) return [];
+      // Pull each entity's signed 8821 URL so the UI can link to it.
+      const ids = callEnts.map((e: any) => e.entity_id);
+      const { data: entityDetails } = await adminSupabase
+        .from('request_entities')
+        .select('id, entity_name, signed_8821_url')
+        .in('id', ids) as { data: any[] | null; error: any };
+      const detailById = new Map((entityDetails || []).map(e => [e.id, e]));
+      return callEnts.map((ce: any) => {
+        const ent = detailById.get(ce.entity_id) || {};
+        return {
+          call_entity_id:    ce.id,
+          entity_id:         ce.entity_id,
+          taxpayer_name:     ce.taxpayer_name || ent.entity_name,
+          fax_number:        ce.fax_number_used,
+          signed_8821_url:   ent.signed_8821_url || null,
+          requested_notes:   ce.outcome_notes,
+        };
+      });
+    })();
+
     return NextResponse.json({
       session: {
         ...session,
@@ -146,6 +175,7 @@ export async function GET(request: NextRequest) {
         running_cost: activeStatuses.includes(session.status) ? runningCost : session.estimated_cost,
         concatenated_transcript: liveTranscript,
       },
+      pendingFaxes,
       blandStatus: blandStatus ? {
         completed: blandStatus.completed,
       } : null,

@@ -197,6 +197,19 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
           vars[`entity_${n}_years`]       = e ? e.years.join(', ') : '';
           vars[`entity_${n}_years_speech`] = e ? formatYearsForSpeech(e.years) : '';
           vars[`entity_${n}_address`]     = e && e.address ? e.address : '';
+          // Pre-compute transcript-types phrase per entity. 1040 returns
+          // include W&I; everything else is just RoA + Tax Return. This
+          // removes "if 1040 then say also wage and income" conditional
+          // logic from the prompt — the LLM was hallucinating "1040" any
+          // time it saw the conditional even on 1120/1065/941 calls.
+          if (e) {
+            const isIndividual = (e.formType || '').toUpperCase().startsWith('1040');
+            vars[`entity_${n}_transcripts_speech`] = isIndividual
+              ? 'record of account transcript, tax return transcript, and wage and income transcript'
+              : 'record of account transcript and tax return transcript';
+          } else {
+            vars[`entity_${n}_transcripts_speech`] = '';
+          }
         }
         return vars;
       })(),

@@ -96,12 +96,30 @@ function formatDuration(seconds: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
+/**
+ * Pending fax request — when the AI fires send_fax mid-call, the IRS
+ * agent expects a fax in 2-5 min. The expert (listening live) is the
+ * one who actually sends it from their fax machine / eFax until we
+ * integrate a real fax API. This banner surfaces the request the moment
+ * the AI calls the tool.
+ */
+interface PendingFax {
+  call_entity_id: string;
+  entity_id: string;
+  taxpayer_name: string;
+  fax_number: string;
+  signed_8821_url: string | null;
+  requested_notes: string;
+}
+
 export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPanelProps) {
   const [session, setSession] = useState<CallSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [localElapsed, setLocalElapsed] = useState(0);
+  const [pendingFaxes, setPendingFaxes] = useState<PendingFax[]>([]);
+  const [markingFaxId, setMarkingFaxId] = useState<string | null>(null);
 
   // Transfer state — transferSuccess stays for auto-bridge visual; transferInfo
   // carries the "auto-transfer is armed" message surfaced by the server route.
@@ -129,6 +147,7 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
       const data = await res.json();
       setSession(data.session);
       setLocalElapsed(data.session.elapsed_seconds || 0);
+      setPendingFaxes(Array.isArray(data.pendingFaxes) ? data.pendingFaxes : []);
 
       if (['completed', 'failed', 'cancelled'].includes(data.session.status)) {
         onCallEnded();
@@ -139,6 +158,28 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
       setLoading(false);
     }
   }, [sessionId, onCallEnded]);
+
+  // Mark a manual fax as actually sent — flips the entity outcome and
+  // clears the banner. Called from the "Mark Sent" button below.
+  const markFaxSent = useCallback(async (callEntityId: string) => {
+    setMarkingFaxId(callEntityId);
+    try {
+      const res = await fetch('/api/expert/irs-call/mark-fax-sent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ call_entity_id: callEntityId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Failed to mark fax sent: ' + (err.error || res.status));
+        return;
+      }
+      // Optimistically clear locally — next poll will confirm.
+      setPendingFaxes(prev => prev.filter(f => f.call_entity_id !== callEntityId));
+    } finally {
+      setMarkingFaxId(null);
+    }
+  }, []);
 
   // Adaptive polling — slow during early call setup, fast once we're close to a live agent.
   // The transfer trigger window is only ~5 seconds wide, so 15s polling is way too slow
@@ -427,6 +468,52 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
           )}
         </div>
       </div>
+
+      {/* FAX NEEDED banner — appears when the AI fires send_fax mid-call.
+          Until we integrate a real fax API (Phaxio / Twilio Fax), the
+          listening expert manually fires the fax to the IRS-supplied number
+          and clicks "Mark Sent" to clear the banner. The AI on the call
+          has already optimistically told IRS "Sent successfully" and is
+          silently waiting for the agent to confirm receipt. */}
+      {pendingFaxes.length > 0 && (
+        <div className="border-2 border-amber-500 bg-amber-50 rounded-lg p-4 mb-3 animate-pulse">
+          <div className="flex items-center gap-2 mb-3">
+            <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span className="font-bold text-amber-900 text-sm uppercase tracking-wide">Fax Needed Now</span>
+            <span className="text-xs text-amber-700">IRS agent is waiting</span>
+          </div>
+          {pendingFaxes.map(fax => (
+            <div key={fax.call_entity_id} className="bg-white rounded p-3 border border-amber-300 mb-2 last:mb-0">
+              <div className="text-sm font-semibold text-mt-dark mb-1">{fax.taxpayer_name}</div>
+              <div className="text-xs text-gray-600 mb-2">
+                Fax 8821 to: <span className="font-mono font-bold text-amber-900">{fax.fax_number}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {fax.signed_8821_url && (
+                  <a
+                    href={`/api/expert/download-8821?path=${encodeURIComponent(fax.signed_8821_url)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700"
+                  >
+                    Open 8821 PDF
+                  </a>
+                )}
+                <button
+                  onClick={() => markFaxSent(fax.call_entity_id)}
+                  disabled={markingFaxId === fax.call_entity_id}
+                  className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {markingFaxId === fax.call_entity_id ? 'Marking...' : '✓ Mark Sent'}
+                </button>
+              </div>
+              <div className="text-[10px] text-gray-500 mt-2">{fax.requested_notes}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Live Audio Panel */}
       {/* Live Transcript — replaces the plan-gated Live Audio feature.

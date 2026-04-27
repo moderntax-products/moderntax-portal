@@ -26,6 +26,15 @@ interface CsvPreviewEntity {
   zipCode: string;
   entityTranscript: boolean;
   missingFields: string[];
+  /**
+   * True when the TID already exists in our system with a signed 8821 on file.
+   * Year-extension flow: the upload route auto-fills missing signer fields
+   * from the existing entity, so missing email/first/last/address fields on
+   * a repeat row are NOT a real validation error.
+   */
+  isRepeat?: boolean;
+  /** Name of the prior entity (for the badge label) */
+  repeatOfName?: string;
 }
 
 export default function NewRequestPage() {
@@ -161,6 +170,41 @@ function CsvUploadTab() {
       });
 
       setPreviewEntities(entities);
+
+      // Year-extension lookup: ask the server which TIDs already have a
+      // signed 8821 on file. Those rows are repeat borrowers — the upload
+      // route's carve-out will auto-fill missing signer fields server-side,
+      // so we surface a "Repeat borrower" badge and forgive their
+      // missingFields entries that the carve-out covers.
+      const tids = entities.map(e => e.tid).filter(Boolean);
+      if (tids.length > 0) {
+        try {
+          const supabase = createClient();
+          const { data: existing } = await supabase
+            .from('request_entities')
+            .select('tid, entity_name')
+            .in('tid', tids)
+            .not('signed_8821_url', 'is', null) as { data: { tid: string; entity_name: string }[] | null; error: unknown };
+          if (existing && existing.length > 0) {
+            const repeatByTid = new Map(existing.map(e => [e.tid, e.entity_name]));
+            // Fields the year-extension carve-out backfills server-side.
+            const carveoutFields = new Set(['email', 'first name', 'last name', 'address', 'city', 'state', 'zip_code']);
+            setPreviewEntities(prev => (prev || []).map(e => {
+              const repeatName = repeatByTid.get(e.tid);
+              if (!repeatName) return e;
+              return {
+                ...e,
+                isRepeat: true,
+                repeatOfName: repeatName,
+                missingFields: e.missingFields.filter(f => !carveoutFields.has(f)),
+              };
+            }));
+          }
+        } catch (err) {
+          // Non-fatal — server will still validate properly. Just no preview enrichment.
+          console.warn('[csv-preview] repeat-borrower lookup failed:', err);
+        }
+      }
     } catch {
       // If parse fails, let the server handle it — clear preview
       setPreviewEntities(null);
@@ -487,9 +531,19 @@ function CsvUploadTab() {
               </thead>
               <tbody>
                 {previewEntities.map((entity) => (
-                  <tr key={entity.rowIndex} className={`border-b border-gray-100 hover:bg-gray-50 ${entity.missingFields.length > 0 ? 'bg-red-50' : ''}`}>
+                  <tr key={entity.rowIndex} className={`border-b border-gray-100 hover:bg-gray-50 ${entity.missingFields.length > 0 ? 'bg-red-50' : entity.isRepeat ? 'bg-emerald-50/40' : ''}`}>
                     <td className="py-2.5 px-3 font-medium text-mt-dark">
-                      {entity.legalName || <span className="text-red-500 italic">missing</span>}
+                      <div className="flex items-center gap-2">
+                        <span>{entity.legalName || <span className="text-red-500 italic">missing</span>}</span>
+                        {entity.isRepeat && (
+                          <span
+                            title={`Existing 8821 on file from prior request for "${entity.repeatOfName}". Signer details will be auto-filled.`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200"
+                          >
+                            ↻ Repeat borrower
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 px-3 font-mono text-gray-600 text-xs">
                       {entity.tid || <span className="text-red-500 italic">missing</span>}
@@ -501,6 +555,8 @@ function CsvUploadTab() {
                           <div>{entity.firstName} {entity.lastName}</div>
                           <div className="text-gray-400 truncate max-w-[160px]">{entity.email || <span className="text-red-500 italic">no email</span>}</div>
                         </div>
+                      ) : entity.isRepeat ? (
+                        <span className="text-emerald-700 italic text-[11px]">auto-filled from existing 8821</span>
                       ) : (
                         <span className="text-red-500 italic">missing name</span>
                       )}
@@ -511,6 +567,8 @@ function CsvUploadTab() {
                           <div className="truncate">{entity.address}</div>
                           <div className="text-gray-400">{entity.city}, {entity.state} {entity.zipCode}</div>
                         </div>
+                      ) : entity.isRepeat ? (
+                        <span className="text-emerald-700 italic text-[11px]">auto-filled</span>
                       ) : (
                         <span className="text-red-500 italic">missing</span>
                       )}

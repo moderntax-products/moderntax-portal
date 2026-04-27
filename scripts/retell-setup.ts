@@ -81,11 +81,11 @@ async function main() {
   const agentConfig = {
     agent_name: AGENT_NAME,
     voice_id: '11labs-Adrian',                 // clean US male practitioner voice
-    voice_temperature: 0.6,                    // lowered from 0.8 — reduces prosody jitter that caused echo complaints
+    voice_temperature: 0.5,                    // lower than before for a flatter, more "professional caller" delivery
     voice_speed: 0.95,                         // slightly slow — IRS agents preferred this in 4/24 test
-    responsiveness: 0.8,                       // fast enough to catch a quick agent greeting
-    interruption_sensitivity: 0.6,             // lowered from 0.9 — fewer false "agent interrupted" triggers on the phone line
-    enable_backchannel: false,                 // don't say "uh-huh" to IRS — unprofessional
+    responsiveness: 0.95,                      // raised — terse responder needs to react fast to each question
+    interruption_sensitivity: 0.5,             // lowered — IRS agents pause mid-question; we don't want false interruptions
+    enable_backchannel: false,                 // never "uh-huh" the IRS — unprofessional
     language: 'en-US',
     response_engine: { type: 'retell-llm' as const, llm_id: llmId },
     max_call_duration_ms: 60 * 60 * 1000,      // 60 min — room for fax waits

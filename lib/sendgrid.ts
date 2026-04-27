@@ -653,6 +653,83 @@ export async function sendStatusChangeNotification(
 }
 
 /**
+ * "First transcript ready" celebration email — fired exactly once per
+ * client, when their FIRST EVER entity flips to status='completed'.
+ *
+ * High-trust moment: the manager has been waiting (often anxiously, often
+ * doubting whether the platform actually works) — this is the moment to
+ * mark the win, push for team expansion, and surface the next-step CTAs
+ * (invite teammates, set up billing for ongoing usage).
+ *
+ * Caller is responsible for verifying it's actually the first completion
+ * (count entities for client where status='completed' BEFORE this update
+ * — if 0, send this; otherwise send the regular sendStatusChangeNotification).
+ */
+export async function sendFirstTranscriptCelebrationEmail(
+  managerEmail: string,
+  managerFirstName: string,
+  clientName: string,
+  entityName: string,
+  loanNumber: string,
+  requestId: string,
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send first-transcript email');
+    return;
+  }
+
+  const content = `
+<p>Hi ${managerFirstName || 'there'},</p>
+
+<p><strong>Big moment — your first IRS transcript just landed in your portal.</strong></p>
+
+<p>${entityName} (loan ${loanNumber}) is now complete. The Record of Account, Tax Return Transcript, and any other transcripts requested are ready to view and download.</p>
+
+<div class="stats" style="margin: 20px 0;">
+  <p style="margin: 0; font-size: 14px;"><strong>What just happened:</strong></p>
+  <ul style="margin: 8px 0 0 20px; padding: 0; font-size: 13px;">
+    <li>We sent a Form 8821 to your borrower for e-signature</li>
+    <li>Once signed, our team called the IRS Practitioner Priority Service on your behalf</li>
+    <li>Transcripts were pulled and routed straight to your portal — no fax, no waiting on hold</li>
+  </ul>
+</div>
+
+<p>This is what every transcript request will look like going forward. Average turnaround: 24-48 hours from 8821 signature.</p>
+
+<p><strong>What's next?</strong></p>
+<ul>
+  <li><strong>Invite your team</strong> — managers can add processors directly. Each new processor on your team multiplies how fast you can clear transcripts for your loan pipeline.</li>
+  <li><strong>Set up billing</strong> — your free trial covers 3 entities. After that, requests are billed at your contracted rate. Add a payment method to keep the pipeline running.</li>
+  <li><strong>Re-pull anytime</strong> — once a borrower's 8821 is on file, year-extension requests skip the signature step entirely.</li>
+</ul>
+
+<p>Welcome to ModernTax. We're glad you're here.</p>
+
+<p>Reply with any questions — I'm in the inbox daily.</p>
+
+<p style="margin-top: 20px;">— Matt</p>
+  `.trim();
+
+  const html = createEmailTemplate(
+    `🎉 ${entityName}'s transcripts are ready`,
+    content,
+    { text: 'View Your First Transcript', url: `${appUrl}/request/${requestId}` },
+  );
+
+  try {
+    await sgMail.send({
+      to: managerEmail,
+      from: fromEmail,
+      subject: `🎉 ${clientName} — your first IRS transcript just landed`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send first-transcript celebration email:', error);
+  }
+}
+
+/**
  * Send expert issue notification to admin
  * Triggered when expert flags an issue with an assignment
  */

@@ -140,12 +140,30 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
     }
   });
 
-  // Get invoices for this client
+  // Get invoices for this client (includes Mercury pay URLs + PDF URLs once
+  // the auto-invoice cron has fired and the daily mercury-reconcile sync ran)
   const { data: invoices } = await supabase
     .from('invoices')
     .select('*')
     .eq('client_id', profile.client_id)
     .order('billing_period_start', { ascending: false }) as { data: any[] | null; error: any };
+
+  // ===== "This month so far" — real-time billing projection =====
+  // Computed live from completed entities (NOT the invoice row, which only
+  // exists after the 1st-of-month auto-invoice cron). Lets the manager see
+  // exactly what their next Mercury invoice will look like before it fires.
+  const now = new Date();
+  const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const thisMonthEntities = allCompletedEntities.filter(e => e.month === thisMonthKey);
+  const thisMonthBillable = thisMonthEntities.filter(e => !freeEntityIds.has(e.id));
+  const thisMonthTotal = thisMonthBillable.reduce((sum, e) => sum + e.rate, 0);
+  const thisMonthFreeCount = thisMonthEntities.length - thisMonthBillable.length;
+  // Daily run rate = entities so far / days elapsed → projected to month-end
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const projectedTotal = dayOfMonth > 0
+    ? Math.round((thisMonthTotal / dayOfMonth) * daysInMonth * 100) / 100
+    : thisMonthTotal;
 
   // Find invoice for active month
   const activeInvoice = activeMonth
@@ -242,6 +260,51 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
               initialApEmail={client.billing_ap_email || ''}
               initialApPhone={client.billing_ap_phone || ''}
             />
+          </div>
+        </div>
+
+        {/* Live "This Month" Projection — refreshes every page load (server component).
+            Mercury auto-invoice fires on the 1st of each month at 06:00 UTC; this
+            panel shows what that invoice will look like BEFORE it fires. Replaces
+            the old "wait until invoice arrives to know what you owe" experience. */}
+        <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/40 border border-emerald-200 rounded-lg p-5 mb-6">
+          <div className="flex flex-wrap items-baseline justify-between mb-3 gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-mt-dark">This Month So Far</h2>
+              <p className="text-xs text-gray-600">
+                {formatMonth(thisMonthKey)} · day {dayOfMonth} of {daysInMonth} · live count
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Projected total</p>
+              <p className="text-2xl font-bold text-emerald-700">
+                ${projectedTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div className="bg-white rounded p-3">
+              <p className="text-xs text-gray-500 uppercase">Completed</p>
+              <p className="text-lg font-bold text-mt-dark mt-1">{thisMonthEntities.length}</p>
+              <p className="text-xs text-gray-500">{thisMonthBillable.length} billable, {thisMonthFreeCount} free-trial</p>
+            </div>
+            <div className="bg-white rounded p-3">
+              <p className="text-xs text-gray-500 uppercase">Billed so far</p>
+              <p className="text-lg font-bold text-mt-dark mt-1">
+                ${thisMonthTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+              <p className="text-xs text-gray-500">at ${ratePdf.toFixed(2)}/PDF · ${rateCsv.toFixed(2)}/CSV</p>
+            </div>
+            <div className="bg-white rounded p-3">
+              <p className="text-xs text-gray-500 uppercase">Next invoice fires</p>
+              <p className="text-lg font-bold text-mt-dark mt-1">
+                {(() => {
+                  const nextInvoiceDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                  return nextInvoiceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                })()}
+              </p>
+              <p className="text-xs text-gray-500">via Mercury · ACH</p>
+            </div>
           </div>
         </div>
 
@@ -436,6 +499,7 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Due Date</th>
                             <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Payment</th>
+                            <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
@@ -445,7 +509,12 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                               <td className="px-6 py-4 text-sm text-gray-600">
                                 {formatMonth(inv.billing_period_start.slice(0, 7))}
                               </td>
-                              <td className="px-6 py-4 text-sm text-gray-600">{inv.total_entities}</td>
+                              <td className="px-6 py-4 text-sm text-gray-600">
+                                {inv.total_entities}
+                                {inv.monitoring_entities > 0 && (
+                                  <span className="block text-xs text-gray-400">+{inv.monitoring_entities} monitoring</span>
+                                )}
+                              </td>
                               <td className="px-6 py-4 text-sm font-semibold text-gray-900">
                                 ${Number(inv.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
@@ -462,6 +531,33 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                                 {inv.mercury_reference && (
                                   <span className="text-xs text-gray-400 block">Ref: {inv.mercury_reference}</span>
                                 )}
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex gap-2">
+                                  {inv.mercury_pay_url && inv.status !== 'paid' && (
+                                    <a
+                                      href={inv.mercury_pay_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2.5 py-1 text-xs font-semibold rounded bg-mt-green text-white hover:bg-mt-green/90"
+                                    >
+                                      Pay →
+                                    </a>
+                                  )}
+                                  {inv.mercury_pdf_url && (
+                                    <a
+                                      href={inv.mercury_pdf_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2.5 py-1 text-xs font-medium rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                                    >
+                                      PDF
+                                    </a>
+                                  )}
+                                  {!inv.mercury_pay_url && !inv.mercury_pdf_url && (
+                                    <span className="text-xs text-gray-400 italic">—</span>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           ))}

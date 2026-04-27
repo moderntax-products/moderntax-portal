@@ -242,56 +242,65 @@ export function formatNATOSpelling(s: string): string {
 }
 
 /**
- * Speech form for tax form numbers. "1120S" → "eleven-twenty-S",
- * "1040" → "ten-forty", "941" → "nine-forty-one".
+ * Spelled-out form names so TTS doesn't read them as cardinal numbers.
+ *
+ * Bug history:
+ *   • Pass 1: returned "eleven-twenty-S" with hyphens — TTS spoke the
+ *     dashes as "eleven dash twenty dash S".
+ *   • Pass 2: returned raw "1120-S" hoping TTS would handle it — TTS
+ *     read "8821" as "eight thousand eight hundred twenty-one"
+ *     (Matt 4/25 PSTN test).
+ *   • Pass 3 (this version): explicit spelled-out form names with
+ *     spaces, matching how actual tax practitioners say them on PPS
+ *     calls. Hyphens only inside compound numbers like "twenty-one".
  */
 export function formatFormForSpeech(form: string): string {
-  const s = (form || '').toUpperCase().trim();
+  const s = (form || '').trim().toUpperCase();
   const map: Record<string, string> = {
-    '1040':  'ten-forty',
-    '1040X': 'ten-forty-X',
-    '1065':  'ten-sixty-five',
-    '1120':  'eleven-twenty',
-    '1120S': 'eleven-twenty-S',
-    '941':   'nine-forty-one',
-    '940':   'nine-forty',
-    '2848':  'twenty-eight-forty-eight',
-    '8821':  'eighty-eight-twenty-one',
+    '1040':   'ten forty',
+    '1040X':  'ten forty X',
+    '1040EZ': 'ten forty E Z',
+    '1065':   'ten sixty-five',
+    '1120':   'eleven twenty',
+    '1120S':  'eleven twenty S',
+    '1120X':  'eleven twenty X',
+    '1099':   'ten ninety-nine',
+    '940':    'nine forty',
+    '941':    'nine forty-one',
+    '944':    'nine forty-four',
+    '2848':   'twenty-eight forty-eight',
+    '8821':   'eighty-eight twenty-one',
+    '8879':   'eighty-eight seventy-nine',
+    '4506':   'forty-five oh-six',
+    '4506T':  'forty-five oh-six T',
+    'W2':     'W two',
+    'W-2':    'W two',
+    'W3':     'W three',
+    'W-3':    'W three',
   };
   return map[s] || s;
 }
 
 /**
- * Speech form for a year like 2022. "twenty twenty-two".
+ * Years stay as raw 4-digit strings — modern TTS speaks "2022" as
+ * "twenty twenty-two" naturally. Pre-spelling (e.g. forcing
+ * "twenty twenty-two") created weird hyphenation artifacts in the
+ * 4/25 PSTN test ("agent not using natural human language").
  */
 export function formatYearForSpeech(year: string): string {
-  const y = parseInt(year, 10);
-  if (!y || y < 1900 || y > 2099) return year;
-  if (y >= 2000 && y <= 2009) return `two thousand ${['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][y - 2000]}`;
-  if (y >= 2010 && y <= 2019) {
-    const w: Record<number, string> = { 10: 'ten', 11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen' };
-    return `twenty ${w[y - 2000]}`;
-  }
-  if (y >= 2020 && y <= 2099) {
-    const ones = y % 10;
-    const tensWord = Math.floor((y % 100) / 10);
-    const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'][tensWord] || '';
-    const ow = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][ones];
-    return `twenty ${tens}${ones ? '-' + ow : ''}`;
-  }
-  return year;
+  return (year || '').trim();
 }
 
 /**
- * Join year strings into a natural speech pattern: "twenty twenty-two,
- * twenty twenty-three, and twenty twenty-four".
+ * Join years into a natural English list: "2022, 2023, and 2024".
+ * TTS speaks each year naturally on its own.
  */
 export function formatYearsForSpeech(years: string[]): string {
-  if (years.length === 0) return '';
-  if (years.length === 1) return formatYearForSpeech(years[0]);
-  const spoken = years.map(formatYearForSpeech);
-  if (spoken.length === 2) return `${spoken[0]} and ${spoken[1]}`;
-  return `${spoken.slice(0, -1).join(', ')}, and ${spoken[spoken.length - 1]}`;
+  const cleaned = (years || []).map(y => (y || '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return '';
+  if (cleaned.length === 1) return cleaned[0];
+  if (cleaned.length === 2) return `${cleaned[0]} and ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(', ')}, and ${cleaned[cleaned.length - 1]}`;
 }
 
 /**

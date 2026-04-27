@@ -118,6 +118,14 @@ export async function POST(request: NextRequest) {
     vars[`entity_${n}_years`]        = e ? e.years.join(', ') : '';
     vars[`entity_${n}_years_speech`] = e ? formatYearsForSpeech(e.years) : '';
     vars[`entity_${n}_address`]      = e?.address || '';
+    if (e) {
+      const isIndividual = (e.formType || '').toUpperCase().startsWith('1040');
+      vars[`entity_${n}_transcripts_speech`] = isIndividual
+        ? 'record of account transcript, tax return transcript, and wage and income transcript'
+        : 'record of account transcript and tax return transcript';
+    } else {
+      vars[`entity_${n}_transcripts_speech`] = '';
+    }
   }
 
   const res = await createPhoneCall({

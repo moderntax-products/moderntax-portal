@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendStatusChangeNotification } from '@/lib/sendgrid';
+import { sendStatusChangeNotification, sendFirstTranscriptCelebrationEmail } from '@/lib/sendgrid';
 import { triggerWebhookForRequest, triggerErrorWebhookForRequest } from '@/lib/webhook';
 
 export async function POST(request: Request) {
@@ -162,6 +162,57 @@ export async function POST(request: Request) {
             );
           } catch (emailError) {
             console.error('Failed to send entity status change email:', emailError);
+          }
+        }
+
+        // First-transcript celebration: when an entity flips to 'completed'
+        // AND it's the FIRST EVER completion for this client, fire a special
+        // celebratory email to all managers on the client. High-trust moment
+        // — the prompt is to invite team + set up billing while the win is
+        // fresh.
+        if (status === 'completed' && oldEntityStatus !== 'completed' && currentEntity?.requests?.client_id) {
+          try {
+            const clientId: string = currentEntity.requests.client_id;
+            // Count completed entities for this client BEFORE this update.
+            // If 0, this is the first one — celebrate. (We exclude the current
+            // entity by querying for entities that completed_at IS NOT NULL.)
+            const { count: priorCompleted } = await adminSupabase
+              .from('request_entities')
+              .select('id, requests!inner(client_id)', { count: 'exact', head: true })
+              .eq('status', 'completed')
+              .eq('requests.client_id', clientId)
+              .neq('id', entityId);
+            if ((priorCompleted ?? 0) === 0) {
+              // Look up all managers on this client and the client name.
+              const { data: client } = await adminSupabase
+                .from('clients')
+                .select('name')
+                .eq('id', clientId)
+                .single() as { data: { name: string } | null; error: any };
+              const { data: managers } = await adminSupabase
+                .from('profiles')
+                .select('email, full_name')
+                .eq('client_id', clientId)
+                .eq('role', 'manager') as { data: { email: string; full_name: string | null }[] | null; error: any };
+              for (const mgr of (managers || [])) {
+                if (!mgr.email) continue;
+                const firstName = (mgr.full_name || '').trim().split(/\s+/)[0] || '';
+                try {
+                  await sendFirstTranscriptCelebrationEmail(
+                    mgr.email,
+                    firstName,
+                    client?.name || 'your team',
+                    currentEntity.entity_name,
+                    currentEntity.requests.loan_number || currentEntity.request_id,
+                    currentEntity.request_id,
+                  );
+                } catch (celebrateErr) {
+                  console.error(`[update-request] first-transcript email to ${mgr.email} failed:`, celebrateErr);
+                }
+              }
+            }
+          } catch (celebrateScanErr) {
+            console.error('[update-request] first-transcript scan failed:', celebrateScanErr);
           }
         }
 
