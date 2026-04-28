@@ -19,7 +19,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 
 interface Step {
   id: string;
@@ -350,17 +349,20 @@ export function OnboardingTour({ userRole, alreadyCompleted }: Props) {
           </ul>
 
           {/* Try-it CTA — opens the relevant feature in a new tab so the
-              tour stays open. Skipped on welcome + finish steps. */}
+              tour stays open. Skipped on welcome + finish steps.
+              Uses plain <a> not <Link> — Next.js Link can intercept the
+              click for client-side routing even with target="_blank",
+              which makes the new tab silently no-op. */}
           {step.cta.href !== '#' && stepIndex !== visibleSteps.length - 1 && (
             <div className="text-center mb-6">
-              <Link
+              <a
                 href={step.cta.href}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-mt-green border-2 border-mt-green rounded-lg hover:bg-mt-green hover:text-white transition-colors"
               >
                 {step.cta.label}
-              </Link>
+              </a>
               <p className="text-xs text-gray-500 mt-1">Opens in a new tab so you can come back here</p>
             </div>
           )}

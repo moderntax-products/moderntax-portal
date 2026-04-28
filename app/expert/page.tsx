@@ -37,7 +37,7 @@ export default function ExpertDashboard() {
   const [completedAll, setCompletedAll] = useState<AssignmentData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null } | null>(null);
+  const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null } | null>(null);
   const [activeTab, setActiveTab] = useState<'assignments' | 'call-history'>('assignments');
   const [selectedForCall, setSelectedForCall] = useState<{ id: string; entityName: string; entityId: string }[]>([]);
   // Multi-call orchestration: experts run multiple AI calls concurrently
@@ -102,17 +102,26 @@ export default function ExpertDashboard() {
         .eq('id', user.id)
         .single();
 
-      if (profileError || !profileData || profileData.role !== 'expert') {
+      // Allow expert (their queue) AND admin (QA / support / tour
+      // walkthrough) to load this page. Anyone else gets bounced.
+      // Admins see the same UI but their assignments query returns
+      // their own (typically empty) — that's fine for walking through
+      // the tour or debugging a specific expert's setup.
+      if (profileError || !profileData || !['expert', 'admin'].includes(profileData.role)) {
         router.push('/');
         return;
       }
 
-      // Fetch credential fields separately (may not exist if migration not run)
-      const { data: credentialData } = await supabase
+      // Fetch credential fields separately (may not exist if migration not run).
+      // Cast to any because the typegen file lags behind the migrations
+      // adding onboarding_completed_at / onboarding_dismissed_at — the
+      // columns DO exist in production once migration-onboarding-tracking
+      // is applied; we just haven't regenerated lib/database.types.ts.
+      const { data: credentialData } = await (supabase
         .from('profiles')
-        .select('caf_number, ptin, phone_number, address')
+        .select('caf_number, ptin, phone_number, address, onboarding_completed_at, onboarding_dismissed_at')
         .eq('id', user.id)
-        .single();
+        .single() as any) as { data: any };
 
       const mergedProfile = {
         ...profileData,
@@ -120,6 +129,8 @@ export default function ExpertDashboard() {
         ptin: credentialData?.ptin || null,
         phone_number: credentialData?.phone_number || null,
         address: credentialData?.address || null,
+        onboarding_completed_at: credentialData?.onboarding_completed_at || null,
+        onboarding_dismissed_at: credentialData?.onboarding_dismissed_at || null,
       };
 
       setProfile(mergedProfile);
@@ -220,7 +231,7 @@ export default function ExpertDashboard() {
         </div>
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Expert Queue</h1>
             <p className="text-sm text-gray-500 mt-1">
@@ -228,6 +239,20 @@ export default function ExpertDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <a
+              href="/expert/timesheet"
+              className="px-4 py-2 text-sm bg-mt-green text-white rounded-lg hover:bg-mt-green/90 font-semibold"
+              title="Clock in/out and track your hours + TINs for pay periods"
+            >
+              Timesheet
+            </a>
+            <a
+              href="/expert/onboarding"
+              className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              title="Take the expert onboarding tour"
+            >
+              Help / Tour
+            </a>
             <button
               onClick={() => router.push('/expert/profile')}
               className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -249,6 +274,33 @@ export default function ExpertDashboard() {
             <LogoutButton />
           </div>
         </div>
+
+        {/* Welcome / Take-the-tour banner — shown until expert finishes
+            or dismisses the /expert/onboarding tutorial. Help link in
+            the header stays visible always so they can re-take it. */}
+        {profile && !profile.onboarding_completed_at && !profile.onboarding_dismissed_at && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-full bg-white">
+                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-blue-900">New here? Take the 5-minute expert tour.</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  Walks you through profile setup, multi-call orchestration, IRS Direct Upload, schedule, and the SLA clock — all the workflow you need to take your first assignment.
+                </p>
+              </div>
+            </div>
+            <a
+              href="/expert/onboarding"
+              className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Start tour →
+            </a>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-8">

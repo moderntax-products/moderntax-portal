@@ -185,8 +185,8 @@ export function formatDigitsForSpeech(input: string): string {
 }
 
 /**
- * Speech form of CAF number — e.g. "0316-30210R" → "zero three one six,
- * three zero two one zero, Romeo". Handles the trailing letter separately
+ * Speech form of CAF number — e.g. "1234-56789R" → "one two three four,
+ * five six seven eight nine, Romeo". Handles the trailing letter separately
  * so the AI says the NATO phonetic for it.
  */
 export function formatCafForSpeech(caf: string): string {

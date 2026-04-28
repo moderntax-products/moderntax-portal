@@ -56,15 +56,50 @@ export default function ExpertProfilePage() {
         return;
       }
 
-      const { data: profileData } = await supabase
+      // Main profile fetch — voice_sample_url is fetched separately
+      // because that column is added by migration-expert-voice.sql
+      // which may not have run yet. Including it inline would 500 the
+      // whole page on environments where the column doesn't exist.
+      const { data: profileData, error: profileFetchError } = await supabase
         .from('profiles')
-        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, voice_sample_url')
+        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
         .eq('id', user.id)
         .single();
 
-      if (!profileData || profileData.role !== 'expert') {
+      // Distinguish "we got data and the role is wrong" (real auth failure
+      // → bounce) from "fetch errored" (network blip → show error and let
+      // the user retry, don't redirect). Previous behaviour redirected on
+      // any null profileData, which was indistinguishable from a transient
+      // DNS / network failure and bounced experts back to /expert with no
+      // explanation. Lots of pain on flaky wifi.
+      if (profileFetchError) {
+        setError(`Could not load your profile: ${profileFetchError.message}. Refresh to retry.`);
+        setLoading(false);
+        return;
+      }
+      if (!profileData) {
+        setError('Profile not found. Please contact support.');
+        setLoading(false);
+        return;
+      }
+      if (!['expert', 'admin'].includes(profileData.role)) {
         router.push('/');
         return;
+      }
+
+      // Optional: pull voice_sample_url separately. Wrapped so a missing
+      // column or fetch failure just leaves it blank — the VoiceRecorder
+      // still works for new recordings.
+      let voiceSampleUrl = '';
+      try {
+        const { data: voiceData } = await (supabase
+          .from('profiles')
+          .select('voice_sample_url')
+          .eq('id', user.id)
+          .single() as any) as { data: { voice_sample_url: string | null } | null };
+        if (voiceData?.voice_sample_url) voiceSampleUrl = voiceData.voice_sample_url;
+      } catch {
+        // Column missing or transient failure — keep blank.
       }
 
       setProfile({
@@ -77,7 +112,7 @@ export default function ExpertProfilePage() {
         city: profileData.city || '',
         state: profileData.state || '',
         zip_code: profileData.zip_code || '',
-        voice_sample_url: profileData.voice_sample_url || '',
+        voice_sample_url: voiceSampleUrl,
       });
       setLoading(false);
     }
@@ -222,7 +257,7 @@ export default function ExpertProfilePage() {
               type="text"
               value={profile.full_name}
               onChange={(e) => handleChange('full_name', e.target.value)}
-              placeholder="LaTonya Holmes"
+              placeholder="Jane Smith"
               required
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
             />
@@ -238,7 +273,7 @@ export default function ExpertProfilePage() {
               type="text"
               value={profile.address}
               onChange={(e) => handleChange('address', e.target.value)}
-              placeholder="8465 Houndstooth Enclave Dr."
+              placeholder="123 Main Street"
               required
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
             />
@@ -253,7 +288,7 @@ export default function ExpertProfilePage() {
                 type="text"
                 value={profile.city}
                 onChange={(e) => handleChange('city', e.target.value)}
-                placeholder="New Port Richey"
+                placeholder="Anytown"
                 required
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
               />
@@ -282,7 +317,7 @@ export default function ExpertProfilePage() {
                 type="text"
                 value={profile.zip_code}
                 onChange={(e) => handleChange('zip_code', e.target.value)}
-                placeholder="34655"
+                placeholder="12345"
                 required
                 maxLength={10}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
@@ -303,7 +338,7 @@ export default function ExpertProfilePage() {
                   type="text"
                   value={profile.caf_number}
                   onChange={(e) => handleChange('caf_number', e.target.value)}
-                  placeholder="0315-23641R"
+                  placeholder="1234-56789R"
                   required
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm font-mono"
                 />
@@ -317,7 +352,7 @@ export default function ExpertProfilePage() {
                   type="text"
                   value={profile.ptin}
                   onChange={(e) => handleChange('ptin', e.target.value)}
-                  placeholder="P00373519"
+                  placeholder="P12345678"
                   required
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm font-mono"
                 />
@@ -339,7 +374,7 @@ export default function ExpertProfilePage() {
                   type="tel"
                   value={profile.phone_number}
                   onChange={(e) => handleChange('phone_number', e.target.value)}
-                  placeholder="727-888-1441"
+                  placeholder="555-555-5555"
                   required
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
                 />

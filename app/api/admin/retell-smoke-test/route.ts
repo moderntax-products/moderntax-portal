@@ -88,8 +88,8 @@ export async function POST(request: NextRequest) {
 
   const vars: Record<string, string> = {
     expert_name: profile?.full_name || 'Matthew Parker',
-    caf_number: profile?.caf_number || '0316-30210R',
-    caf_number_speech: formatCafForSpeech(profile?.caf_number || '0316-30210R'),
+    caf_number: profile?.caf_number || '1234-56789R',
+    caf_number_speech: formatCafForSpeech(profile?.caf_number || '1234-56789R'),
     expert_fax: profile?.fax_number || '',
     expert_fax_speech: formatDigitsForSpeech((profile?.fax_number || '').slice(0, 3)),
     expert_phone: profile?.phone_number || '',

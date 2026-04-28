@@ -610,6 +610,13 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 Pending Signups
               </Link>
               <Link
+                href="/admin/payroll"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                title="Expert payroll — close periods + mark paid"
+              >
+                Payroll
+              </Link>
+              <Link
                 href="/"
                 className="text-gray-600 hover:text-gray-900 font-medium text-xs sm:text-sm"
               >
