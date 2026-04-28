@@ -6,15 +6,20 @@ interface IrsCallLauncherProps {
   selectedAssignments: { id: string; entityName: string; entityId: string }[];
   onCallStarted: (sessionId: string) => void;
   onClearSelection: () => void;
-  activeCallSessionId: string | null;
+  /** How many calls this expert currently has active (running or on hold). */
+  activeCallCount: number;
+  /** Hard cap on concurrent active calls per expert (multi-call orchestration). */
+  maxConcurrent: number;
 }
 
 export function IrsCallLauncher({
   selectedAssignments,
   onCallStarted,
   onClearSelection,
-  activeCallSessionId,
+  activeCallCount,
+  maxConcurrent,
 }: IrsCallLauncherProps) {
+  const atCapacity = activeCallCount >= maxConcurrent;
   const [initiating, setInitiating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -108,8 +113,21 @@ export function IrsCallLauncher({
     return days;
   };
 
-  if (activeCallSessionId) {
-    return null; // Status panel handles active calls
+  // Concurrency cap reached — show a "you're at the limit" hint instead
+  // of hiding the launcher entirely. Lets the expert know they CAN start
+  // another call once one of the current ones finishes.
+  if (atCapacity) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 flex items-center gap-3">
+        <svg className="w-5 h-5 text-amber-700 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+        </svg>
+        <div className="flex-1 text-sm">
+          <p className="font-semibold text-amber-900">At concurrent-call cap ({activeCallCount} / {maxConcurrent})</p>
+          <p className="text-amber-800 text-xs mt-0.5">Finish or transfer one of the active calls below to free up a slot. Multi-call orchestration is capped per expert to keep cognitive load manageable.</p>
+        </div>
+      </div>
+    );
   }
 
   if (selectedAssignments.length === 0) {

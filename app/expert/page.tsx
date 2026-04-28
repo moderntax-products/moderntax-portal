@@ -40,29 +40,38 @@ export default function ExpertDashboard() {
   const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null } | null>(null);
   const [activeTab, setActiveTab] = useState<'assignments' | 'call-history'>('assignments');
   const [selectedForCall, setSelectedForCall] = useState<{ id: string; entityName: string; entityId: string }[]>([]);
-  const [activeCallSessionId, setActiveCallSessionId] = useState<string | null>(null);
+  // Multi-call orchestration: experts run multiple AI calls concurrently
+  // (target throughput: ~20 calls/hour). Cap at MAX_CONCURRENT_CALLS so a
+  // single human's cognitive load stays manageable. Phase 2 will add an
+  // urgency indicator + auto-detect AI breakdown so the human knows
+  // which call needs attention.
+  const MAX_CONCURRENT_CALLS = 3;
+  const [activeCallSessionIds, setActiveCallSessionIds] = useState<string[]>([]);
   const supabase = createClient();
   const router = useRouter();
 
-  // Check for active IRS call on load
+  // Check for active IRS calls on load — pulls ALL running sessions for
+  // this expert (not just the first) so the dashboard restores state
+  // after a refresh / browser close.
   useEffect(() => {
-    async function checkActiveCall() {
+    async function checkActiveCalls() {
       try {
-        const res = await fetch('/api/expert/irs-call/history?limit=1');
+        const res = await fetch('/api/expert/irs-call/history?limit=10');
         if (res.ok) {
           const data = await res.json();
+          const runningStatuses = ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'];
           const activeSessions = (data.sessions || []).filter((s: any) =>
-            ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'].includes(s.status)
+            runningStatuses.includes(s.status)
           );
           if (activeSessions.length > 0) {
-            setActiveCallSessionId(activeSessions[0].id);
+            setActiveCallSessionIds(activeSessions.slice(0, MAX_CONCURRENT_CALLS).map((s: any) => s.id));
           }
         }
       } catch (err) {
-        // Non-fatal
+        // Non-fatal — empty active-call list is the safe default
       }
     }
-    checkActiveCall();
+    checkActiveCalls();
   }, []);
 
   const handleToggleSelect = (id: string, entityName: string, entityId: string) => {
@@ -261,12 +270,37 @@ export default function ExpertDashboard() {
           </div>
         </div>
 
-        {/* IRS Call Status Panel (when call is active) */}
-        {activeCallSessionId && (
-          <IrsCallStatusPanel
-            sessionId={activeCallSessionId}
-            onCallEnded={() => { setActiveCallSessionId(null); fetchData(); }}
-          />
+        {/* Multi-call console — one panel per concurrently active call.
+            Each panel carries its own transcript stream, take-over button,
+            and end-call action. The expert orchestrates several at once;
+            when AI breaks down (fax send, repeated tool failure, IVR
+            confusion), they take over the affected call without
+            disrupting the others. Capped at MAX_CONCURRENT_CALLS. */}
+        {activeCallSessionIds.length > 0 && (
+          <div className="mb-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-gray-700">
+                Active calls ({activeCallSessionIds.length} / {MAX_CONCURRENT_CALLS})
+              </h2>
+              <p className="text-xs text-gray-500">Take over any call by clicking its transfer button below.</p>
+            </div>
+            {activeCallSessionIds.map((sessionId, idx) => (
+              <div key={sessionId} className="relative">
+                <div className="absolute -left-2 top-2 z-10">
+                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-mt-dark text-white text-xs font-bold shadow">
+                    {idx + 1}
+                  </span>
+                </div>
+                <IrsCallStatusPanel
+                  sessionId={sessionId}
+                  onCallEnded={() => {
+                    setActiveCallSessionIds(prev => prev.filter(id => id !== sessionId));
+                    fetchData();
+                  }}
+                />
+              </div>
+            ))}
+          </div>
         )}
 
         {/* Tab Navigation */}
@@ -298,12 +332,20 @@ export default function ExpertDashboard() {
         ) : (
         <>
 
-        {/* IRS Call Launcher (multi-entity selection) */}
+        {/* IRS Call Launcher (multi-entity selection).
+            Capacity-aware: only allows starting a new call when the expert
+            has < MAX_CONCURRENT_CALLS active. New session_id appended to
+            activeCallSessionIds so the panel above renders alongside any
+            existing in-flight calls. */}
         <IrsCallLauncher
           selectedAssignments={selectedForCall}
-          onCallStarted={(sessionId) => { setActiveCallSessionId(sessionId); setSelectedForCall([]); }}
+          onCallStarted={(sessionId) => {
+            setActiveCallSessionIds(prev => [...prev, sessionId].slice(0, MAX_CONCURRENT_CALLS));
+            setSelectedForCall([]);
+          }}
           onClearSelection={() => setSelectedForCall([])}
-          activeCallSessionId={activeCallSessionId}
+          activeCallCount={activeCallSessionIds.length}
+          maxConcurrent={MAX_CONCURRENT_CALLS}
         />
 
         {/* IRS Direct Upload — Primary Workflow */}
@@ -421,7 +463,10 @@ export default function ExpertDashboard() {
                 key={assignment.id}
                 assignment={assignment}
                 onRefresh={fetchData}
-                selectable={!activeCallSessionId}
+                // Selectable as long as we're under the concurrent-call cap —
+                // starting a 2nd or 3rd call should still be possible while
+                // earlier calls are running.
+                selectable={activeCallSessionIds.length < MAX_CONCURRENT_CALLS}
                 selected={selectedForCall.some(s => s.id === assignment.id)}
                 onToggleSelect={handleToggleSelect}
               />
