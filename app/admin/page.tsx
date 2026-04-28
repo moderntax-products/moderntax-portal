@@ -603,6 +603,13 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 Team
               </Link>
               <Link
+                href="/admin/pending-signups"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
+                title="Sign-ups awaiting admin approval"
+              >
+                Pending Signups
+              </Link>
+              <Link
                 href="/"
                 className="text-gray-600 hover:text-gray-900 font-medium text-xs sm:text-sm"
               >

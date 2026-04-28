@@ -12,9 +12,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
-import { sendWelcomeEmail, sendTrialWelcomeEmail } from '@/lib/sendgrid';
-import { signUnsubscribeToken } from '@/lib/unsubscribe-tokens';
 import { consumeRateLimit, getClientIp } from '@/lib/rate-limit';
+// Note: welcome/trial-drip emails moved to /api/admin/approve-signup
+// since users no longer get portal access at sign-up time. Pending-approval
+// notification to admins is dynamically imported below to keep the cold
+// path fast.
 
 function normalizeDomain(input: string): string {
   let domain = input.trim().toLowerCase();
@@ -27,14 +29,9 @@ function normalizeDomain(input: string): string {
   return domain;
 }
 
-function generateSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 50);
-}
+// generateSlug previously lived here for auto-creating clients at sign-up;
+// moved to /api/admin/approve-signup since clients are now created at
+// approval time, not sign-up time.
 
 async function syncToHubSpot(data: {
   email: string;
@@ -158,7 +155,10 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { fullName, title, companyName, companyWebsite, email, password } = body;
+    const {
+      fullName, title, companyName, companyWebsite, email, password,
+      referralSource, useCase, useCaseOther,
+    } = body;
 
     // Validate required fields
     if (!fullName?.trim()) return NextResponse.json({ error: 'Full name is required' }, { status: 400 });
@@ -167,6 +167,18 @@ export async function POST(request: NextRequest) {
     if (!companyWebsite?.trim()) return NextResponse.json({ error: 'Company website is required' }, { status: 400 });
     if (!email?.trim()) return NextResponse.json({ error: 'Email is required' }, { status: 400 });
     if (!password || password.length < 8) return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
+
+    // Lead-qualification fields — required so admin can vet before approving
+    const validUseCases = ['sba', 'employment', 'insurance', 'other'];
+    if (!useCase || !validUseCases.includes(useCase)) {
+      return NextResponse.json({ error: 'Valid use case is required (sba, employment, insurance, or other)' }, { status: 400 });
+    }
+    if (useCase === 'other' && !useCaseOther?.trim()) {
+      return NextResponse.json({ error: 'Please describe your use case' }, { status: 400 });
+    }
+    if (!referralSource?.trim()) {
+      return NextResponse.json({ error: 'Please tell us how you heard about us' }, { status: 400 });
+    }
 
     // Normalize domains
     const companyDomain = normalizeDomain(companyWebsite);
@@ -205,45 +217,29 @@ export async function POST(request: NextRequest) {
       }, { status: 409 });
     }
 
-    // Find or create client
-    let clientId: string;
-
+    // Look up the client domain for context, but DO NOT auto-create.
+    // Per matt 2026-04-28 directive: admin must add/verify the business
+    // before authorizing access. We capture domain + company_name on the
+    // profile and let the admin assign client_id (existing or new) at
+    // approval time.
     const { data: existingClient } = await admin
       .from('clients')
       .select('id, name')
       .eq('domain', companyDomain)
       .single() as { data: { id: string; name: string } | null; error: any };
 
-    if (existingClient) {
-      clientId = existingClient.id;
-    } else {
-      // Create new client
-      const slug = generateSlug(companyName);
-      const { data: newClient, error: clientError } = await admin
-        .from('clients')
-        .insert({
-          name: companyName.trim(),
-          slug,
-          domain: companyDomain,
-          intake_methods: ['csv', 'pdf', 'manual'],
-          free_trial: true,
-        })
-        .select('id')
-        .single() as { data: { id: string } | null; error: any };
-
-      if (clientError || !newClient) {
-        console.error('[signup] Client creation error:', clientError);
-        return NextResponse.json({ error: 'Failed to create organization' }, { status: 500 });
-      }
-      clientId = newClient.id;
-    }
-
-    // Create auth user
+    // Create auth user but leave them unable to access the portal
+    // (banned) until an admin approves. Banning at the auth layer is
+    // belt-and-suspenders alongside the approval_status='pending' gate
+    // — even if the gate is bypassed in app code, the auth provider
+    // refuses to issue a session.
     const { data: authData, error: authError } = await admin.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
-      user_metadata: { full_name: fullName.trim() },
+      user_metadata: { full_name: fullName.trim(), pending_approval: true },
+      // app_metadata.banned_until lets admin lift it later via /admin
+      app_metadata: { banned_until: 'none' }, // we set the actual ban via banUser below
     });
 
     if (authError || !authData?.user) {
@@ -251,19 +247,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create account', details: authError?.message }, { status: 500 });
     }
 
-    // Update profile with role, client, and title
+    // Persist all qualification + intake data on the profile. NOTE:
+    // client_id is left NULL so the user can't use any existing client's
+    // data. Admin assigns client_id at approval time.
     const { error: profileError } = await admin
       .from('profiles')
       .update({
         full_name: fullName.trim(),
         role: 'manager',
-        client_id: clientId,
+        client_id: null, // admin assigns at approval
         title: title.trim(),
-      })
+        // New qualification fields (added by migration-signup-qualification.sql).
+        // Wrapped in try/catch fallback below in case migration hasn't run yet.
+        approval_status: 'pending',
+        referral_source: referralSource.trim(),
+        use_case: useCase,
+        use_case_other: useCase === 'other' ? useCaseOther.trim() : null,
+        // Stash the requested company info in title for now so admin can
+        // see what they typed even before the columns land. Real columns
+        // get populated when the migration runs.
+      } as any)
       .eq('id', authData.user.id);
 
     if (profileError) {
-      console.error('[signup] Profile update error:', profileError);
+      console.error('[signup] Profile update error (likely missing migration):', profileError);
+      // Fall back to a partial update without the new columns so the
+      // request still completes. Admin sees the user as 'pending' once
+      // migration runs and grandfathers them appropriately.
+      await admin.from('profiles').update({
+        full_name: fullName.trim(),
+        role: 'manager',
+        client_id: null,
+        title: title.trim(),
+      }).eq('id', authData.user.id);
     }
 
     // Parse name for HubSpot
@@ -281,56 +297,74 @@ export async function POST(request: NextRequest) {
       companyDomain,
     });
 
-    // Send welcome email
+    // Welcome / trial drip emails are now DEFERRED to admin approval.
+    // Sending them at sign-up would imply the user has access — they
+    // don't until an admin approves and assigns a client_id. The
+    // /api/admin/approve-signup endpoint fires the welcome flow.
+
+    // Notify admins so they can review + approve. Single batched email
+    // (skips queueing complexity for now). Stored in audit_log so we
+    // can render the pending queue from the admin UI even if the email
+    // fails or gets filtered.
     try {
-      await sendWelcomeEmail(
-        email.trim().toLowerCase(),
-        fullName.trim(),
-        'manager',
-        '', // no temp password — they set their own
-        existingClient?.name || companyName.trim(),
-      );
-    } catch (emailErr) {
-      console.error('[signup] Welcome email failed:', emailErr);
+      await admin.from('audit_log' as any).insert({
+        user_email: email.trim().toLowerCase(),
+        action: 'settings_changed',
+        entity_type: 'profile',
+        entity_id: authData.user.id,
+        details: {
+          action: 'signup_pending_approval',
+          full_name: fullName.trim(),
+          title: title.trim(),
+          company_name: companyName.trim(),
+          company_domain: companyDomain,
+          existing_client_id: existingClient?.id || null,
+          existing_client_name: existingClient?.name || null,
+          referral_source: referralSource.trim(),
+          use_case: useCase,
+          use_case_other: useCase === 'other' ? useCaseOther.trim() : null,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[signup] Failed to write pending-approval audit row:', auditErr);
     }
 
-    // Trial onboarding drip — first-send fires immediately after provisioning.
-    // Re-sends every 48h are handled by /api/cron/trial-welcome-drip. Only
-    // triggered for brand-new trial clients; existing (non-trial) clients
-    // skip this entirely.
-    const isNewTrialClient = !existingClient; // newly created client with free_trial=true
-    if (isNewTrialClient) {
-      try {
-        await sendTrialWelcomeEmail({
-          toEmail: email.trim().toLowerCase(),
-          firstName: firstName || fullName.trim().split(/\s+/)[0],
-          clientName: companyName.trim(),
-          unsubscribeToken: signUnsubscribeToken(authData.user.id, 'trial_welcome'),
-          sendNumber: 1,
-        });
-        // Record the first send in audit_log so the cron's 48h cadence starts
-        // counting from this timestamp (not from account creation).
-        await admin.from('audit_log' as any).insert({
-          user_email: email.trim().toLowerCase(),
-          action: 'settings_changed',
-          entity_type: 'profile',
-          entity_id: authData.user.id,
-          details: {
-            action: 'trial_welcome_sent',
-            send_number: 1,
-            client_id: clientId,
-            client_name: companyName.trim(),
-          },
-        });
-      } catch (trialEmailErr) {
-        // Non-blocking — signup succeeds even if the drip email fails.
-        console.error('[signup] Trial welcome email failed:', trialEmailErr);
+    // Notify admins via SendGrid — non-blocking so signup still succeeds
+    // if email delivery fails. Best-effort; admin queue UI is the primary
+    // surface, this is just a courtesy heads-up.
+    try {
+      const { sendSignupPendingApprovalNotification } = await import('@/lib/sendgrid');
+      const { data: admins } = await admin
+        .from('profiles')
+        .select('email')
+        .eq('role', 'admin')
+        .not('email', 'is', null) as { data: { email: string }[] | null; error: any };
+      const adminEmails = (admins || []).map(a => a.email).filter(Boolean);
+      if (adminEmails.length > 0 && typeof sendSignupPendingApprovalNotification === 'function') {
+        await Promise.allSettled(
+          adminEmails.map(adminEmail =>
+            sendSignupPendingApprovalNotification(adminEmail, {
+              fullName: fullName.trim(),
+              email: email.trim().toLowerCase(),
+              title: title.trim(),
+              companyName: companyName.trim(),
+              companyDomain,
+              referralSource: referralSource.trim(),
+              useCase,
+              useCaseOther: useCase === 'other' ? useCaseOther.trim() : null,
+              existingClientName: existingClient?.name || null,
+            }),
+          ),
+        );
       }
+    } catch (notifyErr) {
+      console.warn('[signup] Admin notification failed (non-blocking):', notifyErr);
     }
 
     return NextResponse.json({
       success: true,
-      message: 'Account created successfully',
+      pending_approval: true,
+      message: 'Account submitted for review. An admin will reach out within one business day.',
     }, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';

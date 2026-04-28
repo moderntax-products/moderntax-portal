@@ -2150,3 +2150,160 @@ matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
     throw error;
   }
 }
+
+/**
+ * Notifies admins that a new sign-up is awaiting approval. Fires at
+ * sign-up time so admins can vet the lead-qualification info and
+ * either approve + assign a client, or reject. Best-effort —
+ * /api/auth/signup wraps the call in a try/catch so a failed email
+ * doesn't break sign-up itself.
+ */
+export async function sendSignupPendingApprovalNotification(
+  toEmail: string,
+  signup: {
+    fullName: string;
+    email: string;
+    title: string;
+    companyName: string;
+    companyDomain: string;
+    referralSource: string;
+    useCase: string;
+    useCaseOther: string | null;
+    existingClientName: string | null;
+  },
+): Promise<void> {
+  const adminUrl = `${appUrl}/admin/pending-signups`;
+  const useCaseDisplay = signup.useCase === 'other'
+    ? `Other — ${signup.useCaseOther || '(no description)'}`
+    : signup.useCase.charAt(0).toUpperCase() + signup.useCase.slice(1);
+
+  const subject = `New signup awaiting approval — ${signup.fullName} @ ${signup.companyName}`;
+  const content = `
+<p>A new sign-up is waiting for review on the ModernTax portal.</p>
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:18px 0;font-size:13px;">
+  <tbody>
+    <tr><td style="padding:6px 0;color:#6b7280;">Name</td><td style="padding:6px 0;font-weight:600;">${escapeHtml(signup.fullName)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Email</td><td style="padding:6px 0;"><a href="mailto:${escapeAttr(signup.email)}">${escapeHtml(signup.email)}</a></td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Title</td><td style="padding:6px 0;">${escapeHtml(signup.title)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Company</td><td style="padding:6px 0;font-weight:600;">${escapeHtml(signup.companyName)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Domain</td><td style="padding:6px 0;font-family:monospace;">${escapeHtml(signup.companyDomain)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Use case</td><td style="padding:6px 0;">${escapeHtml(useCaseDisplay)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Found us via</td><td style="padding:6px 0;">${escapeHtml(signup.referralSource)}</td></tr>
+    ${signup.existingClientName ? `<tr><td style="padding:6px 0;color:#6b7280;">Matches existing client</td><td style="padding:6px 0;color:#0d9488;font-weight:600;">${escapeHtml(signup.existingClientName)}</td></tr>` : ''}
+  </tbody>
+</table>
+
+<p style="font-size:13px;color:#6b7280;">Review and approve (or reject) from the admin portal:</p>
+`.trim();
+
+  const html = createEmailTemplate('Sign-up awaiting approval', content, {
+    text: 'Review pending signup →',
+    url: adminUrl,
+  });
+
+  const text = `New signup awaiting approval
+
+Name: ${signup.fullName}
+Email: ${signup.email}
+Title: ${signup.title}
+Company: ${signup.companyName}
+Domain: ${signup.companyDomain}
+Use case: ${useCaseDisplay}
+Found us via: ${signup.referralSource}
+${signup.existingClientName ? `Matches existing client: ${signup.existingClientName}\n` : ''}
+Review at: ${adminUrl}
+`.trim();
+
+  try {
+    await sgMail.send({
+      to: toEmail,
+      from: { email: fromEmail, name: 'ModernTax Notifications' },
+      subject,
+      html,
+      text,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send signup-pending notification:', error);
+    throw error;
+  }
+}
+
+/**
+ * Welcome email fired when an admin approves a pending sign-up. Tells
+ * the new user they're in, surfaces their assigned client, and links
+ * straight to the onboarding tour.
+ */
+export async function sendSignupApprovedEmail(
+  toEmail: string,
+  recipientName: string,
+  clientName: string,
+): Promise<void> {
+  const loginUrl = `${appUrl}/login`;
+  const tourUrl = `${appUrl}/onboarding`;
+  const subject = "You're in — welcome to ModernTax";
+
+  const content = `
+<p>Hi ${escapeHtml(recipientName) || 'there'},</p>
+
+<p>Good news — your ModernTax account is approved and ready to use. You've been added to the <strong>${escapeHtml(clientName)}</strong> account.</p>
+
+<p>Two things to do next:</p>
+<ol style="padding-left:20px;line-height:1.8;">
+  <li><a href="${loginUrl}" style="color:#00C48C;">Sign in to the portal</a> using the password you chose at sign-up.</li>
+  <li>Take the <a href="${tourUrl}" style="color:#00C48C;">5-minute interactive tour</a> — walks you through ordering transcripts, the compliance flow, and (if you're a manager) billing setup.</li>
+</ol>
+
+<p>Your account starts with <strong>$239.94 in free transcript credits</strong> for the team — enough for your first 3 IRS pulls at no cost.</p>
+
+<p>Questions? Reply to this email and it lands directly in my inbox.</p>
+
+<p style="font-size:14px;color:#1f2937;margin-top:20px;">
+  Best,<br>
+  Matthew Parker<br>
+  <span style="color:#6b7280;font-size:12px;">matt@moderntax.io · 650-741-1085 · ModernTax, Inc.</span>
+</p>
+`.trim();
+
+  const html = createEmailTemplate("You're in", content, { text: 'Sign in to the portal', url: loginUrl });
+
+  const text = `Hi ${recipientName || 'there'},
+
+Your ModernTax account is approved. You've been added to ${clientName}.
+
+Sign in: ${loginUrl}
+Take the 5-minute tour: ${tourUrl}
+
+Your account starts with $239.94 in free transcript credits — enough for 3 free IRS pulls.
+
+Reply with any questions.
+
+Best,
+Matt
+matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
+`.trim();
+
+  try {
+    await sgMail.send({
+      to: toEmail,
+      from: { email: fromEmail, name: 'Matthew Parker, ModernTax' },
+      subject,
+      html,
+      text,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send approval welcome email:', error);
+    throw error;
+  }
+}
+
+// Tiny HTML escapers to keep user-supplied strings safe in our templates.
+function escapeHtml(s: string | null | undefined): string {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function escapeAttr(s: string | null | undefined): string {
+  return escapeHtml(s);
+}

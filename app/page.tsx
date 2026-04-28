@@ -33,10 +33,21 @@ export default async function DashboardPage({
     .from('profiles')
     .select()
     .eq('id', user.id)
-    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null } | null; error: any };
+    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null; approval_status?: string | null } | null; error: any };
 
   if (profileError || !profile) {
     redirect('/login');
+  }
+
+  // Pending-approval gate: new sign-ups land in 'pending' until an admin
+  // assigns a client_id and approves. Until then, they bounce to a
+  // friendly review-status page so they can't access dashboard or any
+  // child route via direct navigation.
+  if (profile.approval_status === 'pending') {
+    redirect('/login?status=pending-review');
+  }
+  if (profile.approval_status === 'rejected') {
+    redirect('/login?status=rejected');
   }
 
   const isManager = profile.role === 'manager';

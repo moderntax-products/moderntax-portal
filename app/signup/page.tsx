@@ -2,10 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function SignupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isPendingReview = searchParams.get('status') === 'pending-review';
   const [fullName, setFullName] = useState('');
   const [title, setTitle] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -13,6 +15,10 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  // Lead qualification — required so we can vet before authorizing access
+  const [referralSource, setReferralSource] = useState('');
+  const [useCase, setUseCase] = useState<'sba' | 'employment' | 'insurance' | 'other' | ''>('');
+  const [useCaseOther, setUseCaseOther] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,13 +42,21 @@ export default function SignupPage() {
     if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
     if (password !== confirmPassword) { setError('Passwords do not match'); return; }
     if (!domainsMatch) { setError('Email domain must match your company website'); return; }
+    if (!useCase) { setError('Please select your primary use case'); return; }
+    if (useCase === 'other' && !useCaseOther.trim()) { setError('Please describe your use case'); return; }
+    if (!referralSource.trim()) { setError('Please tell us how you heard about us'); return; }
 
     setIsLoading(true);
     try {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, title, companyName, companyWebsite, email, password }),
+        body: JSON.stringify({
+          fullName, title, companyName, companyWebsite, email, password,
+          referralSource: referralSource.trim(),
+          useCase,
+          useCaseOther: useCase === 'other' ? useCaseOther.trim() : null,
+        }),
       });
 
       const data = await res.json();
@@ -51,13 +65,50 @@ export default function SignupPage() {
         throw new Error(data.details || data.error || 'Signup failed');
       }
 
-      router.push('/login?signup=success');
+      // Account created in 'pending' state — gate redirect to a friendly
+      // "we got your request, looking forward to onboarding you" page
+      // instead of the login screen, so they don't immediately try to
+      // sign in and get bounced.
+      router.push('/signup?status=pending-review');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Friendly post-signup state — account is created but pending admin
+  // review. Shown instead of the form when ?status=pending-review.
+  if (isPendingReview) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-mt-dark via-mt-navy to-mt-dark flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-white tracking-tight">
+              Modern<span className="text-mt-green">Tax</span>
+            </h1>
+          </div>
+          <div className="bg-white rounded-2xl shadow-2xl p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-emerald-100 flex items-center justify-center">
+              <svg className="w-8 h-8 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-bold text-mt-dark mb-2">Thanks — your request is in</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              We review every new account so each customer is set up correctly for their use case (SBA, employment verification, insurance, or other). Expect to hear from us within one business day with login instructions.
+            </p>
+            <p className="text-xs text-gray-500 mb-6">
+              Questions? Email <a href="mailto:matt@moderntax.io" className="text-mt-green hover:underline">matt@moderntax.io</a> — Matthew Parker, founder.
+            </p>
+            <Link href="/" className="text-sm text-mt-green font-semibold hover:underline">
+              Back to ModernTax →
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-mt-dark via-mt-navy to-mt-dark flex items-center justify-center p-4">
@@ -73,6 +124,9 @@ export default function SignupPage() {
         {/* Form Card */}
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <h2 className="text-xl font-bold text-mt-dark mb-6">Get Started</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            We review every new account before granting access — usually within one business day. This keeps the platform secure for our existing customers and lets us tailor your onboarding to your specific use case.
+          </p>
 
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -163,6 +217,68 @@ export default function SignupPage() {
               )}
             </div>
 
+            {/* Use case — required so we can route the right onboarding */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                Primary use case <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={useCase}
+                onChange={(e) => setUseCase(e.target.value as typeof useCase)}
+                required
+                disabled={isLoading}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 text-sm bg-white"
+              >
+                <option value="">Select a use case...</option>
+                <option value="sba">SBA loan underwriting (transcript verification)</option>
+                <option value="employment">Employment / income verification</option>
+                <option value="insurance">Insurance underwriting</option>
+                <option value="other">Other (please describe)</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">Tells us how to set up your account — pricing, integrations, and starter templates differ per use case.</p>
+            </div>
+
+            {useCase === 'other' && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Describe your use case <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={useCaseOther}
+                  onChange={(e) => setUseCaseOther(e.target.value)}
+                  placeholder="e.g., M&A diligence, tax prep firm, etc."
+                  required
+                  maxLength={200}
+                  disabled={isLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 text-sm"
+                />
+              </div>
+            )}
+
+            {/* Referral source */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                How did you hear about us? <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={referralSource}
+                onChange={(e) => setReferralSource(e.target.value)}
+                required
+                disabled={isLoading}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 text-sm bg-white"
+              >
+                <option value="">Select...</option>
+                <option value="search">Search engine (Google, etc.)</option>
+                <option value="referral">Referred by a colleague or friend</option>
+                <option value="linkedin">LinkedIn or social media</option>
+                <option value="conference">Conference / industry event</option>
+                <option value="email">Email outreach from ModernTax</option>
+                <option value="competitor">Switching from another transcript service</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">Password</label>
               <input
@@ -200,7 +316,7 @@ export default function SignupPage() {
               disabled={isLoading || !domainsMatch}
               className="w-full bg-mt-green text-white py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
-              {isLoading ? 'Creating Account...' : 'Create Account'}
+              {isLoading ? 'Submitting...' : 'Submit for Review'}
             </button>
           </form>
 

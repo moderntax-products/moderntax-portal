@@ -25,6 +25,18 @@ export default function LoginPage() {
       setSuccess('Account created successfully! Sign in with your credentials.');
       window.history.replaceState(null, '', window.location.pathname);
     }
+    // Pending-approval bounce from the dashboard server component —
+    // user signed up but admin hasn't approved yet, so the login screen
+    // shows a friendly status banner instead of letting them re-attempt
+    // sign-in (which would just bounce them back).
+    if (searchParams.get('status') === 'pending-review') {
+      setError('Your account is awaiting admin approval. We review every new sign-up to set up your account for the right use case (SBA, employment, insurance, or other) — usually within one business day. Questions? Email matt@moderntax.io.');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    if (searchParams.get('status') === 'rejected') {
+      setError('Your sign-up was not approved. If you believe this is an error, reply to your sign-up confirmation email or contact matt@moderntax.io.');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
