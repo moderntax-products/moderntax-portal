@@ -1,44 +1,41 @@
 'use client';
 
 /**
- * StatusPageClient — public-facing live status display.
+ * StatusPageClient — public-facing real-time status display.
  *
- * Polls /api/public/status every 60s for fresh data. Server-rendered
- * initial state means the page is useful even if JS is disabled (and
- * crawlable for "ModernTax IRS status" SEO).
+ * Three things only:
+ *   1. System status banner (green/amber/red derived from current wait)
+ *   2. Big "current wait time" number (real-time, refreshed every 15s)
+ *   3. Lifetime average hold time (across every completed call ever)
+ *   4. Single "last call" card with its hold + duration
  *
- * Three sections:
- *   - SYSTEM STATUS — green/amber/red indicator + headline metric
- *   - LIVE ACTIVITY — calls in flight, on hold, experts working
- *   - 7-DAY THROUGHPUT — entities delivered, calls completed, success rate
- *   - RECENT CALLS table (anonymized — no PII)
+ * No 7d aggregates, no recent-calls table, no live activity grid —
+ * those will come back once we scale and the data tells a richer
+ * story. For now: customers want to know "should I expect my pull
+ * to be quick today?" and that's the entire job.
  */
 
 import { useEffect, useState } from 'react';
 
 interface StatusPayload {
   updated_at: string;
-  live: { active_calls: number; calls_on_hold: number; experts_active: number };
-  wait_times: {
-    avg_hold_minutes_today: number | null;
-    avg_hold_minutes_7d: number | null;
-    median_hold_minutes_7d: number | null;
-  };
-  throughput: {
-    entities_completed_today: number;
-    entities_completed_7d: number;
-    calls_completed_today: number;
-    calls_completed_7d: number;
-    success_rate_7d: number;
-  };
-  recent: { ended_at: string; duration_minutes: number | null; hold_minutes: number | null; status: string; entities: number }[];
+  current_wait_minutes: number | null;
+  lifetime_avg_hold_minutes: number | null;
+  lifetime_calls_completed: number;
+  last_call: {
+    ended_at: string;
+    hold_minutes: number | null;
+    duration_minutes: number | null;
+    status: string;
+    entities: number;
+  } | null;
 }
 
 interface Props {
   initial: StatusPayload | null;
 }
 
-const POLL_MS = 60_000;
+const POLL_MS = 15_000; // matches API edge cache for true real-time feel
 
 export function StatusPageClient({ initial }: Props) {
   const [status, setStatus] = useState<StatusPayload | null>(initial);
@@ -65,17 +62,25 @@ export function StatusPageClient({ initial }: Props) {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  // Derive overall system health from wait times + success rate
   const health = computeHealth(status);
-  const healthBg = health.level === 'green' ? 'bg-emerald-500' : health.level === 'amber' ? 'bg-amber-500' : 'bg-red-500';
-  const healthBgSubtle = health.level === 'green' ? 'bg-emerald-50 border-emerald-200' : health.level === 'amber' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200';
-  const healthText = health.level === 'green' ? 'text-emerald-900' : health.level === 'amber' ? 'text-amber-900' : 'text-red-900';
+  const healthBg =
+    health.level === 'green' ? 'bg-emerald-500'
+    : health.level === 'amber' ? 'bg-amber-500'
+    : 'bg-red-500';
+  const healthBgSubtle =
+    health.level === 'green' ? 'bg-emerald-50 border-emerald-200'
+    : health.level === 'amber' ? 'bg-amber-50 border-amber-200'
+    : 'bg-red-50 border-red-200';
+  const healthText =
+    health.level === 'green' ? 'text-emerald-900'
+    : health.level === 'amber' ? 'text-amber-900'
+    : 'text-red-900';
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-widest text-gray-500 mb-1">ModernTax</p>
             <h1 className="text-2xl font-bold text-mt-dark">IRS Pull Status</h1>
@@ -86,7 +91,8 @@ export function StatusPageClient({ initial }: Props) {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+
         {/* System status banner */}
         <div className={`rounded-xl border-2 ${healthBgSubtle} p-6`}>
           <div className="flex items-start gap-4">
@@ -103,97 +109,70 @@ export function StatusPageClient({ initial }: Props) {
 
         {!status && (
           <div className="bg-white rounded-lg border border-gray-200 p-12 text-center text-gray-500">
-            Status data temporarily unavailable. Refreshing every minute.
+            Status data temporarily unavailable. Refreshing every 15 seconds.
           </div>
         )}
 
         {status && (
           <>
-            {/* Live Activity */}
-            <section>
-              <h3 className="text-xs uppercase tracking-widest font-bold text-gray-500 mb-3">Live activity</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Stat label="Calls in flight" value={status.live.active_calls} accent="blue" />
-                <Stat label="On hold with IRS" value={status.live.calls_on_hold} accent="amber" />
-                <Stat label="Experts working" value={status.live.experts_active} accent="emerald" />
-                <Stat
-                  label="Avg hold today"
-                  value={fmtMinutes(status.wait_times.avg_hold_minutes_today)}
-                  accent="purple"
-                />
-              </div>
-            </section>
+            {/* CURRENT WAIT — hero metric */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 text-center">
+              <p className="text-xs uppercase tracking-widest text-gray-500 font-bold">Current IRS hold time</p>
+              <p className="text-6xl font-bold text-mt-dark mt-3 font-mono">
+                {fmtBigDuration(status.current_wait_minutes)}
+              </p>
+              <p className="text-sm text-gray-600 mt-3">
+                {status.current_wait_minutes === null
+                  ? 'No calls currently on hold with the IRS — pulls completing without delay.'
+                  : 'Live — longest current wait being experienced right now by an active call.'}
+              </p>
+            </div>
 
-            {/* Throughput (7d) */}
-            <section>
-              <h3 className="text-xs uppercase tracking-widest font-bold text-gray-500 mb-3">Last 7 days</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Stat
-                  label="Transcripts delivered"
-                  value={status.throughput.entities_completed_7d.toLocaleString()}
-                  accent="emerald"
-                  sub={`${status.throughput.entities_completed_today} today`}
-                />
-                <Stat
-                  label="IRS calls completed"
-                  value={status.throughput.calls_completed_7d.toLocaleString()}
-                  accent="blue"
-                  sub={`${status.throughput.calls_completed_today} today`}
-                />
-                <Stat
-                  label="Median hold time"
-                  value={fmtMinutes(status.wait_times.median_hold_minutes_7d)}
-                  accent="purple"
-                />
-                <Stat
-                  label="Success rate"
-                  value={`${Math.round(status.throughput.success_rate_7d * 100)}%`}
-                  accent={status.throughput.success_rate_7d > 0.9 ? 'emerald' : status.throughput.success_rate_7d > 0.75 ? 'amber' : 'red'}
-                  sub="completed / closed"
-                />
+            {/* Lifetime avg hold */}
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="flex items-baseline justify-between">
+                <p className="text-xs uppercase tracking-widest text-gray-500 font-bold">Average hold time (all-time)</p>
+                <p className="text-xs text-gray-400">across {status.lifetime_calls_completed.toLocaleString()} completed call{status.lifetime_calls_completed === 1 ? '' : 's'}</p>
               </div>
-            </section>
+              <p className="text-3xl font-bold text-mt-dark mt-2 font-mono">
+                {fmtMinutes(status.lifetime_avg_hold_minutes)}
+              </p>
+            </div>
 
-            {/* Recent calls */}
-            <section>
-              <h3 className="text-xs uppercase tracking-widest font-bold text-gray-500 mb-3">Recent calls</h3>
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                {status.recent.length === 0 ? (
-                  <p className="p-6 text-sm text-gray-500 text-center">No recent calls in the last day.</p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                      <tr>
-                        <th className="text-left px-4 py-2.5">Ended</th>
-                        <th className="text-left px-4 py-2.5">Status</th>
-                        <th className="text-right px-4 py-2.5">Entities</th>
-                        <th className="text-right px-4 py-2.5">Hold</th>
-                        <th className="text-right px-4 py-2.5">Total duration</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {status.recent.map((r, i) => (
-                        <tr key={i}>
-                          <td className="px-4 py-2.5 text-gray-600">{fmtRelative(r.ended_at)}</td>
-                          <td className="px-4 py-2.5">
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
-                                r.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                              }`}
-                            >
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 text-right font-mono text-mt-dark">{r.entities}</td>
-                          <td className="px-4 py-2.5 text-right text-gray-600 font-mono">{fmtMinutes(r.hold_minutes)}</td>
-                          <td className="px-4 py-2.5 text-right text-gray-600 font-mono">{fmtMinutes(r.duration_minutes)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </section>
+            {/* Last call */}
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <p className="text-xs uppercase tracking-widest text-gray-500 font-bold mb-3">Most recent call</p>
+              {!status.last_call ? (
+                <p className="text-sm text-gray-500">No completed calls yet.</p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500">Ended</p>
+                    <p className="text-sm font-semibold text-mt-dark mt-0.5">{fmtRelative(status.last_call.ended_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500">Status</p>
+                    <p className="mt-0.5">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
+                          status.last_call.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {status.last_call.status}
+                      </span>
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500">Hold time</p>
+                    <p className="text-sm font-semibold text-mt-dark mt-0.5 font-mono">{fmtMinutes(status.last_call.hold_minutes)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500">Entities</p>
+                    <p className="text-sm font-semibold text-mt-dark mt-0.5">{status.last_call.entities}</p>
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -201,7 +180,7 @@ export function StatusPageClient({ initial }: Props) {
         <div className="text-xs text-gray-500 text-center pt-4">
           {status && (
             <>
-              Updated {fmtRelative(status.updated_at)} · auto-refresh every 60s
+              Updated {fmtRelative(status.updated_at)} · auto-refresh every 15s
               {error && <span className="text-amber-600 ml-2">· last refresh failed: {error}</span>}
             </>
           )}
@@ -218,6 +197,16 @@ export function StatusPageClient({ initial }: Props) {
 
 function fmtMinutes(m: number | null): string {
   if (m === null || m === undefined) return '—';
+  if (m < 1) return '< 1 min';
+  if (m < 60) return `${Math.round(m)} min`;
+  const h = Math.floor(m / 60);
+  const rest = Math.round(m % 60);
+  return rest > 0 ? `${h}h ${rest}m` : `${h}h`;
+}
+
+// Hero number — always two-line if hours: "1h 24m". One-line otherwise.
+function fmtBigDuration(m: number | null): string {
+  if (m === null || m === undefined) return '0 min';
   if (m < 1) return '< 1 min';
   if (m < 60) return `${Math.round(m)} min`;
   const h = Math.floor(m / 60);
@@ -242,50 +231,32 @@ function computeHealth(status: StatusPayload | null): { level: 'green' | 'amber'
   if (!status) {
     return { level: 'amber', headline: 'Checking system status…', description: 'Loading current IRS pull metrics.' };
   }
-  const successRate = status.throughput.success_rate_7d;
-  const holdMins = status.wait_times.avg_hold_minutes_today ?? status.wait_times.avg_hold_minutes_7d ?? 0;
+  // Health derived from current wait vs lifetime baseline.
+  // No active wait OR wait at or below baseline → green.
+  // 1.5x baseline → amber. 3x → red.
+  const current = status.current_wait_minutes ?? 0;
+  const baseline = status.lifetime_avg_hold_minutes ?? 30; // sensible fallback if no history yet
+  const ratio = baseline > 0 ? current / baseline : 0;
 
-  if (successRate < 0.7) {
+  if (current === 0 || ratio < 1.0) {
     return {
-      level: 'red',
-      headline: 'Degraded — IRS responses below baseline',
-      description: `Success rate is ${Math.round(successRate * 100)}% over the last 7 days. We're triaging — pulls may be delayed.`,
+      level: 'green',
+      headline: 'IRS calls are flowing normally',
+      description: status.current_wait_minutes === null
+        ? 'No calls on hold right now. Submit a request and we typically have transcripts back within 24-48 hours.'
+        : `Current hold (${fmtMinutes(current)}) is at or below the historical average (${fmtMinutes(baseline)}).`,
     };
   }
-  if (holdMins > 60 || successRate < 0.85) {
+  if (ratio < 2.0) {
     return {
       level: 'amber',
       headline: 'Slower than usual',
-      description: `IRS hold times averaging ${fmtMinutes(holdMins)} today. Pulls still completing — expect 1-2 day turnaround instead of same-day.`,
+      description: `Active hold time (${fmtMinutes(current)}) is running about ${Math.round(ratio * 100)}% of normal (${fmtMinutes(baseline)}). Pulls still completing — expect slightly longer turnaround.`,
     };
   }
   return {
-    level: 'green',
-    headline: 'All systems operating normally',
-    description: `IRS pulls completing on schedule. Average hold ${fmtMinutes(holdMins)}, ${Math.round(successRate * 100)}% success rate over 7 days.`,
+    level: 'red',
+    headline: 'IRS hold times significantly elevated',
+    description: `Active hold time is ${Math.round(ratio * 100)}% of the historical average. Pulls in flight may take noticeably longer than usual today.`,
   };
-}
-
-function Stat({
-  label, value, sub, accent,
-}: {
-  label: string;
-  value: number | string;
-  sub?: string;
-  accent: 'blue' | 'emerald' | 'amber' | 'purple' | 'red';
-}) {
-  const accentClass = {
-    blue: 'text-blue-700',
-    emerald: 'text-emerald-700',
-    amber: 'text-amber-700',
-    purple: 'text-purple-700',
-    red: 'text-red-700',
-  }[accent];
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <p className="text-xs uppercase tracking-wide text-gray-500 font-semibold">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${accentClass}`}>{value}</p>
-      {sub && <p className="text-[11px] text-gray-500 mt-0.5">{sub}</p>}
-    </div>
-  );
 }

@@ -1,45 +1,30 @@
 /**
  * GET /api/public/status — Public IRS call metrics for the status page.
  *
- * No auth. Caller-friendly aggregates only — no PII, no per-customer
- * detail. Cached at the edge (s-maxage=60) so a customer refresh storm
- * doesn't hammer the DB.
+ * No auth. Slim payload — just what the customer needs to answer
+ * "is the IRS slow right now and how long should I expect to wait?".
+ *
+ * Cached 15s at the edge so a public refresh storm doesn't hammer the
+ * DB while still feeling real-time on the page (which polls every 15s).
  *
  * Returns:
  * {
  *   updated_at: ISO,
- *   live: {
- *     active_calls: int,                  // calls currently in flight
- *     calls_on_hold: int,                 // subset on IVR hold w/ IRS
- *     experts_active: int,                // distinct experts with running call
- *   },
- *   wait_times: {
- *     avg_hold_minutes_today: number | null,
- *     avg_hold_minutes_7d: number | null,
- *     median_hold_minutes_7d: number | null,
- *   },
- *   throughput: {
- *     entities_completed_today: int,
- *     entities_completed_7d: int,
- *     calls_completed_today: int,
- *     calls_completed_7d: int,
- *     success_rate_7d: number,            // 0..1, completed / (completed + failed)
- *   },
- *   recent: Array<{ ended_at, duration_minutes, hold_minutes, status, entities }>
+ *   current_wait_minutes: number | null,    // live: how long current
+ *                                            //  on-hold callers have
+ *                                            //  been waiting (max),
+ *                                            //  null if nobody on hold
+ *   lifetime_avg_hold_minutes: number | null, // every completed call
+ *                                              //  ever, hold duration avg
+ *   lifetime_calls_completed: int,           // counter for context
+ *   last_call: { ended_at, hold_minutes, duration_minutes, status, entities } | null
  * }
  */
 
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 
-export const revalidate = 60;
-
-function median(nums: number[]): number | null {
-  if (nums.length === 0) return null;
-  const sorted = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
+export const revalidate = 15;
 
 function avg(nums: number[]): number | null {
   if (nums.length === 0) return null;
@@ -49,100 +34,88 @@ function avg(nums: number[]): number | null {
 export async function GET() {
   try {
     const admin = createAdminClient();
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString();
 
-    // ───────── LIVE ─────────
-    const { data: liveSessions } = await (admin.from('irs_call_sessions' as any) as any)
-      .select('id, status, expert_id')
-      .in('status', ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent']);
+    // ───────── CURRENT WAIT (real-time) ─────────
+    // Anyone currently on hold with the IRS — how long have they been
+    // waiting so far? Reported as the longest current wait (worst case),
+    // since that's the more honest "if you call now, this is what you'd
+    // experience" number than an average that gets diluted by sessions
+    // that JUST hit hold.
+    const { data: holdSessions } = await (admin.from('irs_call_sessions' as any) as any)
+      .select('id, status, initiated_at, connected_at')
+      .eq('status', 'on_hold');
 
-    const activeCalls = liveSessions?.length || 0;
-    const callsOnHold = (liveSessions || []).filter((s: any) => s.status === 'on_hold').length;
-    const expertsActive = new Set((liveSessions || []).map((s: any) => s.expert_id)).size;
+    const now = Date.now();
+    const currentWaitMins: number | null = (holdSessions || []).length === 0
+      ? null
+      : Math.max(
+          ...(holdSessions || []).map((s: any) => {
+            // Prefer connected_at (when we actually got into the hold queue);
+            // fall back to initiated_at for sessions that don't track it.
+            const start = s.connected_at || s.initiated_at;
+            if (!start) return 0;
+            return (now - new Date(start).getTime()) / 60_000;
+          }),
+        );
 
-    // ───────── WAIT TIMES (today + 7d) ─────────
+    // ───────── LIFETIME AVG HOLD ─────────
+    // Every completed call's hold_duration_seconds, averaged. Trims at
+    // 5000 to keep the query bounded as we scale; we'll switch to a
+    // pre-aggregated view once volume warrants.
     const { data: completedSessions } = await (admin.from('irs_call_sessions' as any) as any)
-      .select('id, status, ended_at, duration_seconds, hold_duration_seconds, initiated_at')
+      .select('id, hold_duration_seconds')
       .eq('status', 'completed')
-      .gte('ended_at', sevenDaysAgo);
+      .not('hold_duration_seconds', 'is', null)
+      .order('ended_at', { ascending: false })
+      .limit(5000);
 
-    const todayCompleted = (completedSessions || []).filter((s: any) => s.ended_at >= todayStart);
-    const todayHoldMins = todayCompleted
+    const holdMins = (completedSessions || [])
       .map((s: any) => (s.hold_duration_seconds || 0) / 60)
       .filter((m: number) => m > 0);
-    const sevenDayHoldMins = (completedSessions || [])
-      .map((s: any) => (s.hold_duration_seconds || 0) / 60)
-      .filter((m: number) => m > 0);
+    const lifetimeAvgHold = avg(holdMins);
 
-    // ───────── THROUGHPUT ─────────
-    const { count: entitiesCompletedTodayCount } = await (admin
-      .from('irs_call_entities' as any) as any)
-      .select('id', { count: 'exact', head: true })
-      .in('outcome', ['transcripts_requested', 'transcripts_verbal', 'fax_sent'])
-      .gte('updated_at', todayStart);
-
-    const { count: entitiesCompleted7dCount } = await (admin
-      .from('irs_call_entities' as any) as any)
-      .select('id', { count: 'exact', head: true })
-      .in('outcome', ['transcripts_requested', 'transcripts_verbal', 'fax_sent'])
-      .gte('updated_at', sevenDaysAgo);
-
-    const callsCompletedToday = todayCompleted.length;
-    const callsCompleted7d = (completedSessions || []).length;
-    const { count: callsFailed7d } = await (admin
-      .from('irs_call_sessions' as any) as any)
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'failed')
-      .gte('ended_at', sevenDaysAgo);
-
-    const totalCallsClosed = callsCompleted7d + (callsFailed7d || 0);
-    const successRate7d = totalCallsClosed > 0 ? callsCompleted7d / totalCallsClosed : 1;
-
-    // ───────── RECENT (last 10 closed sessions, no PII) ─────────
-    const { data: recentSessions } = await (admin.from('irs_call_sessions' as any) as any)
+    // ───────── LAST CALL ─────────
+    const { data: lastSessionRow } = await (admin.from('irs_call_sessions' as any) as any)
       .select('id, status, ended_at, duration_seconds, hold_duration_seconds, irs_call_entities(id)')
       .in('status', ['completed', 'failed'])
       .not('ended_at', 'is', null)
       .order('ended_at', { ascending: false })
-      .limit(10);
+      .limit(1)
+      .maybeSingle();
 
-    const recent = (recentSessions || []).map((s: any) => ({
-      ended_at: s.ended_at,
-      duration_minutes: s.duration_seconds ? Math.round((s.duration_seconds / 60) * 10) / 10 : null,
-      hold_minutes: s.hold_duration_seconds ? Math.round((s.hold_duration_seconds / 60) * 10) / 10 : null,
-      status: s.status,
-      entities: s.irs_call_entities?.length || 0,
-    }));
+    const lastCall = lastSessionRow
+      ? {
+          ended_at: lastSessionRow.ended_at,
+          hold_minutes: lastSessionRow.hold_duration_seconds
+            ? Math.round((lastSessionRow.hold_duration_seconds / 60) * 10) / 10
+            : null,
+          duration_minutes: lastSessionRow.duration_seconds
+            ? Math.round((lastSessionRow.duration_seconds / 60) * 10) / 10
+            : null,
+          status: lastSessionRow.status,
+          entities: lastSessionRow.irs_call_entities?.length || 0,
+        }
+      : null;
+
+    // ───────── LIFETIME COUNT (for the "based on N calls" context) ─────────
+    const { count: lifetimeCallsCompleted } = await (admin
+      .from('irs_call_sessions' as any) as any)
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'completed');
 
     return NextResponse.json(
       {
         updated_at: new Date().toISOString(),
-        live: {
-          active_calls: activeCalls,
-          calls_on_hold: callsOnHold,
-          experts_active: expertsActive,
-        },
-        wait_times: {
-          avg_hold_minutes_today: avg(todayHoldMins),
-          avg_hold_minutes_7d: avg(sevenDayHoldMins),
-          median_hold_minutes_7d: median(sevenDayHoldMins),
-        },
-        throughput: {
-          entities_completed_today: entitiesCompletedTodayCount || 0,
-          entities_completed_7d: entitiesCompleted7dCount || 0,
-          calls_completed_today: callsCompletedToday,
-          calls_completed_7d: callsCompleted7d,
-          success_rate_7d: Math.round(successRate7d * 1000) / 1000,
-        },
-        recent,
+        current_wait_minutes: currentWaitMins === null ? null : Math.round(currentWaitMins * 10) / 10,
+        lifetime_avg_hold_minutes: lifetimeAvgHold === null ? null : Math.round(lifetimeAvgHold * 10) / 10,
+        lifetime_calls_completed: lifetimeCallsCompleted || 0,
+        last_call: lastCall,
       },
       {
         headers: {
-          // 60s edge cache + 5min stale-while-revalidate so a refresh storm
-          // hits the CDN, not the DB. Acceptable freshness for a status page.
-          'Cache-Control': 's-maxage=60, stale-while-revalidate=300',
+          // 15s edge cache + 60s stale-while-revalidate. Keeps the page
+          // feeling live while shielding the DB from refresh storms.
+          'Cache-Control': 's-maxage=15, stale-while-revalidate=60',
         },
       },
     );

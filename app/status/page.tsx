@@ -23,26 +23,26 @@ export const metadata = {
   description: 'Real-time IRS Practitioner Priority Service wait times and ModernTax pull throughput.',
 };
 
-export const revalidate = 60;
+export const revalidate = 15;
 
 interface StatusPayload {
   updated_at: string;
-  live: { active_calls: number; calls_on_hold: number; experts_active: number };
-  wait_times: { avg_hold_minutes_today: number | null; avg_hold_minutes_7d: number | null; median_hold_minutes_7d: number | null };
-  throughput: {
-    entities_completed_today: number;
-    entities_completed_7d: number;
-    calls_completed_today: number;
-    calls_completed_7d: number;
-    success_rate_7d: number;
-  };
-  recent: { ended_at: string; duration_minutes: number | null; hold_minutes: number | null; status: string; entities: number }[];
+  current_wait_minutes: number | null;
+  lifetime_avg_hold_minutes: number | null;
+  lifetime_calls_completed: number;
+  last_call: {
+    ended_at: string;
+    hold_minutes: number | null;
+    duration_minutes: number | null;
+    status: string;
+    entities: number;
+  } | null;
 }
 
 async function fetchInitialStatus(): Promise<StatusPayload | null> {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
   try {
-    const res = await fetch(`${baseUrl}/api/public/status`, { next: { revalidate: 60 } });
+    const res = await fetch(`${baseUrl}/api/public/status`, { next: { revalidate: 15 } });
     if (!res.ok) return null;
     return (await res.json()) as StatusPayload;
   } catch {
