@@ -206,17 +206,18 @@ export async function GET(request: NextRequest) {
           totalEntities = periodEntities;          // for visibility on the invoice
           totalAmount = subscriptionAmount + subscriptionOverageAmount;
         } else {
-          // Per-TIN: sum rates for each completed entity in the period.
+          // Per-TIN: every completed entity in the period bills at the
+          // client's contracted rate (`billing_rate_pdf`). Per Matt 2026-05-01
+          // the prior CSV-vs-PDF split (CSV at +$10) wasn't in any signed
+          // contract — Centerstone & TMC SOWs say "$59.98 flat per Complete
+          // Verification" with "Reorders/updates: Same flat rate." We honor
+          // that by using a single per-client rate. Monitoring re-pulls also
+          // billed at the same flat rate (per contract "Reorders/updates").
           //
-          // Rate selection by intake_method:
-          //   csv               → billing_rate_csv (default $69.98)
-          //   monitoring_repull → flat $59.98 per pull (Matt 4/26 spec)
-          //   anything else (pdf/manual/api/email) → billing_rate_pdf (default $59.98)
-          //
-          // Monitoring re-pulls are first-class requests created by the
-          // /api/cron/monitoring-repull cron — billed per delivered transcript.
-          // The MONITORING_PER_PULL_FEE is matched to /api/monitoring/route.ts.
-          const MONITORING_PER_PULL_FEE = 59.98;
+          // The `billing_rate_csv` column is now unused in pricing math; left
+          // in place for backwards-compat with admin UI but the cron ignores
+          // it. Remove the column when convenient.
+          const baseRate = ratePdf;
           (completedRequests || []).forEach((req: any) => {
             const entities = req.request_entities || [];
             entities.forEach((entity: any) => {
@@ -226,14 +227,12 @@ export async function GET(request: NextRequest) {
               if (freeEntityIds.has(entity.id)) return;
 
               totalEntities += 1;
-              const rate = req.intake_method === 'monitoring_repull'
-                ? MONITORING_PER_PULL_FEE
-                : req.intake_method === 'csv'
-                  ? rateCsv
-                  : ratePdf;
-              totalAmount += rate;
+              totalAmount += baseRate;
             });
           });
+          // rateCsv reference kept silent so unused-var lint doesn't fire on
+          // imports we still want available for future tiered pricing work.
+          void rateCsv;
         }
 
         // --- Monitoring line: $N/TIN × (months of active enrollment) ---
@@ -374,14 +373,21 @@ export async function GET(request: NextRequest) {
               });
             }
           } else {
+            // Per-TIN: single line at the client's contracted rate, qty = N.
+            // No more averaged unitPrice (which produced misleading numbers
+            // like \$68.19 in April when CSV/PDF rates differed). Single
+            // baseRate × quantity reads cleanly on the Mercury PDF.
             if (totalEntities > 0) {
               lineItems.push({
                 name: `IRS Transcript Verification (${periodStart} → ${periodEnd})`,
-                unitPrice: totalEntities === 0 ? 0 : Math.round((totalAmount / totalEntities) * 100) / 100,
+                unitPrice: ratePdf,
                 quantity: totalEntities,
               });
             }
             if (monitoringEntities > 0) {
+              // Monitoring is prorated $/TIN/month so the unit price IS
+              // the average per-TIN amount in the period. Mercury display
+              // is honest: "N TINs at \$X average".
               lineItems.push({
                 name: `Account Monitoring (${periodStart} → ${periodEnd})`,
                 unitPrice: monitoringEntities === 0 ? 0 : Math.round((monitoringAmount / monitoringEntities) * 100) / 100,
