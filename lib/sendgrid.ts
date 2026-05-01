@@ -2366,28 +2366,31 @@ export async function sendInvoiceBreakdownEmail(params: {
     }
   } else {
     // Trial mode
-    subject = `${escapeHtml(params.clientName)} — ${periodLabel} usage (still on free trial)`;
+    subject = `${escapeHtml(params.clientName)} — ${periodLabel} usage recap (Trial Credit applied)`;
     title = `${periodLabel} Usage Summary`;
     const credited = params.trialCreditApplied || params.totalAmount;
     content = `
 <p>Hi there,</p>
-<p>Quick recap of what your team ran through ModernTax in ${escapeHtml(periodLabel)}. Since you're still on the free trial, <strong>nothing is owed this month</strong> — but here's the breakdown of what would have been billed so you can plan.</p>
+<p>Quick recap of what your team ran through ModernTax in ${escapeHtml(periodLabel)}. Per our agreement, your <strong>Trial Credit covers this period in full</strong> — nothing is owed this month. Going forward you'll be billed on the 1st of each month for the prior month's usage, Net 15 via ACH through Mercury.</p>
 <table style="width:100%; border-collapse:collapse; margin:20px 0; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px;">
   <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Billing period</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${escapeHtml(periodLabel)}</td></tr>
-  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Items</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${params.totalEntities}</td></tr>
-  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Trial credit applied</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right; color:#15803d;">−${fmtMoney(credited)}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Verifications completed</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${params.totalEntities}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Usage at contracted rate</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${fmtMoney(credited)}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Trial Credit applied</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right; color:#15803d;">−${fmtMoney(credited)}</td></tr>
   <tr><td style="padding:10px 14px;"><strong>Owed this month</strong></td><td style="padding:10px 14px; text-align:right; font-size:18px; color:#15803d;"><strong>$0.00</strong></td></tr>
 </table>
 <p>The full itemized breakdown is attached as <code>${escapeHtml(params.pdfFilename)}</code> — every entity, who processed it, when it completed.</p>
-<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:14px 18px; margin:20px 0;">
-  <p style="margin:0 0 8px 0;"><strong>Heads up — set up billing to avoid a service gap.</strong></p>
-  <p style="margin:0; font-size:14px; color:#666;">Once your trial ends, ModernTax invoices automatically through Mercury (ACH, no credit-card fees). Takes about 60 seconds — your team keeps running entities without interruption.</p>
+<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:16px 20px; margin:24px 0;">
+  <p style="margin:0 0 10px 0; font-size:15px;"><strong>Action: Set up automated ACH billing for May usage onward.</strong></p>
+  <p style="margin:0 0 10px 0; font-size:14px; color:#444;">Your June 1 invoice will be your first paid bill (covering May usage). To enroll in Mercury auto-pay now so you never have to think about it again, please reply to this email and I'll send a one-click enrollment link tailored to your account. Takes 60 seconds — saves us both the AR back-and-forth.</p>
+  <p style="margin:0; font-size:13px; color:#666;">Prefer to wait and enroll on the first invoice? Mercury's pay page has a "Save payment method" checkbox at checkout — same outcome.</p>
 </div>
-<p>Questions about anything in the breakdown? Reply here and I'll dig in.</p>
+<p>Anything off in the breakdown? Reply here and I'll dig in.</p>
     `.trim();
-    if (params.trialBillingSetupUrl) {
-      cta = { text: 'Set Up Mercury Billing →', url: params.trialBillingSetupUrl };
-    }
+    cta = {
+      text: 'Reply to enroll in Mercury auto-pay',
+      url: 'mailto:matt@moderntax.io?subject=Enroll%20Statewide%20CDC%20in%20Mercury%20auto-pay',
+    };
   }
 
   const html = createEmailTemplate(title, content, cta);
