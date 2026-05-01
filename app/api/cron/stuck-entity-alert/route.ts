@@ -80,7 +80,48 @@ export async function GET(request: NextRequest) {
       return Math.floor((now.getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60));
     };
 
-    // Map entities into structured objects
+    // ---- Enrichment FIRST so the closure in mapEntities can resolve them.
+    // (Earlier version had the maps declared after mapEntities ran, which
+    // hit a TDZ error: "Cannot access 'expertMap' before initialization".)
+    const allStuckEntityIds = [
+      ...(unsigned8821s || []),
+      ...(waitingForExpert || []),
+      ...(processingStalled || []),
+    ].map((e: any) => e.id);
+
+    const expertMap = new Map<string, string>();
+    if (allStuckEntityIds.length > 0) {
+      const { data: assignments } = await supabase
+        .from('expert_assignments')
+        .select('entity_id, expert_profile:profiles!expert_assignments_expert_id_fkey(full_name, email)')
+        .in('entity_id', allStuckEntityIds)
+        .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
+
+      (assignments || []).forEach((a: any) => {
+        const name = a.expert_profile?.full_name || a.expert_profile?.email || 'Unassigned';
+        expertMap.set(a.entity_id, name);
+      });
+    }
+
+    const allRequestIds = [
+      ...(unsigned8821s || []),
+      ...(waitingForExpert || []),
+      ...(processingStalled || []),
+    ].map((e: any) => e.request_id).filter(Boolean);
+
+    const clientNameMap = new Map<string, string>();
+    if (allRequestIds.length > 0) {
+      const { data: requests } = await supabase
+        .from('requests')
+        .select('id, client_id, clients(name)')
+        .in('id', Array.from(new Set(allRequestIds))) as { data: any[] | null; error: any };
+
+      (requests || []).forEach((r: any) => {
+        clientNameMap.set(r.id, r.clients?.name || 'Unknown');
+      });
+    }
+
+    // ---- Now safe to map entities (closure reads populated maps).
     const mapEntities = (entities: any[] | null, durationFn: (d: string) => string): StuckEntity[] => {
       return (entities || []).map((e: any) => ({
         entity_name: e.entity_name || 'Unknown Entity',
@@ -95,47 +136,6 @@ export async function GET(request: NextRequest) {
     const unsignedList = mapEntities(unsigned8821s, (d) => `${daysBetween(d)} days`);
     const waitingList = mapEntities(waitingForExpert, (d) => `${hoursBetween(d)} hours`);
     const stalledList = mapEntities(processingStalled, (d) => `${hoursBetween(d)} hours`);
-
-    // Enrich stuck entities with expert assignment + client info
-    const allStuckEntityIds = [
-      ...(unsigned8821s || []),
-      ...(waitingForExpert || []),
-      ...(processingStalled || []),
-    ].map((e: any) => e.id);
-
-    // Fetch expert assignments for stuck entities
-    let expertMap = new Map<string, string>();
-    if (allStuckEntityIds.length > 0) {
-      const { data: assignments } = await supabase
-        .from('expert_assignments')
-        .select('entity_id, expert_profile:profiles!expert_assignments_expert_id_fkey(full_name, email)')
-        .in('entity_id', allStuckEntityIds)
-        .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
-
-      (assignments || []).forEach((a: any) => {
-        const name = a.expert_profile?.full_name || a.expert_profile?.email || 'Unassigned';
-        expertMap.set(a.entity_id, name);
-      });
-    }
-
-    // Fetch client names for stuck entities
-    const allRequestIds = [
-      ...(unsigned8821s || []),
-      ...(waitingForExpert || []),
-      ...(processingStalled || []),
-    ].map((e: any) => e.request_id).filter(Boolean);
-
-    let clientNameMap = new Map<string, string>();
-    if (allRequestIds.length > 0) {
-      const { data: requests } = await supabase
-        .from('requests')
-        .select('id, client_id, clients(name)')
-        .in('id', Array.from(new Set(allRequestIds))) as { data: any[] | null; error: any };
-
-      (requests || []).forEach((r: any) => {
-        clientNameMap.set(r.id, r.clients?.name || 'Unknown');
-      });
-    }
 
     const totalStuck = unsignedList.length + waitingList.length + stalledList.length;
 
