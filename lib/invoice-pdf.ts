@@ -450,14 +450,18 @@ function drawVerificationDataRow(ctx: RenderCtx, rowNum: number, ent: Verificati
   }
   _zebraToggle = !_zebraToggle;
 
+  // Zero-priced entities (subscription-included or trial) show "Included"
+  // instead of "$0.00" so the line item reads cleanly.
+  const priceLabel = ent.unitPrice === 0 ? 'Included' : formatCurrency(ent.unitPrice);
+  const amountLabel = ent.unitPrice === 0 ? 'Included' : formatCurrency(ent.unitPrice);
   const cols: [string, number][] = [
     [String(rowNum), 22],
     [truncate(ent.entityName, 38), 220],
     [ent.formType, 50],
     [ent.loanNumber || '-', 60],
     [ent.completedAt, 70],
-    [formatCurrency(ent.unitPrice), 60],
-    [formatCurrency(ent.unitPrice), 60],
+    [priceLabel, 60],
+    [amountLabel, 60],
   ];
   let x = MARGIN_X;
   for (let i = 0; i < cols.length; i++) {

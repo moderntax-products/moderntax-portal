@@ -122,6 +122,23 @@ async function handle(request: NextRequest) {
   const NEW_MODEL_EFFECTIVE = '2026-05-01';
   const useNewRateModel = periodEnd >= NEW_MODEL_EFFECTIVE;
 
+  // Re-fetch the client's billing model so we know whether this is per-TIN or
+  // subscription. Subscription clients (Clearfirm) are billed a flat monthly
+  // fee — the breakdown shows the entities used in the period as informational
+  // context, not as line items charged at the per-TIN rate.
+  const { data: billingConfig } = await supabase
+    .from('clients')
+    .select('billing_model, subscription_monthly_amount, subscription_included_entities, ' +
+      'subscription_overage_rate, billing_rate_pdf, billing_rate_csv')
+    .eq('id', clientRow.id)
+    .single() as { data: any };
+  const isSubscription = billingConfig?.billing_model === 'subscription';
+  const subscriptionMonthly = billingConfig?.subscription_monthly_amount || 0;
+  const subscriptionIncluded = billingConfig?.subscription_included_entities || 0;
+  const subscriptionOverageRate = billingConfig?.subscription_overage_rate || 0;
+  const ratePdf = billingConfig?.billing_rate_pdf || 59.98;
+  const rateCsv = billingConfig?.billing_rate_csv || 69.98;
+
   // Pull the period's completed entities, joined to processor + request meta.
   const periodEndExclusive = `${periodEnd}T23:59:59.999Z`;
   const { data: rawEntities, error: entError } = await supabase
@@ -152,9 +169,14 @@ async function handle(request: NextRequest) {
     }
   }
 
-  // Group verification entities by processor
+  // Group verification entities by processor.
+  // Per-TIN clients: each entity's unitPrice is the actual rate billed.
+  // Subscription clients: entities shown at unitPrice=0 (informational only,
+  //   subscription fee handled as a single line below). Overage entities (above
+  //   subscription_included_entities) are billed at subscription_overage_rate.
   const verificationByProcessor = new Map<string, VerificationGroup>();
   let selfSignedCount = 0;
+  const totalCompletedCount = (rawEntities || []).length;
   for (const e of rawEntities || []) {
     const procName = profileMap.get(e.requests.requested_by) || 'Unattributed';
     let group = verificationByProcessor.get(procName);
@@ -163,10 +185,17 @@ async function handle(request: NextRequest) {
       verificationByProcessor.set(procName, group);
     }
     const intake = e.requests.intake_method || 'pdf';
-    const unitPrice = intake === 'csv' ? 69.98 : 59.98;
+    let unitPrice: number;
+    if (isSubscription) {
+      // Subscription model: entities are zero-priced in the listing; the flat
+      // fee + overage are emitted separately below.
+      unitPrice = 0;
+    } else {
+      unitPrice = intake === 'csv' ? rateCsv : ratePdf;
+    }
     group.entities.push({
       entityName: e.entity_name || '(unnamed)',
-      formType: e.form_type || '—',
+      formType: e.form_type || '-',
       loanNumber: e.requests.loan_number || '',
       completedAt: formatMdy(e.completed_at),
       unitPrice,
@@ -175,14 +204,41 @@ async function handle(request: NextRequest) {
   }
 
   // Sort processors by group total descending so biggest contributor shows first
-  const verificationGroups: VerificationGroup[] = Array.from(verificationByProcessor.values())
+  let verificationGroups: VerificationGroup[] = Array.from(verificationByProcessor.values())
     .map(g => ({
       ...g,
       entities: g.entities.sort((a, b) => a.completedAt.localeCompare(b.completedAt)),
     }))
-    .sort((a, b) =>
-      b.entities.reduce((s, e) => s + e.unitPrice, 0) -
-      a.entities.reduce((s, e) => s + e.unitPrice, 0));
+    .sort((a, b) => b.entities.length - a.entities.length);
+
+  // Subscription clients: prepend a synthetic "Monthly Subscription Plan" row
+  // showing the flat fee, then optionally an overage row. The per-entity rows
+  // below stay zero-priced (informational). This keeps the breakdown total
+  // reconciling to what Mercury billed for subscription accounts.
+  if (isSubscription) {
+    const usedCount = totalCompletedCount;
+    const overageCount = Math.max(0, usedCount - subscriptionIncluded);
+    const subscriptionGroup: VerificationGroup = {
+      processorName: 'Monthly Subscription Plan',
+      entities: [{
+        entityName: `Flat monthly fee  -  up to ${subscriptionIncluded} entities included`,
+        formType: '-',
+        loanNumber: '-',
+        completedAt: `${formatMdy(periodStart)} - ${formatMdy(periodEnd)}`,
+        unitPrice: subscriptionMonthly,
+      }],
+    };
+    if (overageCount > 0) {
+      subscriptionGroup.entities.push({
+        entityName: `Overage:  ${overageCount} entities above included quota`,
+        formType: '-',
+        loanNumber: '-',
+        completedAt: '-',
+        unitPrice: overageCount * subscriptionOverageRate,
+      });
+    }
+    verificationGroups = [subscriptionGroup, ...verificationGroups];
+  }
 
   // Self-signed 8821 surcharge ($10/entity). Per Matt 2026-05-01: every
   // CSV-uploaded or manually-entered entity triggers an 8821 send so this
