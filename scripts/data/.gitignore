@@ -1,0 +1,3 @@
+# The sent log is operational state; kept locally for resume-from-where-we-left-off
+# but excluded from the repo to avoid leaking recipient emails through git history.
+may2026-sent.json

@@ -1,0 +1,3184 @@
+{
+  "pulled_at": "2026-05-01",
+  "total_in_hubspot": 526,
+  "addressable": [
+    {
+      "email": "rob.einstein@usbank.com",
+      "first": "Rob",
+      "last": "Einstein",
+      "company": "US Bank",
+      "created": "2026-04-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "matthew.jacobson@wpp.com",
+      "first": "Matthew",
+      "last": "Jacobson",
+      "company": "WPP",
+      "created": "2026-04-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mohamed.ahmed@wfp.org",
+      "first": "Mohamed",
+      "last": "Ahmed",
+      "company": "World Food Programme",
+      "created": "2026-04-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "david.eads@vinefin.com",
+      "first": "David",
+      "last": "Eads",
+      "company": "",
+      "created": "2026-04-21",
+      "demo": "2026-05-08",
+      "tier": "business"
+    },
+    {
+      "email": "lent@growthcorp.com",
+      "first": "Katie",
+      "last": "Lent",
+      "company": "",
+      "created": "2026-04-14",
+      "demo": "2026-04-22",
+      "tier": "business"
+    },
+    {
+      "email": "erin.wilsey@bancofcal.com",
+      "first": "Erin",
+      "last": "Wilsey",
+      "company": "",
+      "created": "2026-04-06",
+      "demo": "2026-04-07",
+      "tier": "business"
+    },
+    {
+      "email": "aaron@remitian.com",
+      "first": "Aaron",
+      "last": "Gould",
+      "company": "",
+      "created": "2026-03-19",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "james.livengood@gmail.com",
+      "first": "James",
+      "last": "Livengood",
+      "company": "",
+      "created": "2026-03-18",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "alan.thomes@cadencebank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "shira@monaco.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-17",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "therese.coetzee@td.com",
+      "first": "Therese",
+      "last": "Coetzee",
+      "company": "",
+      "created": "2026-03-13",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tejendravekaria@gmail.com",
+      "first": "Tejendra",
+      "last": "Vekaria",
+      "company": "",
+      "created": "2026-03-11",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "randy@rizerisk.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jennifer.chiavetta@liveoak.bank",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "justin@rizerisk.com",
+      "first": "Justin",
+      "last": "Pizzola",
+      "company": "",
+      "created": "2026-03-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "becky@rizerisk.com",
+      "first": "Becky",
+      "last": "Gordon",
+      "company": "",
+      "created": "2026-03-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tej4041@gmail.com",
+      "first": "Tejendra",
+      "last": "Vekaria",
+      "company": "CountrySide Lodging LLC",
+      "created": "2026-03-10",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "ashvin8891@gmail.com",
+      "first": "Ashvin",
+      "last": "Patel",
+      "company": "Misha LLC",
+      "created": "2026-03-10",
+      "demo": "2026-03-17",
+      "tier": "personal"
+    },
+    {
+      "email": "dzlatanovic@admlegal.rs",
+      "first": "Dusan",
+      "last": "Zlatanovic",
+      "company": "",
+      "created": "2026-03-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "les.pasternack@pnc.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "americaeast@eventfullyyourz.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jessica.hart@sbp-online.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "americawest@eventfullyyourz.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ryan@ftcafe.org",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jeremy@43north.org",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "scalewayconsulting@gmail.com",
+      "first": "Christian",
+      "last": "Slough",
+      "company": "",
+      "created": "2026-03-04",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "wrobinson@westernalliancebank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "elizabeth.larios@gener8tor.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ppm@mpkequitypartners.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-03-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "connor@strongterm.com",
+      "first": "Connor",
+      "last": "Perkey",
+      "company": "",
+      "created": "2026-02-27",
+      "demo": "2026-03-20",
+      "tier": "business"
+    },
+    {
+      "email": "jon.bridges@atlanticunionbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "gvalencia@capitalbankmd.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jack.richardson@serentcapital.com",
+      "first": "Jack",
+      "last": "Richardson",
+      "company": "",
+      "created": "2026-02-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sgenet10@gmail.com",
+      "first": "Genet",
+      "last": "Sitot",
+      "company": "Lindora Plaza LLC / Fifth Property / Bud's Liquor",
+      "created": "2026-02-26",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "cnarcisse@battery.com",
+      "first": "Carl",
+      "last": "Narcisse",
+      "company": "Battery Ventures",
+      "created": "2026-02-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ycho@cnob.com",
+      "first": "Youn",
+      "last": "Cho",
+      "company": "CNOB",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "twelch@mynnb.com",
+      "first": "Tom",
+      "last": "Welch",
+      "company": "NNB",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tharvey@azcapitalsource.com",
+      "first": "Tasha",
+      "last": "Harvey",
+      "company": "AZ Capital Source",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "susan.bossmann@bmo.com",
+      "first": "Susan",
+      "last": "Bossmann",
+      "company": "BMO",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "scott.thompson@americanlendingcenter.com",
+      "first": "Scott",
+      "last": "Thompson",
+      "company": "American Lending Center",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rchan@fivestarbank.com",
+      "first": "Ryan",
+      "last": "Chan",
+      "company": "Five Star Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rbranch@ppbi.com",
+      "first": "Renae",
+      "last": "Branch",
+      "company": "Pacific Premier",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rbyrd@benetrends.com",
+      "first": "Reg",
+      "last": "Byrd",
+      "company": "Benetrends",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rebecca@lrmlenderconsultants.com",
+      "first": "Rebecca",
+      "last": "Mendoza",
+      "company": "LRM Lender Consultants",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rzippwald@naggl.org",
+      "first": "Rachel",
+      "last": "Zippwald",
+      "company": "NAGGL",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nstoneman@pbcapital.com",
+      "first": "Nick",
+      "last": "Stoneman",
+      "company": "PB Capital",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "morgandavis@umpquabank.com",
+      "first": "Morgan",
+      "last": "Davis",
+      "company": "Umpqua Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mpetit@meadowsbank.com",
+      "first": "Mark",
+      "last": "Petit",
+      "company": "Meadows Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mark@ampbusinessvaluations.com",
+      "first": "Mark",
+      "last": "Ahern",
+      "company": "AMP Business Valuations",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mkroigaard@beneficialstate.com",
+      "first": "Mari",
+      "last": "Kroigaard",
+      "company": "Beneficial State Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mstutz@naggl.org",
+      "first": "Margherita",
+      "last": "Stutz",
+      "company": "NAGGL",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lori@lrmlenderconsultants.com",
+      "first": "Lori",
+      "last": "McCausland",
+      "company": "LRM Lender Consultants",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ltupou@g.bank",
+      "first": "Latai",
+      "last": "Tupou",
+      "company": "G Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kgranchelli@naggl.org",
+      "first": "Kristin",
+      "last": "Granchelli",
+      "company": "NAGGL",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kpower@csina.com",
+      "first": "Kevin",
+      "last": "Power",
+      "company": "CSINA",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kladany@naggl.org",
+      "first": "Karen",
+      "last": "Ladany",
+      "company": "NAGGL",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "john.dzida@bankbsf.com",
+      "first": "John",
+      "last": "Dzida",
+      "company": "Bank BSF",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jhuynh@firstbusiness.com",
+      "first": "Jerry",
+      "last": "Huynh",
+      "company": "First Business",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jenna.williams@herbank.com",
+      "first": "Jenna",
+      "last": "Williams",
+      "company": "Her Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jconnor@savibank.com",
+      "first": "Jeff",
+      "last": "Connor",
+      "company": "Savibank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jeanine.davis@cvcb.com",
+      "first": "Jeanine",
+      "last": "Davis",
+      "company": "CVCB",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jshintaku@bnc.bank",
+      "first": "Jared",
+      "last": "Shintaku",
+      "company": "BNC Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jamie.sherbondy@wafd.com",
+      "first": "Jamie",
+      "last": "Sherbondy",
+      "company": "WaFd Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jackie.bogdan@crossfirstbank.com",
+      "first": "Jackie",
+      "last": "Bogdan",
+      "company": "CrossFirst Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "gallen@naggl.org",
+      "first": "Ginger",
+      "last": "Allen",
+      "company": "NAGGL",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "fflanagan@summitstatebank.com",
+      "first": "Fergal",
+      "last": "Flanagan",
+      "company": "Summit State Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "erin.carter@communitywestbank.com",
+      "first": "Erin",
+      "last": "Carter",
+      "company": "Community West Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "eric_elan@trillicom.com",
+      "first": "Eric",
+      "last": "Elan",
+      "company": "Trillicom",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dheyden@sccountybank.com",
+      "first": "Diane",
+      "last": "Heyden",
+      "company": "SC County Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "davina.bergin@getevolved.com",
+      "first": "Davina",
+      "last": "Bergin",
+      "company": "GetEvolved",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dtracy@bnc.bank",
+      "first": "David",
+      "last": "Tracy",
+      "company": "BNC Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "howellsc@missionbank.bank",
+      "first": "Craig",
+      "last": "Howells",
+      "company": "Mission Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "crho@velocitysba.com",
+      "first": "Charles",
+      "last": "Rho",
+      "company": "Velocity SBA",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "catherine.jooyan@usbank.com",
+      "first": "Catherine",
+      "last": "Jooyan",
+      "company": "US Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ccrockett@fsbnv.com",
+      "first": "Carolyn",
+      "last": "Crockett",
+      "company": "FSB Nevada",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "carol.thompson@herbank.com",
+      "first": "Carol Vi",
+      "last": "Thompson",
+      "company": "Her Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "carl.danckaert@azfcu.org",
+      "first": "Carl",
+      "last": "Danckaert",
+      "company": "Arizona Federal Credit Union",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "bstetson@bncbank.com",
+      "first": "Brenna",
+      "last": "Stetson",
+      "company": "BNC Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "brandi.korynta@azfcu.org",
+      "first": "Brandi",
+      "last": "Korynta",
+      "company": "Arizona Federal Credit Union",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "apan@gbcib.com",
+      "first": "Annie",
+      "last": "Pan",
+      "company": "GBCIB",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ammeade@cbbank.com",
+      "first": "Anne",
+      "last": "Meade",
+      "company": "CB Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "anna.chung@hanmi.com",
+      "first": "Anna",
+      "last": "Chung",
+      "company": "Hanmi Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "asutherland@redwoodcu.org",
+      "first": "Angela",
+      "last": "Sutherland",
+      "company": "Redwood Credit Union",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "adorland@fresnofirstbank.com",
+      "first": "Amber",
+      "last": "Dorland",
+      "company": "Fresno First Bank",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "alice@kressercorona.com",
+      "first": "Alice",
+      "last": "Corona",
+      "company": "Kresser Corona",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "alex.m.santos@chase.com",
+      "first": "Alex",
+      "last": "Santos",
+      "company": "Chase",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rlapointe@granitestatedev.com",
+      "first": "Robin",
+      "last": "LaPointe",
+      "company": "Granite State Development Corp",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "adamslj5@gmail.com",
+      "first": "Lyle",
+      "last": "Adams",
+      "company": "",
+      "created": "2026-02-25",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "eric.yiu@adyen.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jeffboone@calstatewide.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ryan@fbdc.net",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mathew@centerstonesba.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-19",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mfonisoee@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-19",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "taariq@serendb.com",
+      "first": "Taariq",
+      "last": "Lewis",
+      "company": "",
+      "created": "2026-02-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "josh@enfi.ai",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "parthiv@clsolutionscorp.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jeremiahjean@blitzmobility.com",
+      "first": "Jeremiah",
+      "last": "Jean",
+      "company": "",
+      "created": "2026-02-18",
+      "demo": "2026-02-20",
+      "tier": "business"
+    },
+    {
+      "email": "dhruvjani7@gmail.com",
+      "first": "Dhruv",
+      "last": "jani",
+      "company": "",
+      "created": "2026-02-13",
+      "demo": "2026-02-16",
+      "tier": "personal"
+    },
+    {
+      "email": "tamara@mpwrai.com",
+      "first": "Tamara",
+      "last": "Laine",
+      "company": "",
+      "created": "2026-02-11",
+      "demo": "2026-02-18",
+      "tier": "business"
+    },
+    {
+      "email": "ruchitp0325@gmail.com",
+      "first": "Ruchit",
+      "last": "Patel",
+      "company": "",
+      "created": "2026-02-11",
+      "demo": "2026-02-12",
+      "tier": "personal"
+    },
+    {
+      "email": "contact@sudduthconstructioninc.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lukaceranic38@gmail.com",
+      "first": "Luka",
+      "last": "Ceranic",
+      "company": "",
+      "created": "2026-02-11",
+      "demo": "2026-02-18",
+      "tier": "personal"
+    },
+    {
+      "email": "darlynevolcy156@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-06",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "abeshekel1@gmail.com",
+      "first": "Abe",
+      "last": "Shekel",
+      "company": "",
+      "created": "2026-02-06",
+      "demo": "2026-02-09",
+      "tier": "personal"
+    },
+    {
+      "email": "ekaplan@bvp.com",
+      "first": "Eric",
+      "last": "Kaplan",
+      "company": "",
+      "created": "2026-02-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "anderson.1738@icloud.com",
+      "first": "Darlyne",
+      "last": "Volcy",
+      "company": "",
+      "created": "2026-02-05",
+      "demo": "2026-02-06",
+      "tier": "personal"
+    },
+    {
+      "email": "maira.murillo@gener8tor.com",
+      "first": "Maira",
+      "last": "Murillo",
+      "company": "",
+      "created": "2026-02-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "chris.walters@finastra.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-02-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rob@ecaplabs.com",
+      "first": "Rob",
+      "last": "DaLee",
+      "company": "",
+      "created": "2026-02-02",
+      "demo": "2026-02-04",
+      "tier": "business"
+    },
+    {
+      "email": "aantonatos@squareup.com",
+      "first": "Agnes",
+      "last": "Antonatos",
+      "company": "Square, Inc.",
+      "created": "2026-01-30",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "visisco@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-28",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "boardy@boardy.ai",
+      "first": "Boardman",
+      "last": "Boardy",
+      "company": "",
+      "created": "2026-01-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "patrick@arthurventures.com",
+      "first": "Patrick",
+      "last": "Meenan",
+      "company": "",
+      "created": "2026-01-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "navigonconsulting@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-28",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "navigonconsultingakp@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-28",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "overhage@savantgrowth.com",
+      "first": "Olivier",
+      "last": "Verhage",
+      "company": "",
+      "created": "2026-01-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "santurena@yahoo.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-22",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "smssalvatoredevivo@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-22",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "torrelyn.graber@td.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ann.speed@gener8tor.com",
+      "first": "Ann",
+      "last": "Speed",
+      "company": "",
+      "created": "2026-01-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "updates@gener8tor.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "arpan2423@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "alkeshmail3@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "dlax1@yahoo.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "fernando.recinos@hedgestone.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jthielen@companycounsel.law",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "info@cfundinghome.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-20",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nirav9594@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-16",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "md232@hotmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-16",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "markus@olo.space",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "anu@abanerjees.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "puravpatel1288@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-16",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "admin@artofsba.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nbajaj@csclending.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sanjelsumit@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-12",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "christine.lambdin@c21nm.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "popslambdin@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-12",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "mrehberger@customersbank.com",
+      "first": "Marc",
+      "last": "Rehberger",
+      "company": "",
+      "created": "2026-01-09",
+      "demo": "2026-01-16",
+      "tier": "business"
+    },
+    {
+      "email": "wshraga@gmail.com",
+      "first": "Bill",
+      "last": "Shraga",
+      "company": "",
+      "created": "2026-01-08",
+      "demo": "2026-01-09",
+      "tier": "personal"
+    },
+    {
+      "email": "weston@getmorphic.com",
+      "first": "Weston",
+      "last": "Baker",
+      "company": "",
+      "created": "2026-01-08",
+      "demo": "2026-01-16",
+      "tier": "business"
+    },
+    {
+      "email": "lgirolimon@fnbl.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kelly.abernathy@bcsbmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "cocampo@havenbk.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "cathy.gunnells@dfcufinancial.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jraab@dartbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "abhic@customersbank.com",
+      "first": "Abhi",
+      "last": "Chandrasekhara",
+      "company": "",
+      "created": "2026-01-06",
+      "demo": "2026-01-08",
+      "tier": "business"
+    },
+    {
+      "email": "bill.shraga@senahill.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "justin.fahy@bankbsf.com",
+      "first": "Justin",
+      "last": "Fahy",
+      "company": "",
+      "created": "2026-01-05",
+      "demo": "2026-01-28",
+      "tier": "business"
+    },
+    {
+      "email": "logan@fin.capital",
+      "first": "Allin",
+      "last": "Logan",
+      "company": "",
+      "created": "2026-01-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "michael.gose@trusyft.com",
+      "first": "Michael",
+      "last": "Gose",
+      "company": "",
+      "created": "2026-01-05",
+      "demo": "2026-01-06",
+      "tier": "business"
+    },
+    {
+      "email": "ray@artofsba.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2026-01-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jaimin@milsteincompanies.com",
+      "first": "Jaimin",
+      "last": "Desai",
+      "company": "",
+      "created": "2026-01-05",
+      "demo": "2026-01-23",
+      "tier": "business"
+    },
+    {
+      "email": "fintechtakes@workweek.com",
+      "first": "Fintech",
+      "last": "Takes",
+      "company": "",
+      "created": "2026-01-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "michaels1030@gmail.com",
+      "first": "Michael",
+      "last": "Shin",
+      "company": "",
+      "created": "2025-12-29",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "adamtellez95@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-12-20",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "gregoryshephard@mac.com",
+      "first": "Gregory",
+      "last": "Shephard",
+      "company": "",
+      "created": "2025-12-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "oacevedo@americascreditunions.org",
+      "first": "Oscar",
+      "last": "Acevedo",
+      "company": "",
+      "created": "2025-12-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sales@americascreditunions.org",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-12-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "pierson.berry@carta.com",
+      "first": "Pierson",
+      "last": "Berry",
+      "company": "",
+      "created": "2025-12-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "chad@arthacc.com",
+      "first": "Chad",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-12-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mlorenzi@cbcal.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-12-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dimple@clsolutionscorp.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-12-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nir@capitalos.com",
+      "first": "Nir",
+      "last": "Dremer",
+      "company": "",
+      "created": "2025-12-02",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "danison@bench.co",
+      "first": "Danison",
+      "last": "Rarama",
+      "company": "",
+      "created": "2025-12-02",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mip009@gmail.com",
+      "first": "Mahesh",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-12-02",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "kristin.isaac@strudelbots.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-12-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "twallace@hefnyc.org",
+      "first": "Tonya",
+      "last": "Wallace",
+      "company": "Harlem Entrepreneurial Fund",
+      "created": "2025-12-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nimisha1617@gmail.com",
+      "first": "Nimisha",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-28",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "sari@phenium.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "swarren3rd@icloud.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-25",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "gurufincorp81@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-25",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "sselig@tidalhq.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "legal@employer.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "daniel@bland.ai",
+      "first": "Daniel",
+      "last": "Haberern",
+      "company": "",
+      "created": "2025-11-20",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "omar.khan@cocountant.com",
+      "first": "Omar",
+      "last": "Khan",
+      "company": "",
+      "created": "2025-11-19",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "baraha@ubbchicago.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-19",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ankypatel1@yahoo.com",
+      "first": "Ankit",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-19",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "ritesh@clsolutionscorp.com",
+      "first": "Ritesh",
+      "last": "Bhagat",
+      "company": "",
+      "created": "2025-11-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "support@anthropic.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "binalpatel235@gmail.com",
+      "first": "Binal",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-17",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "princethepatel@gmail.com",
+      "first": "Prince",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-17",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "elsagroupil@gmail.com",
+      "first": "Elsa",
+      "last": "RG",
+      "company": "",
+      "created": "2025-11-15",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "waqas.khalid_8181@yahoo.com",
+      "first": "Waqas",
+      "last": "Khalid",
+      "company": "",
+      "created": "2025-11-14",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "nr@pdhfinancial.com",
+      "first": "Nathaniel",
+      "last": "Rogers",
+      "company": "",
+      "created": "2025-11-14",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "hyungsup.shin@gmail.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-13",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "shilpagami35@gmail.com",
+      "first": "Shilpa",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-13",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "parmars.planada@gmail.com",
+      "first": "Gurminder",
+      "last": "Singh",
+      "company": "",
+      "created": "2025-11-13",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "rvp_85@yahoo.com",
+      "first": "Rushil",
+      "last": "Patel",
+      "company": "",
+      "created": "2025-11-13",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "robert@impostacostumes.com",
+      "first": "Robert",
+      "last": "Berman",
+      "company": "",
+      "created": "2025-11-13",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "k.malerba1121@gmail.com",
+      "first": "Kim",
+      "last": "Malerba",
+      "company": "",
+      "created": "2025-11-06",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "mallee@workwithmapaipartners.co",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "melissa@montanafamilypharmacies.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-11-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "bandish@clsolutionscorp.com",
+      "first": "Bandish",
+      "last": "Thakkar",
+      "company": "",
+      "created": "2025-11-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nbaik@crossriverbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-30",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "syekich@aeiconsultants.com",
+      "first": "Steven",
+      "last": "Yekich",
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "steven@platinumfilings.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "samuel.hon@ficoso.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "skleinschmidt@franfund.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rachel@coloradolendingsource.org",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sobhan@bland.ai",
+      "first": "Sobhan",
+      "last": "Nejad",
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lucca@bland.ai",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "zmccall@firstib.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "edcleveland@multifunding.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "omer.sheikh@port51.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jonathan.kivett@southstatebank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sylvia.bordeaux@bankparagon.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "astarfield@financialguide.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "legal@concordiacapitalco.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "andy@concordiacapitalco.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jake@concordiacapitalco.com",
+      "first": "Jake",
+      "last": "Connelly",
+      "company": "",
+      "created": "2025-10-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "angelina@canopy.space",
+      "first": "Angelina",
+      "last": "Sibbald",
+      "company": "",
+      "created": "2025-10-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "oliver.shin@myopenbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-22",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jasonkim@usmetrobank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-22",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sean.mcdonald@pnc.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-22",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "fionnatruong@usmetrobank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ayu@velocitysba.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "danielle.hoge@montanafamilypharmacies.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tim@precisionacinc.com",
+      "first": "Tim",
+      "last": "Mulligan",
+      "company": "",
+      "created": "2025-10-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "trevor.acton@vencora.com",
+      "first": "Trevor",
+      "last": "Acton",
+      "company": "",
+      "created": "2025-10-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "vradzinsky@taxdome.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ian@canopy.space",
+      "first": "Ian",
+      "last": "James",
+      "company": "",
+      "created": "2025-10-14",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "khan.saba@gmail.com",
+      "first": "Saba",
+      "last": "Khan",
+      "company": "",
+      "created": "2025-10-13",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "shiloh.hall@firstcitizens.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dorothy.ligas@firstcitizens.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "matthew.kutner@firstcitizens.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "chagerty@firstib.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nicholas@concordiacapitalco.com",
+      "first": "Nicholas",
+      "last": "Oliveri",
+      "company": "",
+      "created": "2025-10-10",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "heather.chang@hanmi.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "michael.jarvis@citizensbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "thomas.faber@oldnational.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "cheryl.hayes@wellsfargo.com",
+      "first": "Cheryl",
+      "last": "Hayes",
+      "company": "",
+      "created": "2025-10-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "deanna.glory@bankbsf.com",
+      "first": "Deanna",
+      "last": "Glory",
+      "company": "",
+      "created": "2025-10-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jesse@employer.com",
+      "first": "Jesse",
+      "last": "Tinsley",
+      "company": "",
+      "created": "2025-10-08",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nabil@getapexsolutions.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "vlad@pemarketplace.co",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "andrew@pemarket.com",
+      "first": "Andrew",
+      "last": "Perlmutter",
+      "company": "",
+      "created": "2025-10-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tommy@3starcapital.com",
+      "first": "Thomas",
+      "last": "Lalonde",
+      "company": "",
+      "created": "2025-10-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lucia.valenzuela@jmco.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rachel.l.gondek@us.hsbc.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-10-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kristine.dandan@us.hsbc.com",
+      "first": "Kristine",
+      "last": "Dandan",
+      "company": "",
+      "created": "2025-10-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lnolan@indeed.com",
+      "first": "Lisa",
+      "last": "Nolan",
+      "company": "Indeed.com",
+      "created": "2025-10-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ramosj@usbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-29",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "brian.phillips1@usbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-29",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "cory.windle@huntington.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "stacey.fessel@regions.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "randy.crawford@53.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "oramirez@newtekone.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jholland@ucbi.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "elizabeth.daniels@citizensbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ksiripong@celticbank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lori.blamer@53.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jared.chester@wellsfargo.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sonya.martinez@chase.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-28",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "andrew@mctitle.com",
+      "first": "Andrew",
+      "last": "Chiligiris",
+      "company": "",
+      "created": "2025-09-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "june.ingalls@exchangebank.com",
+      "first": null,
+      "last": null,
+      "company": "",
+      "created": "2025-09-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "taxtechnicians@gmail.com",
+      "first": "Ronnie",
+      "last": "Hines",
+      "company": "",
+      "created": "2025-09-15",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "andrew@pemarketplace.co",
+      "first": "Andrew",
+      "last": "Perlmutter",
+      "company": "PEmarketplace",
+      "created": "2025-09-03",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "shelly@taxdefensereliefgroup.com",
+      "first": "Shelly",
+      "last": "Murad",
+      "company": "taxdefensereliefgroup.com",
+      "created": "2025-08-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "eric@taxdefensereliefgroup.com",
+      "first": "Eric",
+      "last": "Tolbert",
+      "company": "taxdefensereliefgroup.com",
+      "created": "2025-08-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "donald.j.dietrich@huntington.com",
+      "first": "Donald",
+      "last": "Dietrich",
+      "company": "Huntington Bancshares Incorporated",
+      "created": "2025-08-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "brent.harmanis@huntington.com",
+      "first": "Brent",
+      "last": "H",
+      "company": "Huntington Bancshares Incorporated",
+      "created": "2025-08-27",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jess@downstax.com",
+      "first": "Jessie",
+      "last": "Downs",
+      "company": "downstax.com",
+      "created": "2025-08-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ggrewal@topcon.com",
+      "first": "Gurjeet",
+      "last": "G",
+      "company": "Topcon Positioning Systems",
+      "created": "2025-08-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "yolanda@leamonbusinessservices.com",
+      "first": "Yoland",
+      "last": null,
+      "company": "leamonbusinessservices.com",
+      "created": "2025-08-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "shelly@taxdefensereleifgroup.com",
+      "first": null,
+      "last": null,
+      "company": "taxdefensereleifgroup.com",
+      "created": "2025-08-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ross@simplertaxrelief.com",
+      "first": "Ross",
+      "last": "Hitchen",
+      "company": "Simpler Tax Relief LLC",
+      "created": "2025-08-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "elwilson@visa.com",
+      "first": "Elizabeth",
+      "last": "W",
+      "company": "Visa",
+      "created": "2025-08-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mdaniloff@splunk.com",
+      "first": "Michelle",
+      "last": "D",
+      "company": "Splunk",
+      "created": "2025-08-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "kellischweitzer@synovus.com",
+      "first": "Kelli",
+      "last": "Schweitzer",
+      "company": "Synovus",
+      "created": "2025-08-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "umahajan@chicagoatlantic.com",
+      "first": "Umesh",
+      "last": "Mahajan",
+      "company": "Chicago Atlantic",
+      "created": "2025-08-25",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tammy.stout@rvvaluemart.com",
+      "first": "Tammy",
+      "last": "Stout",
+      "company": "RV Value Mart",
+      "created": "2025-08-24",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "amy@cascadiapharmacygroup.com",
+      "first": "Amy",
+      "last": "Milder",
+      "company": "Cascadia Pharmacy Group",
+      "created": "2025-08-23",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "vwang@hofvc.com",
+      "first": "Victor",
+      "last": "Wang",
+      "company": "HOF Capital",
+      "created": "2025-08-23",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mpoplask@amazon.com",
+      "first": "Michael",
+      "last": "Poplaski",
+      "company": "Amazon",
+      "created": "2025-08-23",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rchinoy@box.com",
+      "first": "Ravi",
+      "last": "C",
+      "company": "Box",
+      "created": "2025-08-22",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "eodonnell@versatilets.com",
+      "first": "Ed",
+      "last": "O'Donnell",
+      "company": "Versatile Credit",
+      "created": "2025-08-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "joe@mainstreet.com",
+      "first": "Joe",
+      "last": "Biggica",
+      "company": "Bench Accounting Inc",
+      "created": "2025-08-21",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ronan.croke@wayflyer.com",
+      "first": "Ronan",
+      "last": "Croke",
+      "company": "Wayflyer",
+      "created": "2025-08-20",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "smalpass@nd.edu",
+      "first": "Scott",
+      "last": "Malpass",
+      "company": "University of Notre Dame",
+      "created": "2025-08-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "gcastillo@electricalconnectionsllc.com",
+      "first": "Guillermo",
+      "last": "Castillo",
+      "company": "Electrical Connections LLC.",
+      "created": "2025-08-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "laura@qgacapital.com",
+      "first": "Laura",
+      "last": "Yang",
+      "company": "Quantum Growth Advisors",
+      "created": "2025-08-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "aman@toasttab.com",
+      "first": "Aman",
+      "last": "Narang",
+      "company": "Toast Capital.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "priyal@legacyhealthus.com",
+      "first": "Priyal",
+      "last": "Patel",
+      "company": "Legacy Health US",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "priscilla.tarrau@ramp.com",
+      "first": "Priscilla",
+      "last": "Tarrau",
+      "company": "Ramp",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "emily.eshman@gusto.com",
+      "first": "Emily",
+      "last": "Eshman",
+      "company": "Gusto, Inc.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "peter.lezama@gusto.com",
+      "first": "Peter",
+      "last": "Lezama",
+      "company": "Gusto, Inc.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "timothy@permanentequity.com",
+      "first": "Timothy",
+      "last": "Hanson",
+      "company": "Permanent Equity",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "meghan.powers@toasttab.com",
+      "first": "Meghan",
+      "last": "Powers",
+      "company": "Toast Capital.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "eric.bell@toasttab.com",
+      "first": "Eric",
+      "last": "Bell",
+      "company": "Toast Capital.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "matthew.pulley@toasttab.com",
+      "first": "Matthew",
+      "last": "Pulley",
+      "company": "Toast Capital.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "chris.packer@toasttab.com",
+      "first": "Christopher",
+      "last": "P",
+      "company": "Toast Capital.",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rlewis@clevelandave.com",
+      "first": "Randall",
+      "last": "L",
+      "company": "Cleveland Avenue",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ignacio@guardianpharmacy.net",
+      "first": "Ignacio",
+      "last": "Rossani-Ortega",
+      "company": "Guardian Pharmacy",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sieva@enduring.ventures",
+      "first": "Sieva",
+      "last": "K",
+      "company": "Enduring Ventures",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "b@permanentequity.com",
+      "first": "Brent",
+      "last": "Beshore",
+      "company": "Permanent Equity",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "emily@permanentequity.com",
+      "first": "Emily",
+      "last": "Holdman",
+      "company": "Permanent Equity",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "scott@teamshares.com",
+      "first": "Scott",
+      "last": "Gardner",
+      "company": "Teamshares",
+      "created": "2025-08-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ats@atsmech.net",
+      "first": "Ats",
+      "last": "Mechanical",
+      "company": "ATS Mechanical Heating & AC Repair",
+      "created": "2025-08-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "ttaylor@cpesn.com",
+      "first": "Tyler",
+      "last": "Taylor",
+      "company": "CPESN Networks",
+      "created": "2025-08-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "philip@daash.co",
+      "first": "Philip",
+      "last": "Smolin",
+      "company": "Daash Intelligence",
+      "created": "2025-08-12",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "morgan@puzzle.io",
+      "first": "Morgan",
+      "last": "Faulkner",
+      "company": "WeWork",
+      "created": "2025-08-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "stephen.ovadje@bestegg.com",
+      "first": "Stephen",
+      "last": "Ovadje",
+      "company": "Best Egg Inc",
+      "created": "2025-08-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "guy@sunlightapi.com",
+      "first": "Guy",
+      "last": "Ziv",
+      "company": "Sunlight (YC S22)",
+      "created": "2025-08-11",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jerry.harding@psgequity.com",
+      "first": "Jerry",
+      "last": "Harding",
+      "company": "PSG",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rob.kottmeier@zip.co",
+      "first": "Rob",
+      "last": "Kottmeier",
+      "company": "Zip Co",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mathias.soberg@youlend.com",
+      "first": "Mathias",
+      "last": "Soberg",
+      "company": "YouLend",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "talligood@crowesinc.com",
+      "first": "Tracy",
+      "last": "Alligood",
+      "company": "Crowe's Management Company",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jkizer@kizerpharmacy.com",
+      "first": "Jason",
+      "last": "Kizer",
+      "company": "Kizer Pharmacy",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sondra@montanafamilypharmacies.com",
+      "first": "Sondra",
+      "last": "Arnold",
+      "company": "Montana Family Pharmacies",
+      "created": "2025-08-07",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "derex.walker@lcatterton.com",
+      "first": "Derex",
+      "last": "Walker",
+      "company": "L Catterton",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mcalvano@adaptive.build",
+      "first": "Matt",
+      "last": "Calvano",
+      "company": "Adaptive",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rick.foster@spatco.com",
+      "first": "Rick",
+      "last": "Foster",
+      "company": "SPATCO Energy Solutions",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "charm.kim@firstcitizens.com",
+      "first": "Charm",
+      "last": "K",
+      "company": "First Citizens Bank",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "bobby.mcneal@employbridge.com",
+      "first": "Bobby",
+      "last": "McNeal",
+      "company": "Employbridge",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "joel.farrand@truist.com",
+      "first": "Joel",
+      "last": "Farrand",
+      "company": "Truist",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "llai@valley.com",
+      "first": "Lauren",
+      "last": "Lai",
+      "company": "Valley Bank",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "scott.apmann@cnb.com",
+      "first": "Scott",
+      "last": "Apmann",
+      "company": "City National Bank",
+      "created": "2025-08-06",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "akash@tryglimpse.com",
+      "first": "Akash",
+      "last": "Raju",
+      "company": "Glimpse",
+      "created": "2025-08-05",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sgroban@cimgroup.com",
+      "first": "Samuel",
+      "last": "Groban",
+      "company": "CIM Group",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "srajasekar@billtrust.com",
+      "first": "Sunil",
+      "last": "R",
+      "company": "YPO",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "spatel@billtrust.com",
+      "first": "Samantha",
+      "last": "Patel",
+      "company": "Billtrust",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "brandon.sebelius@builders-capital.com",
+      "first": "Brandon",
+      "last": "S",
+      "company": "Builders Capital",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dan@nfusioncapital.com",
+      "first": "Dan",
+      "last": "Karas",
+      "company": "nFusion Capital, LLC",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "amitsa@wix.com",
+      "first": "Amit",
+      "last": "Sagiv",
+      "company": "Wix.com",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "dhorstmann@wbl.com",
+      "first": "Donal",
+      "last": "Horstmann",
+      "company": "World Business Lenders, LLC",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "rpardes@wbl.com",
+      "first": "Robert",
+      "last": "Pardes",
+      "company": "World Business Lenders, LLC",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lforan@billtrust.com",
+      "first": "Lawrence",
+      "last": "Foran",
+      "company": "Billtrust",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sroy@kohllsrx.com",
+      "first": "Sanjukta",
+      "last": "Roy",
+      "company": "Kohll's Pharmacy & HomeCare",
+      "created": "2025-08-04",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "harish@useorin.com",
+      "first": "Harish",
+      "last": "Maiya",
+      "company": "Orin",
+      "created": "2025-08-02",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "arpan@sparkcapital.com",
+      "first": "Arpan",
+      "last": "S",
+      "company": "Spark Capital",
+      "created": "2025-08-01",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "copple@supabase.io",
+      "first": "Paul",
+      "last": "Copplestone",
+      "company": "Supabase",
+      "created": "2025-07-31",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sruli@fundwell.com",
+      "first": "Sruli",
+      "last": "Anatian",
+      "company": "Fundwell",
+      "created": "2025-07-30",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "vishal.saxena@flex.one",
+      "first": "Vishal",
+      "last": "Saxena",
+      "company": "Flex",
+      "created": "2025-07-30",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "pratik@katohq.com",
+      "first": "Pratik",
+      "last": "R",
+      "company": "Kato",
+      "created": "2025-07-30",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "gary@firstfundingusa.com",
+      "first": "Gary",
+      "last": "Erfman",
+      "company": "USA Funding",
+      "created": "2025-07-29",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "lbaczynski@apple.com",
+      "first": "Lynne",
+      "last": "Baczynski",
+      "company": "Apple Inc.",
+      "created": "2025-07-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jkokko@alpha-sense.com",
+      "first": "Jaakko",
+      "last": "Kokko",
+      "company": "AlphaSense",
+      "created": "2025-07-26",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "daniel.patriota@serpro.gov.br",
+      "first": "Daniel",
+      "last": "Patriota",
+      "company": "Serpro",
+      "created": "2025-07-22",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "derek.higg@stitchficommunity.com",
+      "first": null,
+      "last": null,
+      "company": "stitchficommunity.com",
+      "created": "2025-07-18",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "daveglaser73@gmail.com",
+      "first": "Dave",
+      "last": "Glaser",
+      "company": "",
+      "created": "2025-07-18",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "trichlak@stlouisbank.com",
+      "first": "Thomas",
+      "last": "Richlak",
+      "company": "Saint Louis Bank",
+      "created": "2025-07-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "greg.misterman@mymagnifi.org",
+      "first": "Greg",
+      "last": "Misterman",
+      "company": "Magnifi Financial",
+      "created": "2025-07-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tpark@tbank.com",
+      "first": "Tanya",
+      "last": "Park",
+      "company": "T Bank N.A.",
+      "created": "2025-07-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "nick.lim@veri-tax.com",
+      "first": "Nick",
+      "last": "L",
+      "company": "Veri-Tax",
+      "created": "2025-07-16",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "halloway@sorren.com",
+      "first": "Heath",
+      "last": "Alloway",
+      "company": "Sorren",
+      "created": "2025-07-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "tgliko@neilcoaccounting.com",
+      "first": "Tanner",
+      "last": "Gliko",
+      "company": "NEIL AND COMPANY CPA'S",
+      "created": "2025-07-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "sreddy@clayworthpharmacy.com",
+      "first": "Sudhir",
+      "last": "R",
+      "company": "Stealth Mode Startup Company",
+      "created": "2025-07-15",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "stephenie.stafford@harmony.bank",
+      "first": "Stephanie",
+      "last": "Stafford",
+      "company": "Harmony Bank",
+      "created": "2025-07-14",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "webberpharmacy@gmail.com",
+      "first": "Larry",
+      "last": "Webber",
+      "company": "Webber Pharmacy",
+      "created": "2025-07-10",
+      "demo": null,
+      "tier": "personal"
+    },
+    {
+      "email": "c.purdy@bankwithchoice.com",
+      "first": "Cristen",
+      "last": "Purdy",
+      "company": "Choice Bank",
+      "created": "2025-07-09",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "cbowman@harvestcref.com",
+      "first": "Cassie",
+      "last": "Bowman",
+      "company": "Harvest",
+      "created": "2025-07-08",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "jay@preferredfundinggroup.com",
+      "first": "Jay",
+      "last": "Jay Gonzalez",
+      "company": "Preferred Business Funding",
+      "created": "2025-07-08",
+      "demo": null,
+      "tier": "business"
+    },
+    {
+      "email": "mbutler@statebnk.com",
+      "first": "Melissa",
+      "last": "Butler",
+      "company": "Texas State Bank",
+      "created": "2025-07-08",
+      "demo": null,
+      "tier": "business"
+    }
+  ],
+  "filtered_out_count": 40
+}
