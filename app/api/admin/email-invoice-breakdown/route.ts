@@ -90,7 +90,12 @@ async function handle(request: NextRequest) {
       .single();
     if (!c) return NextResponse.json({ error: 'Client not found' }, { status: 404 });
     clientRow = c;
-    mode = (c as any).free_trial ? 'trial' : 'billed';
+    // clientSlug+period mode is for clients with no invoice yet (free trial,
+    // pre-MSA usage, MSA-effective-mid-period, etc.). Always treat as trial-
+    // mode for the email — usage recap + Mercury billing-setup CTA. The
+    // free_trial flag isn't required: any "we didn't bill you" surface gets
+    // the same treatment.
+    mode = 'trial';
     const [yearStr, monthStr] = periodArg.split('-');
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10);
@@ -99,7 +104,7 @@ async function handle(request: NextRequest) {
     }
     periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
     periodEnd = new Date(year, month, 0).toISOString().split('T')[0];
-    invoiceNumber = `USAGE-${year}-${String(month).padStart(2, '0')}-${(c as any).slug.toUpperCase().slice(0, 4)}`;
+    invoiceNumber = `USAGE-${year}-${String(month).padStart(2, '0')}-${(c as any).slug.toUpperCase().slice(0, 6).replace(/[^A-Z0-9]/g, '')}`;
   } else {
     return NextResponse.json(
       { error: 'Provide either invoiceId, or clientSlug + period (YYYY-MM)' },
