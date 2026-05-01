@@ -264,7 +264,7 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Uint8Arr
     }
   }
 
-  drawPageFooter(ctx2, 2);
+  drawPageFooter(ctx2);
 
   return pdf.save();
 }
