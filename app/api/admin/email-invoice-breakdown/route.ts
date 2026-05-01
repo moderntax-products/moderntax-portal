@@ -109,10 +109,18 @@ async function handle(request: NextRequest) {
 
   if (!clientRow.billing_ap_email) {
     return NextResponse.json(
-      { error: `Client ${clientRow.name} has no billing_ap_email — cannot send breakdown` },
+      { error: `Client ${clientRow.name} has no billing_ap_email - cannot send breakdown` },
       { status: 400 },
     );
   }
+
+  // Rate model cutover: the new rate spec ($10 self-signed 8821 surcharge,
+  // monitoring billed event-based at $19.99 enrollment + $39.99/pull) lands
+  // 2026-05-01. Any billing period ending before that uses the legacy model
+  // (no 8821 surcharge, monitoring prorated at $25/month) so the breakdown
+  // reconciles to what Mercury actually billed in March/April.
+  const NEW_MODEL_EFFECTIVE = '2026-05-01';
+  const useNewRateModel = periodEnd >= NEW_MODEL_EFFECTIVE;
 
   // Pull the period's completed entities, joined to processor + request meta.
   const periodEndExclusive = `${periodEnd}T23:59:59.999Z`;
@@ -179,71 +187,113 @@ async function handle(request: NextRequest) {
   // Self-signed 8821 surcharge ($10/entity). Per Matt 2026-05-01: every
   // CSV-uploaded or manually-entered entity triggers an 8821 send so this
   // catches the bulk of entities. Direct-uploaded pre-signed PDFs (no
-  // signature_id) are excluded.
-  const selfSigned8821 = selfSignedCount > 0
+  // signature_id) are excluded. Only applies under the new rate model;
+  // pre-May invoices were billed without this surcharge.
+  const selfSigned8821 = useNewRateModel && selfSignedCount > 0
     ? { count: selfSignedCount, unitPrice: 10, total: selfSignedCount * 10 }
     : null;
 
-  // Monitoring activity in the period — enrollments + repulls
-  const { data: monitoringRows } = await supabase
-    .from('entity_monitoring')
-    .select('id, entity_id, frequency, enrolled_at, last_pulled_at, status, ' +
-      'request_entities ( entity_name, requests ( loan_number, requested_by ) )')
-    .eq('client_id', clientRow.id)
-    .gte('enrolled_at', `${periodStart}T00:00:00Z`)
-    .lte('enrolled_at', periodEndExclusive) as { data: any[] | null };
-
-  const { data: monitoringRepulls } = await supabase
-    .from('requests')
-    .select('id, loan_number, requested_by, completed_at, ' +
-      'request_entities ( entity_name )')
-    .eq('client_id', clientRow.id)
-    .eq('intake_method', 'monitoring_repull')
-    .gte('completed_at', `${periodStart}T00:00:00Z`)
-    .lte('completed_at', periodEndExclusive) as { data: any[] | null };
-
-  // Build monitoring groups: one bucket per processor
+  // Monitoring activity in the period.
+  // Two rate models — pick based on cutover date:
+  //   New (2026-05-01+): $19.99 enrollment one-time + $39.99 per pull (event-based).
+  //   Legacy (pre-2026-05-01): $25/month per active subscription, prorated by
+  //   active days in period — matches what the auto-invoice cron actually
+  //   billed in Mercury for March + April so the breakdown reconciles.
   const monitoringByProcessor = new Map<string, MonitoringGroup>();
-  for (const m of monitoringRows || []) {
-    const requester = m.request_entities?.requests?.requested_by;
-    const procName = profileMap.get(requester) || (await resolveProcessorName(supabase, requester));
-    if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
-    let group = monitoringByProcessor.get(procName);
-    if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
-    const ent = m.request_entities?.entity_name || '(entity)';
-    const loan = m.request_entities?.requests?.loan_number || '';
-    const date = formatMdy(m.enrolled_at);
-    // Per Matt 2026-05-01: $19.99 enrollment one-time, $39.99 per pull.
-    group.items.push({
-      description: `${ent} - Monitoring Enrollment (${m.frequency || 'weekly'})`,
-      loanNumber: loan,
-      date,
-      unitPrice: 19.99,
-    });
-    // Initial pull (the enrollment fires one immediately)
-    if (m.last_pulled_at) {
+
+  if (useNewRateModel) {
+    // Event-based: enrollments (started in period) + repulls (completed in period)
+    const { data: monitoringRows } = await supabase
+      .from('entity_monitoring')
+      .select('id, entity_id, frequency, enrolled_at, last_pulled_at, status, ' +
+        'request_entities ( entity_name, requests ( loan_number, requested_by ) )')
+      .eq('client_id', clientRow.id)
+      .gte('enrolled_at', `${periodStart}T00:00:00Z`)
+      .lte('enrolled_at', periodEndExclusive) as { data: any[] | null };
+
+    const { data: monitoringRepulls } = await supabase
+      .from('requests')
+      .select('id, loan_number, requested_by, completed_at, request_entities ( entity_name )')
+      .eq('client_id', clientRow.id)
+      .eq('intake_method', 'monitoring_repull')
+      .gte('completed_at', `${periodStart}T00:00:00Z`)
+      .lte('completed_at', periodEndExclusive) as { data: any[] | null };
+
+    for (const m of monitoringRows || []) {
+      const requester = m.request_entities?.requests?.requested_by;
+      const procName = profileMap.get(requester) || (await resolveProcessorName(supabase, requester));
+      if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
+      let group = monitoringByProcessor.get(procName);
+      if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
+      const ent = m.request_entities?.entity_name || '(entity)';
+      const loan = m.request_entities?.requests?.loan_number || '';
       group.items.push({
-        description: `${ent} - Initial Monitoring Pull`,
+        description: `${ent} - Monitoring Enrollment (${m.frequency || 'weekly'})`,
         loanNumber: loan,
-        date: formatMdy(m.last_pulled_at),
+        date: formatMdy(m.enrolled_at),
+        unitPrice: 19.99,
+      });
+      if (m.last_pulled_at) {
+        group.items.push({
+          description: `${ent} - Initial Monitoring Pull`,
+          loanNumber: loan,
+          date: formatMdy(m.last_pulled_at),
+          unitPrice: 39.99,
+        });
+      }
+    }
+    for (const r of monitoringRepulls || []) {
+      const requester = r.requested_by;
+      const procName = profileMap.get(requester) || (await resolveProcessorName(supabase, requester));
+      if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
+      let group = monitoringByProcessor.get(procName);
+      if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
+      const ent = r.request_entities?.[0]?.entity_name || '(entity)';
+      group.items.push({
+        description: `${ent} - Monitoring Update Pull`,
+        loanNumber: r.loan_number || '',
+        date: formatMdy(r.completed_at),
         unitPrice: 39.99,
       });
     }
+  } else {
+    // Legacy: $25/month per active subscription, prorated by active days
+    const { data: legacyMonitoring } = await supabase
+      .from('entity_monitoring')
+      .select('id, entity_id, frequency, enrolled_at, cancelled_at, status, ' +
+        'request_entities ( entity_name, requests ( loan_number, requested_by ) )')
+      .eq('client_id', clientRow.id)
+      .lte('enrolled_at', periodEndExclusive)
+      .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: any[] | null };
+
+    const periodStartMs = new Date(`${periodStart}T00:00:00Z`).getTime();
+    const periodEndMs = new Date(periodEndExclusive).getTime();
+    const daysInMonth = (periodEndMs - periodStartMs) / 86400000;
+    for (const m of legacyMonitoring || []) {
+      if (m.status === 'pending') continue;
+      const requester = m.request_entities?.requests?.requested_by;
+      const procName = profileMap.get(requester) || (await resolveProcessorName(supabase, requester));
+      if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
+      const enrolledMs = new Date(m.enrolled_at).getTime();
+      const cancelledMs = m.cancelled_at ? new Date(m.cancelled_at).getTime() : Infinity;
+      const windowStart = Math.max(enrolledMs, periodStartMs);
+      const windowEnd = Math.min(cancelledMs, periodEndMs);
+      if (windowEnd <= windowStart) continue;
+      const activeDays = Math.ceil((windowEnd - windowStart) / 86400000);
+      const prorated = Math.round((Math.min(activeDays, daysInMonth) / daysInMonth) * 25 * 100) / 100;
+      let group = monitoringByProcessor.get(procName);
+      if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
+      const ent = m.request_entities?.entity_name || '(entity)';
+      const loan = m.request_entities?.requests?.loan_number || '';
+      group.items.push({
+        description: `${ent} - Monthly Monitoring (${activeDays}/${Math.round(daysInMonth)} days active)`,
+        loanNumber: loan,
+        date: formatMdy(m.enrolled_at),
+        unitPrice: prorated,
+      });
+    }
   }
-  for (const r of monitoringRepulls || []) {
-    const requester = r.requested_by;
-    const procName = profileMap.get(requester) || (await resolveProcessorName(supabase, requester));
-    if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
-    let group = monitoringByProcessor.get(procName);
-    if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
-    const ent = r.request_entities?.[0]?.entity_name || '(entity)';
-    group.items.push({
-      description: `${ent} - Monitoring Update Pull`,
-      loanNumber: r.loan_number || '',
-      date: formatMdy(r.completed_at),
-      unitPrice: 39.99,
-    });
-  }
+
   const monitoringGroups: MonitoringGroup[] = Array.from(monitoringByProcessor.values());
 
   // Recompute total from line items so the email + PDF agree exactly.
