@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
       .from('clients')
       .select(
         'id, name, slug, free_trial, billing_payment_method, billing_rate_pdf, billing_rate_csv, ' +
-        'billing_rate_monitoring, billing_net_days, billing_ap_email, ' +
+        'billing_rate_monitoring, billing_net_days, billing_ap_email, billing_ap_email_cc, ' +
         'billing_model, subscription_monthly_amount, subscription_included_entities, subscription_overage_rate, ' +
         'billing_effective_from, billing_notes, ' +
         'mercury_customer_id, ' +
@@ -72,6 +72,7 @@ export async function GET(request: NextRequest) {
           billing_rate_monitoring: number | null;
           billing_net_days: number | null;
           billing_ap_email: string | null;
+          billing_ap_email_cc: string[] | null;
           billing_model: string | null;
           subscription_monthly_amount: number | null;
           subscription_included_entities: number | null;
@@ -396,7 +397,7 @@ export async function GET(request: NextRequest) {
             invoiceDate,
             invoiceNumber,
             lineItems,
-            ccEmails: [],
+            ccEmails: client.billing_ap_email_cc || [],
             creditCardEnabled: false,
             achDebitEnabled: true,
             useRealAccountNumber: false,
