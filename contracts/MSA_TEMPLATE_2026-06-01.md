@@ -14,7 +14,7 @@ This Agreement amends, restates, and supersedes any prior order form, statement 
 
 **1.3 Taxpayer Authorization.** Client shall obtain a duly executed IRS Form 8821 (or equivalent authorization) from each taxpayer whose information is the subject of a Service request, authorizing ModernTax (CAF 0316-30210R) as designee. Where Client has elected ModernTax-Prepared 8821 generation under Section 2.1, ModernTax will prepare and route the 8821 for taxpayer signature on Client's behalf.
 
-**1.4 Service Levels.** ModernTax targets same-business-day delivery for verification requests submitted before 2:00 PM Pacific Time on IRS business days, subject to IRS system availability. Monitoring updates will be delivered as changes are detected on enrolled accounts.
+**1.4 Service Levels.** ModernTax targets delivery within 24–48 hours of request submission on IRS business days, subject to IRS system availability and the volume of authorizations in queue. Monitoring updates will be delivered as changes are detected on enrolled accounts.
 
 ---
 
@@ -79,7 +79,7 @@ No deposit. No monthly platform fee. Full month-to-month flexibility.
 - Loan-package PDF templates and white-label cover sheets
 - Direct REST API access (`/api/v1/verify`, `/api/v1/monitor`, `/api/v1/transcripts`)
 - API key management with role-based access
-- SLA: same-day delivery before 2 PM PT (vs. next-business-day for Tiers A/B)
+- Priority queue placement (Tier C requests are pulled ahead of Tier A/B within the standard 24–48 hour SLA)
 - Priority IRS PPS escalation when transcripts are blocked
 
 The Platform Fee is billed monthly on the first of each month for the upcoming calendar month and is non-refundable for partial months. Per-TIN verification, monitoring, and add-on charges are billed monthly in arrears alongside the next Platform Fee.
