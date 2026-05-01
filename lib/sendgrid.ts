@@ -2299,6 +2299,132 @@ matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
   }
 }
 
+/**
+ * Invoice Breakdown Email
+ *
+ * Mercury sends the formal invoice with the pay button. This is the
+ * follow-up that delivers our itemized PDF — every entity, processor, and
+ * monitoring fee — alongside a recap of the total and a one-click pay link.
+ *
+ * Two variants:
+ *   - Billed (mode='billed'): Mercury invoice exists. Email recaps total +
+ *     Mercury pay link, attaches the breakdown PDF.
+ *   - Trial (mode='trial'): client is on free trial — no Mercury invoice
+ *     yet. Email shows what was used (PDF) and nudges them to set up
+ *     Mercury billing so they don't miss a beat when the trial ends.
+ *
+ * The PDF is attached as application/pdf with disposition=attachment so it
+ * lands as a real file download, not inline preview.
+ */
+export async function sendInvoiceBreakdownEmail(params: {
+  to: string;
+  cc?: string[];
+  clientName: string;
+  invoiceNumber: string;        // "INV-2026-04-CENT" or trial preview pseudo-number
+  billingPeriodStart: string;   // "2026-04-01"
+  billingPeriodEnd: string;     // "2026-04-30"
+  totalAmount: number;          // dollars
+  totalEntities: number;
+  pdfBytes: Uint8Array;
+  pdfFilename: string;          // "ModernTax-INV-2026-04-CENT.pdf"
+  mode: 'billed' | 'trial';
+  payUrl?: string;              // billed mode: Mercury pay URL
+  trialBillingSetupUrl?: string;// trial mode: portal billing setup
+  trialCreditApplied?: number;  // trial mode: how much was waived (e.g. $239.94)
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send breakdown email');
+    return;
+  }
+
+  const periodLabel = `${formatPeriodMonth(params.billingPeriodStart, params.billingPeriodEnd)}`;
+  const fmtMoney = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  let subject: string;
+  let title: string;
+  let content: string;
+  let cta: { text: string; url: string } | undefined;
+
+  if (params.mode === 'billed') {
+    subject = `${escapeHtml(params.clientName)} — ${periodLabel} usage breakdown (${params.invoiceNumber})`;
+    title = `${periodLabel} Detailed Breakdown`;
+    content = `
+<p>Hi there,</p>
+<p>Thanks for the business this month. Mercury just delivered <strong>${escapeHtml(params.invoiceNumber)}</strong> via separate email — this follow-up is the itemized breakdown for your records.</p>
+<table style="width:100%; border-collapse:collapse; margin:20px 0; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px;">
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #e2e8f0;"><strong>Billing period</strong></td><td style="padding:10px 14px; border-bottom:1px solid #e2e8f0; text-align:right;">${escapeHtml(periodLabel)}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #e2e8f0;"><strong>Items</strong></td><td style="padding:10px 14px; border-bottom:1px solid #e2e8f0; text-align:right;">${params.totalEntities}</td></tr>
+  <tr><td style="padding:10px 14px;"><strong>Total due</strong></td><td style="padding:10px 14px; text-align:right; font-size:18px; color:#0a1929;"><strong>${fmtMoney(params.totalAmount)}</strong></td></tr>
+</table>
+<p>The full breakdown is attached as <code>${escapeHtml(params.pdfFilename)}</code>: every entity, who processed it, when it completed, plus monitoring activity.</p>
+<p style="font-size:13px; color:#666;"><strong>Tip:</strong> Mercury supports auto-pay enrollment from the pay page — one-click setup means no more chasing due dates. Saves both of us time.</p>
+<p>Anything off? Reply to this email and I'll fix it before payment processes.</p>
+    `.trim();
+    if (params.payUrl) {
+      cta = { text: `Pay ${fmtMoney(params.totalAmount)} via Mercury →`, url: params.payUrl };
+    }
+  } else {
+    // Trial mode
+    subject = `${escapeHtml(params.clientName)} — ${periodLabel} usage (still on free trial)`;
+    title = `${periodLabel} Usage Summary`;
+    const credited = params.trialCreditApplied || params.totalAmount;
+    content = `
+<p>Hi there,</p>
+<p>Quick recap of what your team ran through ModernTax in ${escapeHtml(periodLabel)}. Since you're still on the free trial, <strong>nothing is owed this month</strong> — but here's the breakdown of what would have been billed so you can plan.</p>
+<table style="width:100%; border-collapse:collapse; margin:20px 0; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px;">
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Billing period</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${escapeHtml(periodLabel)}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Items</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right;">${params.totalEntities}</td></tr>
+  <tr><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0;"><strong>Trial credit applied</strong></td><td style="padding:10px 14px; border-bottom:1px solid #bbf7d0; text-align:right; color:#15803d;">−${fmtMoney(credited)}</td></tr>
+  <tr><td style="padding:10px 14px;"><strong>Owed this month</strong></td><td style="padding:10px 14px; text-align:right; font-size:18px; color:#15803d;"><strong>$0.00</strong></td></tr>
+</table>
+<p>The full itemized breakdown is attached as <code>${escapeHtml(params.pdfFilename)}</code> — every entity, who processed it, when it completed.</p>
+<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:14px 18px; margin:20px 0;">
+  <p style="margin:0 0 8px 0;"><strong>Heads up — set up billing to avoid a service gap.</strong></p>
+  <p style="margin:0; font-size:14px; color:#666;">Once your trial ends, ModernTax invoices automatically through Mercury (ACH, no credit-card fees). Takes about 60 seconds — your team keeps running entities without interruption.</p>
+</div>
+<p>Questions about anything in the breakdown? Reply here and I'll dig in.</p>
+    `.trim();
+    if (params.trialBillingSetupUrl) {
+      cta = { text: 'Set Up Mercury Billing →', url: params.trialBillingSetupUrl };
+    }
+  }
+
+  const html = createEmailTemplate(title, content, cta);
+
+  // SendGrid expects base64 string for binary attachments.
+  const pdfBase64 = Buffer.from(params.pdfBytes).toString('base64');
+
+  try {
+    await sgMail.send({
+      to: params.to,
+      cc: (params.cc && params.cc.length > 0) ? params.cc : undefined,
+      from: fromEmail,
+      subject,
+      html,
+      replyTo: 'matt@moderntax.io',
+      attachments: [{
+        content: pdfBase64,
+        filename: params.pdfFilename,
+        type: 'application/pdf',
+        disposition: 'attachment',
+      }],
+    });
+  } catch (error) {
+    console.error('Failed to send invoice breakdown email:', error);
+    throw error;
+  }
+}
+
+/** "2026-04-01" + "2026-04-30" → "April 2026". Falls back to range form. */
+function formatPeriodMonth(start: string, end: string): string {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const [sy, sm] = start.split('-').map(Number);
+  const [ey, em] = end.split('-').map(Number);
+  if (sy === ey && sm === em) return `${months[sm - 1]} ${sy}`;
+  return `${months[(sm || 1) - 1]} ${sy} – ${months[(em || 1) - 1]} ${ey}`;
+}
+
 // Tiny HTML escapers to keep user-supplied strings safe in our templates.
 function escapeHtml(s: string | null | undefined): string {
   if (!s) return '';
