@@ -82,18 +82,30 @@ function paceLabel(actual: number, expected: number): { label: string; emoji: st
 
 interface DailyStats {
   todayDate: string;
-  // Verifications
-  verificationsToday: number;
-  verificationsMtd: number;
-  verificationRevenueMtd: number;
-  // Service deals
-  serviceDealsMtd: number | null;        // null if table doesn't exist
+  // Today (PT day window)
+  ordersBookedToday: number;             // entities CREATED today
+  verificationsCompletedToday: number;   // entities COMPLETED today
+  // Month-to-date — bookings (created in May, regardless of status)
+  bookingsMtd: number;
+  bookingsRevenueMtd: number;            // committed revenue at order rate
+  // Month-to-date — realized (completed in May, regardless of when created)
+  realizedMtd: number;
+  realizedRevenueMtd: number;
+  // Month-to-date — outstanding (created in May but not yet completed/failed/cancelled)
+  outstandingMtd: number;
+  outstandingRevenueMtd: number;
+  outstandingByStatus: { status: string; count: number }[];
+  // Efficiency: of May-created entities (excl failed/cancelled), what % completed?
+  // Captures throughput: are we converting orders to revenue fast enough?
+  efficiencyPct: number;
+  // Service deals (from service_deals table if exists)
+  serviceDealsMtd: number | null;
   serviceRevenueMtd: number | null;
   // Pace
   businessDaysElapsed: number;
   businessDaysRemaining: number;
-  // Per-client breakdown (for color)
-  byClient: { name: string; count: number; revenue: number }[];
+  // Per-client breakdown
+  byClient: { name: string; bookings: number; realized: number; outstanding: number; revenue: number }[];
 }
 
 async function gatherStats(): Promise<DailyStats> {
@@ -114,49 +126,126 @@ async function gatherStats(): Promise<DailyStats> {
   const todayStartUtc = new Date(`${todayDate}T07:00:00Z`); // 12am PT today
   const todayEndUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
 
-  // Pull all completed entities for May 2026, with client billing config
-  const { data: entities } = await supabase
-    .from('request_entities')
-    .select('id, completed_at, requests!inner ( id, client_id, ' +
-      'clients ( name, billing_rate_pdf, billing_model, subscription_monthly_amount ) )')
-    .eq('status', 'completed')
-    .gte('completed_at', monthStartUtc.toISOString())
-    .lt('completed_at', monthEndUtc.toISOString()) as { data: any[] | null };
+  // Pull every May-relevant entity in one shot:
+  //   - created in May (bookings) OR completed in May (realized — could be
+  //     April-created but completed-in-May)
+  // We then bucket each row in code by status + date.
+  const [createdMay, completedMay] = await Promise.all([
+    supabase.from('request_entities')
+      .select('id, status, created_at, completed_at, requests!inner ( id, client_id, ' +
+        'clients ( name, billing_rate_pdf, billing_model, subscription_monthly_amount ) )')
+      .gte('created_at', monthStartUtc.toISOString())
+      .lt('created_at', monthEndUtc.toISOString()) as Promise<{ data: any[] | null }>,
+    supabase.from('request_entities')
+      .select('id, status, created_at, completed_at, requests!inner ( id, client_id, ' +
+        'clients ( name, billing_rate_pdf, billing_model, subscription_monthly_amount ) )')
+      .eq('status', 'completed')
+      .gte('completed_at', monthStartUtc.toISOString())
+      .lt('completed_at', monthEndUtc.toISOString()) as Promise<{ data: any[] | null }>,
+  ]);
 
-  let verificationsMtd = 0;
-  let verificationsToday = 0;
-  let revenueMtd = 0;
-  const byClient = new Map<string, { name: string; count: number; revenue: number }>();
-  // Track which subscription clients we've already credited (count once per month)
-  const subscriptionClientsCounted = new Set<string>();
+  // Statuses that count as "in flight" — order received, work not yet done
+  const INFLIGHT_STATUSES = new Set([
+    'pending', '8821_sent', '8821_signed', 'irs_queue', 'processing',
+    'assigned', 'in_progress', 'manual_review',
+  ]);
+  const TERMINAL_FAIL = new Set(['failed', 'cancelled', 'rejected']);
 
-  for (const e of entities || []) {
-    verificationsMtd++;
-    if (e.completed_at >= todayStartUtc.toISOString() && e.completed_at < todayEndUtc.toISOString()) {
-      verificationsToday++;
+  let bookingsMtd = 0;
+  let bookingsRevenueMtd = 0;
+  let outstandingMtd = 0;
+  let outstandingRevenueMtd = 0;
+  let realizedMtd = 0;
+  let realizedRevenueMtd = 0;
+  let ordersBookedToday = 0;
+  let verificationsCompletedToday = 0;
+  const outstandingByStatus = new Map<string, number>();
+
+  // Per-client aggregation
+  const byClient = new Map<string, { name: string; bookings: number; realized: number; outstanding: number; revenue: number }>();
+  const subscriptionClientsCountedRealized = new Set<string>();
+  const subscriptionClientsCountedBookings = new Set<string>();
+
+  // Helper to upsert a client bucket
+  const ensureClient = (cid: string, name: string) => {
+    let g = byClient.get(cid);
+    if (!g) { g = { name, bookings: 0, realized: 0, outstanding: 0, revenue: 0 }; byClient.set(cid, g); }
+    return g;
+  };
+  const rateFor = (c: any): { rate: number; subAmount: number; isSub: boolean } => {
+    const isSub = c?.billing_model === 'subscription';
+    return {
+      rate: isSub ? 0 : (c?.billing_rate_pdf || 59.98),
+      subAmount: c?.subscription_monthly_amount || 0,
+      isSub,
+    };
+  };
+
+  // Process May-created entities — everything bookings + outstanding
+  for (const e of createdMay.data || []) {
+    if (TERMINAL_FAIL.has(e.status)) continue;
+    bookingsMtd++;
+    if (e.created_at >= todayStartUtc.toISOString() && e.created_at < todayEndUtc.toISOString()) {
+      ordersBookedToday++;
     }
     const c = e.requests?.clients;
     if (!c) continue;
-    const isSubscription = c.billing_model === 'subscription';
-    const rate = isSubscription ? 0 : (c.billing_rate_pdf || 59.98);
     const cid = e.requests.client_id;
-    let g = byClient.get(cid);
-    if (!g) {
-      g = { name: c.name || '(unknown)', count: 0, revenue: 0 };
-      byClient.set(cid, g);
+    const g = ensureClient(cid, c.name || '(unknown)');
+    g.bookings++;
+    const { rate, subAmount, isSub } = rateFor(c);
+    if (isSub) {
+      // Subscription: count once per month at the booking pass (flat fee captures all).
+      if (!subscriptionClientsCountedBookings.has(cid)) {
+        bookingsRevenueMtd += subAmount;
+        subscriptionClientsCountedBookings.add(cid);
+        // Sub revenue is fully outstanding until end of period; for visibility,
+        // bucket all of it as "booked but not yet realized" until completed work
+        // makes up the value. Simpler: mirror behavior of completedMay loop
+        // (credit revenue once total, attribute as realized once any work done).
+      }
+    } else {
+      bookingsRevenueMtd += rate;
     }
-    g.count++;
-    if (!isSubscription) {
-      g.revenue += rate;
-      revenueMtd += rate;
-    } else if (!subscriptionClientsCounted.has(cid)) {
-      // Credit subscription monthly amount once per month for this client
-      const sub = c.subscription_monthly_amount || 0;
-      g.revenue += sub;
-      revenueMtd += sub;
-      subscriptionClientsCounted.add(cid);
+    if (INFLIGHT_STATUSES.has(e.status)) {
+      outstandingMtd++;
+      g.outstanding++;
+      outstandingByStatus.set(e.status, (outstandingByStatus.get(e.status) || 0) + 1);
+      if (!isSub) outstandingRevenueMtd += rate;
     }
   }
+
+  // Process May-completed entities — realized revenue
+  for (const e of completedMay.data || []) {
+    realizedMtd++;
+    if (e.completed_at >= todayStartUtc.toISOString() && e.completed_at < todayEndUtc.toISOString()) {
+      verificationsCompletedToday++;
+    }
+    const c = e.requests?.clients;
+    if (!c) continue;
+    const cid = e.requests.client_id;
+    const g = ensureClient(cid, c.name || '(unknown)');
+    g.realized++;
+    const { rate, subAmount, isSub } = rateFor(c);
+    if (isSub) {
+      if (!subscriptionClientsCountedRealized.has(cid)) {
+        realizedRevenueMtd += subAmount;
+        g.revenue += subAmount;
+        subscriptionClientsCountedRealized.add(cid);
+      }
+    } else {
+      realizedRevenueMtd += rate;
+      g.revenue += rate;
+    }
+  }
+
+  // Efficiency = realized / (created-in-May not-failed). Since realizedMtd may
+  // include April-created completions, we compute against bookingsMtd for a
+  // pure "May-created throughput" view. If you want a cash-vs-pipeline view,
+  // use bookings vs realized at the revenue level.
+  const efficiencyDenom = bookingsMtd;
+  const efficiencyNum = bookingsMtd - outstandingMtd;
+  const efficiencyPct = efficiencyDenom > 0 ? Math.round((efficiencyNum / efficiencyDenom) * 1000) / 10 : 0;
 
   // Service deals — try to query a `service_deals` table; if it doesn't
   // exist or has no May rows, return null so the report shows "—".
@@ -183,14 +272,23 @@ async function gatherStats(): Promise<DailyStats> {
 
   return {
     todayDate,
-    verificationsToday,
-    verificationsMtd,
-    verificationRevenueMtd: revenueMtd,
+    ordersBookedToday,
+    verificationsCompletedToday,
+    bookingsMtd,
+    bookingsRevenueMtd,
+    realizedMtd,
+    realizedRevenueMtd,
+    outstandingMtd,
+    outstandingRevenueMtd,
+    outstandingByStatus: Array.from(outstandingByStatus.entries())
+      .map(([status, count]) => ({ status, count }))
+      .sort((a, b) => b.count - a.count),
+    efficiencyPct,
     serviceDealsMtd,
     serviceRevenueMtd,
     businessDaysElapsed,
     businessDaysRemaining,
-    byClient: Array.from(byClient.values()).sort((a, b) => b.count - a.count),
+    byClient: Array.from(byClient.values()).sort((a, b) => b.bookings - a.bookings),
   };
 }
 
@@ -199,31 +297,47 @@ async function gatherStats(): Promise<DailyStats> {
 // ---------------------------------------------------------------------------
 
 function buildSlackBlocks(s: DailyStats) {
-  const expectedToDate = Math.round((MAY_TARGETS.verificationsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const verificationPace = paceLabel(s.verificationsMtd, expectedToDate);
+  const expectedBookingsToDate = Math.round((MAY_TARGETS.verificationsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
+  const bookingsPace = paceLabel(s.bookingsMtd, expectedBookingsToDate);
   const expectedRevenueToDate = Math.round((MAY_TARGETS.verificationRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const totalRevenue = s.verificationRevenueMtd + (s.serviceRevenueMtd || 0);
+  const realizedPace = paceLabel(s.realizedRevenueMtd, expectedRevenueToDate);
+  const totalRealized = s.realizedRevenueMtd + (s.serviceRevenueMtd || 0);
+  const totalBooked = s.bookingsRevenueMtd + (s.serviceRevenueMtd || 0);
   const expectedTotalRevenueToDate = Math.round((MAY_TARGETS.driverTotalRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const totalPace = paceLabel(totalRevenue, expectedTotalRevenueToDate);
+  const totalPace = paceLabel(totalRealized, expectedTotalRevenueToDate);
 
   const dateLabel = new Date(s.todayDate + 'T12:00:00Z').toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric',
   });
 
-  const lines: string[] = [];
-  lines.push(`*Verifications today:* ${s.verificationsToday}`);
-  lines.push(`*Verifications MTD:* ${s.verificationsMtd} / ${MAY_TARGETS.verificationsTotal}  ${verificationPace.emoji} _${verificationPace.label}_  (expected by today: ${expectedToDate})`);
-  lines.push(`*Verification revenue MTD:* ${formatMoney(s.verificationRevenueMtd)} / ${formatMoney(MAY_TARGETS.verificationRevenue)}  (expected: ${formatMoney(expectedRevenueToDate)})`);
-  if (s.serviceDealsMtd != null) {
-    lines.push(`*Service deals MTD:* ${s.serviceDealsMtd} / ${MAY_TARGETS.serviceDealsTotal}  |  ${formatMoney(s.serviceRevenueMtd || 0)} / ${formatMoney(MAY_TARGETS.serviceRevenue)}`);
-  } else {
-    lines.push(`*Service deals MTD:* — _(service_deals table not yet populated — track manually)_`);
-  }
-  lines.push(`*Total revenue MTD:* ${formatMoney(totalRevenue)} / ${formatMoney(MAY_TARGETS.driverTotalRevenue)} driver  ·  ${formatMoney(MAY_TARGETS.incomeTargetRevenue)} income plan  ${totalPace.emoji} _${totalPace.label}_`);
-  lines.push(`*Founder distribution at pace:* ${formatMoney(Math.round(totalRevenue * 0.25))} / ${formatMoney(MAY_TARGETS.founderDistribution)} target`);
+  const todayLines = [
+    `*New orders booked today:* ${s.ordersBookedToday}`,
+    `*Verifications completed today:* ${s.verificationsCompletedToday}`,
+  ];
+
+  const bookingsLines = [
+    `*Total bookings MTD:* ${s.bookingsMtd} / ${MAY_TARGETS.verificationsTotal}  ${bookingsPace.emoji} _${bookingsPace.label}_  (expected by today: ${expectedBookingsToDate})`,
+    `*Booked revenue MTD:* ${formatMoney(s.bookingsRevenueMtd)} _(committed at order rate)_`,
+    `*Realized MTD (completed):* ${s.realizedMtd} entities · ${formatMoney(s.realizedRevenueMtd)}  ${realizedPace.emoji} _${realizedPace.label}_`,
+    `*Outstanding MTD (in flight):* ${s.outstandingMtd} entities · ${formatMoney(s.outstandingRevenueMtd)} potential`,
+    `*Throughput efficiency:* ${s.efficiencyPct}% _(${s.bookingsMtd - s.outstandingMtd}/${s.bookingsMtd} of May bookings completed/failed)_`,
+  ];
+
+  const revenueLines = [
+    s.serviceDealsMtd != null
+      ? `*Service deals:* ${s.serviceDealsMtd} / ${MAY_TARGETS.serviceDealsTotal}  ·  ${formatMoney(s.serviceRevenueMtd || 0)} / ${formatMoney(MAY_TARGETS.serviceRevenue)}`
+      : `*Service deals:* — _(service_deals table not populated — track manually)_`,
+    `*Total realized revenue:* ${formatMoney(totalRealized)} / ${formatMoney(MAY_TARGETS.driverTotalRevenue)} driver  ·  ${formatMoney(MAY_TARGETS.incomeTargetRevenue)} income plan  ${totalPace.emoji} _${totalPace.label}_`,
+    `*Total booked revenue:* ${formatMoney(totalBooked)} _(realized + booked-but-not-yet-completed)_`,
+    `*Founder distribution at pace:* ${formatMoney(Math.round(totalRealized * 0.25))} / ${formatMoney(MAY_TARGETS.founderDistribution)} target _(based on realized)_`,
+  ];
+
+  const outstandingByStatusLine = s.outstandingByStatus.length > 0
+    ? `*Outstanding by stage:* ${s.outstandingByStatus.map(o => `${o.status}: ${o.count}`).join(' · ')}`
+    : '';
 
   const clientLines = s.byClient.map(c =>
-    `• ${c.name}: ${c.count} verification${c.count === 1 ? '' : 's'} (${formatMoney(c.revenue)})`
+    `• ${c.name}: ${c.bookings} booked (${c.realized} realized, ${c.outstanding} outstanding)  ·  ${formatMoney(c.revenue)} realized`
   ).join('\n');
 
   return [
@@ -238,16 +352,15 @@ function buildSlackBlocks(s: DailyStats) {
       ],
     },
     { type: 'divider' },
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: lines.join('\n') },
-    },
+    { type: 'section', text: { type: 'mrkdwn', text: '*Today*\n' + todayLines.join('\n') } },
+    { type: 'divider' },
+    { type: 'section', text: { type: 'mrkdwn', text: '*Bookings & Throughput (MTD)*\n' + bookingsLines.join('\n') } },
+    ...(outstandingByStatusLine ? [{ type: 'context' as const, elements: [{ type: 'mrkdwn' as const, text: outstandingByStatusLine }] }] : []),
+    { type: 'divider' },
+    { type: 'section', text: { type: 'mrkdwn', text: '*Revenue (MTD)*\n' + revenueLines.join('\n') } },
     ...(s.byClient.length > 0 ? [
       { type: 'divider' as const },
-      {
-        type: 'section' as const,
-        text: { type: 'mrkdwn' as const, text: `*Verifications by client (MTD):*\n${clientLines}` },
-      },
+      { type: 'section' as const, text: { type: 'mrkdwn' as const, text: `*By client (MTD):*\n${clientLines}` } },
     ] : []),
   ];
 }
@@ -257,29 +370,38 @@ function buildSlackBlocks(s: DailyStats) {
 // ---------------------------------------------------------------------------
 
 function buildEmailHtml(s: DailyStats): string {
-  const expectedToDate = Math.round((MAY_TARGETS.verificationsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const verificationPace = paceLabel(s.verificationsMtd, expectedToDate);
+  const expectedBookingsToDate = Math.round((MAY_TARGETS.verificationsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
+  const bookingsPace = paceLabel(s.bookingsMtd, expectedBookingsToDate);
   const expectedRevenueToDate = Math.round((MAY_TARGETS.verificationRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const totalRevenue = s.verificationRevenueMtd + (s.serviceRevenueMtd || 0);
+  const realizedPace = paceLabel(s.realizedRevenueMtd, expectedRevenueToDate);
+  const totalRealized = s.realizedRevenueMtd + (s.serviceRevenueMtd || 0);
+  const totalBooked = s.bookingsRevenueMtd + (s.serviceRevenueMtd || 0);
   const expectedTotalRevenueToDate = Math.round((MAY_TARGETS.driverTotalRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const totalPace = paceLabel(totalRevenue, expectedTotalRevenueToDate);
+  const totalPace = paceLabel(totalRealized, expectedTotalRevenueToDate);
   const dateLabel = new Date(s.todayDate + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
-  const row = (label: string, actual: string, target: string, pace: { label: string; color: string }) =>
-    `<tr><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;"><strong>${label}</strong></td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:right;">${actual} / ${target}</td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:right;color:${pace.color};font-weight:600;">${pace.label}</td></tr>`;
+  const row = (label: string, actual: string, target: string, pace: { label: string; color: string } | null) =>
+    `<tr><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;"><strong>${label}</strong></td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:right;">${actual}${target ? ` / ${target}` : ''}</td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:right;${pace ? `color:${pace.color};font-weight:600;` : 'color:#999;'}">${pace ? pace.label : '—'}</td></tr>`;
 
   const clientRows = s.byClient.map(c =>
-    `<tr><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;">${c.name}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;">${c.count}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;">${formatMoney(c.revenue)}</td></tr>`
+    `<tr><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;">${c.name}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;">${c.bookings}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;color:#16a34a;">${c.realized}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;color:#d97706;">${c.outstanding}</td><td style="padding:8px 14px;border-bottom:1px solid #f1f5f9;text-align:right;">${formatMoney(c.revenue)}</td></tr>`
   ).join('');
 
-  return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a1a1a;max-width:680px;margin:0 auto;padding:24px;">
+  const outstandingStatusRows = s.outstandingByStatus.length > 0
+    ? `<p style="font-size:13px;color:#666;margin:8px 0 16px 0;"><strong>Outstanding by stage:</strong> ${s.outstandingByStatus.map(o => `${o.status} (${o.count})`).join(' · ')}</p>`
+    : '';
+
+  return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a1a1a;max-width:720px;margin:0 auto;padding:24px;">
 <h2 style="margin:0 0 4px 0;">ModernTax — May 2026 Daily Progress</h2>
 <p style="color:#666;margin:0 0 20px 0;">${dateLabel} · Business day ${s.businessDaysElapsed} of ${MAY_TARGETS.businessDays} · ${s.businessDaysRemaining} remaining</p>
 
 <h3 style="font-size:15px;margin:24px 0 8px 0;">Today</h3>
-<p style="margin:0 0 16px 0;font-size:15px;">${s.verificationsToday} verification${s.verificationsToday === 1 ? '' : 's'} completed today.</p>
+<p style="margin:0 0 16px 0;font-size:14px;">
+<strong>${s.ordersBookedToday}</strong> new order${s.ordersBookedToday === 1 ? '' : 's'} booked &nbsp;·&nbsp;
+<strong>${s.verificationsCompletedToday}</strong> verification${s.verificationsCompletedToday === 1 ? '' : 's'} completed
+</p>
 
-<h3 style="font-size:15px;margin:24px 0 8px 0;">Month-to-date</h3>
+<h3 style="font-size:15px;margin:24px 0 8px 0;">Bookings &amp; Throughput (MTD)</h3>
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr style="background:#f5f5f5;">
 <th style="padding:10px 14px;text-align:left;">Metric</th>
@@ -287,20 +409,44 @@ function buildEmailHtml(s: DailyStats): string {
 <th style="padding:10px 14px;text-align:right;">Pace</th>
 </tr></thead>
 <tbody>
-${row('Verifications', String(s.verificationsMtd), String(MAY_TARGETS.verificationsTotal), verificationPace)}
-${row('Verification revenue', formatMoney(s.verificationRevenueMtd), formatMoney(MAY_TARGETS.verificationRevenue), paceLabel(s.verificationRevenueMtd, expectedRevenueToDate))}
+${row('Total bookings (orders received)', String(s.bookingsMtd), String(MAY_TARGETS.verificationsTotal), bookingsPace)}
+${row('Realized (completed)', `${s.realizedMtd} entities`, '', null)}
+${row('Outstanding (in flight)', `${s.outstandingMtd} entities`, '', null)}
+${row('Throughput efficiency', `${s.efficiencyPct}%`, '', null)}
+</tbody>
+</table>
+${outstandingStatusRows}
+
+<h3 style="font-size:15px;margin:24px 0 8px 0;">Revenue (MTD)</h3>
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr style="background:#f5f5f5;">
+<th style="padding:10px 14px;text-align:left;">Metric</th>
+<th style="padding:10px 14px;text-align:right;">Actual / Target</th>
+<th style="padding:10px 14px;text-align:right;">Pace</th>
+</tr></thead>
+<tbody>
+${row('Realized verification revenue', formatMoney(s.realizedRevenueMtd), formatMoney(MAY_TARGETS.verificationRevenue), realizedPace)}
+${row('Booked verification revenue', formatMoney(s.bookingsRevenueMtd), formatMoney(MAY_TARGETS.verificationRevenue), null)}
+${row('Outstanding (potential) revenue', formatMoney(s.outstandingRevenueMtd), '', null)}
 ${s.serviceDealsMtd != null
-  ? row('Service deals', String(s.serviceDealsMtd), String(MAY_TARGETS.serviceDealsTotal), paceLabel(s.serviceDealsMtd, Math.round((MAY_TARGETS.serviceDealsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed)))
+  ? row('Service deals', `${s.serviceDealsMtd} · ${formatMoney(s.serviceRevenueMtd || 0)}`, `${MAY_TARGETS.serviceDealsTotal} · ${formatMoney(MAY_TARGETS.serviceRevenue)}`, paceLabel(s.serviceDealsMtd, Math.round((MAY_TARGETS.serviceDealsTotal / MAY_TARGETS.businessDays) * s.businessDaysElapsed)))
   : `<tr><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;"><strong>Service deals</strong></td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:right;color:#999;">— (manual track)</td><td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;"></td></tr>`}
-${row('Total revenue', formatMoney(totalRevenue), formatMoney(MAY_TARGETS.driverTotalRevenue), totalPace)}
-${row('Founder distribution at pace (25%)', formatMoney(Math.round(totalRevenue * 0.25)), formatMoney(MAY_TARGETS.founderDistribution), paceLabel(totalRevenue, expectedTotalRevenueToDate))}
+${row('Total realized revenue', formatMoney(totalRealized), `${formatMoney(MAY_TARGETS.driverTotalRevenue)} driver / ${formatMoney(MAY_TARGETS.incomeTargetRevenue)} income plan`, totalPace)}
+${row('Total booked revenue', formatMoney(totalBooked), '', null)}
+${row('Founder distribution at pace (25% of realized)', formatMoney(Math.round(totalRealized * 0.25)), formatMoney(MAY_TARGETS.founderDistribution), paceLabel(totalRealized, expectedTotalRevenueToDate))}
 </tbody>
 </table>
 
 ${s.byClient.length > 0 ? `
-<h3 style="font-size:15px;margin:24px 0 8px 0;">Verifications by client</h3>
+<h3 style="font-size:15px;margin:24px 0 8px 0;">By client (MTD)</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px;">
-<thead><tr style="background:#f5f5f5;"><th style="padding:8px 14px;text-align:left;">Client</th><th style="padding:8px 14px;text-align:right;">Count</th><th style="padding:8px 14px;text-align:right;">Revenue</th></tr></thead>
+<thead><tr style="background:#f5f5f5;">
+<th style="padding:8px 14px;text-align:left;">Client</th>
+<th style="padding:8px 14px;text-align:right;">Booked</th>
+<th style="padding:8px 14px;text-align:right;color:#16a34a;">Realized</th>
+<th style="padding:8px 14px;text-align:right;color:#d97706;">Outstanding</th>
+<th style="padding:8px 14px;text-align:right;">Realized $</th>
+</tr></thead>
 <tbody>${clientRows}</tbody>
 </table>` : ''}
 
@@ -314,10 +460,10 @@ ${s.byClient.length > 0 ? `
 
 async function postSlack(s: DailyStats) {
   const blocks = buildSlackBlocks(s);
-  const totalRevenue = s.verificationRevenueMtd + (s.serviceRevenueMtd || 0);
+  const totalRealized = s.realizedRevenueMtd + (s.serviceRevenueMtd || 0);
   const expectedTotalRevenueToDate = Math.round((MAY_TARGETS.driverTotalRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const totalPace = paceLabel(totalRevenue, expectedTotalRevenueToDate);
-  const fallbackText = `May progress: ${s.verificationsMtd}/${MAY_TARGETS.verificationsTotal} verifications · ${formatMoney(totalRevenue)} revenue · ${totalPace.label}`;
+  const totalPace = paceLabel(totalRealized, expectedTotalRevenueToDate);
+  const fallbackText = `May progress: ${s.bookingsMtd} booked / ${s.realizedMtd} realized of ${MAY_TARGETS.verificationsTotal} · ${formatMoney(totalRealized)} realized · ${totalPace.label}`;
   const res = await fetch(slackWebhook!, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -331,14 +477,14 @@ async function postSlack(s: DailyStats) {
 
 async function emailFallback(s: DailyStats) {
   const html = buildEmailHtml(s);
-  const totalRevenue = s.verificationRevenueMtd + (s.serviceRevenueMtd || 0);
+  const totalRealized = s.realizedRevenueMtd + (s.serviceRevenueMtd || 0);
   const expectedTotalRevenueToDate = Math.round((MAY_TARGETS.driverTotalRevenue / MAY_TARGETS.businessDays) * s.businessDaysElapsed);
-  const pace = paceLabel(totalRevenue, expectedTotalRevenueToDate);
+  const pace = paceLabel(totalRealized, expectedTotalRevenueToDate);
   await sgMail.send({
     to: 'matt@moderntax.io',
     from: { email: 'hello@moderntax.io', name: 'ModernTax' },
     replyTo: 'hello@moderntax.io',
-    subject: `[May Progress] ${s.verificationsMtd}/${MAY_TARGETS.verificationsTotal} verifications · ${formatMoney(totalRevenue)} · ${pace.label}`,
+    subject: `[May Progress] ${s.bookingsMtd}/${MAY_TARGETS.verificationsTotal} bookings · ${formatMoney(totalRealized)} realized · ${pace.label}`,
     html,
   });
   console.log(`Sent email → matt@moderntax.io`);
@@ -346,7 +492,7 @@ async function emailFallback(s: DailyStats) {
 
 async function main() {
   const stats = await gatherStats();
-  console.log(`May progress: ${stats.verificationsMtd}/${MAY_TARGETS.verificationsTotal} verifications, ${formatMoney(stats.verificationRevenueMtd + (stats.serviceRevenueMtd || 0))} revenue, business day ${stats.businessDaysElapsed}/${MAY_TARGETS.businessDays}`);
+  console.log(`May progress: ${stats.bookingsMtd} booked / ${stats.realizedMtd} realized of ${MAY_TARGETS.verificationsTotal} target · ${formatMoney(stats.realizedRevenueMtd + (stats.serviceRevenueMtd || 0))} realized · ${stats.efficiencyPct}% throughput · business day ${stats.businessDaysElapsed}/${MAY_TARGETS.businessDays}`);
 
   if (dryRun) {
     const fs = await import('fs/promises');
