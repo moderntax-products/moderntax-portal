@@ -76,12 +76,20 @@ export interface UnifiedCallParams {
   // Behavior
   callMode?: 'ai_full' | 'hold_and_transfer' | 'irs_callback';
   callbackPhone?: string;
+
+  // MOD-211 auto-retry: list of from-numbers already used in this retry
+  // chain. The phone-pool picker excludes these so we rotate to a fresh
+  // pool slot for each retry attempt.
+  excludeFromNumbers?: string[];
 }
 
 export interface UnifiedCallResponse {
   call_id: string;
   provider: VoiceProvider;
   status: string;
+  /** From-number that the picker selected for this attempt. Persisted
+   *  on the irs_call_sessions row so retries know what to exclude. */
+  from_number?: string;
 }
 
 /**
@@ -100,7 +108,7 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
     // hours. This stretches our callable window from a single timezone's
     // 12 hours (7am-7pm local) to 15 hours (4am PT → 7pm PT) by rotating
     // across ET/CT/MT/PT pool entries based on the current moment.
-    const picked = pickFromNumber();
+    const picked = pickFromNumber(undefined, undefined, params.excludeFromNumbers || []);
     if (!picked) {
       throw new Error(
         'No from-number currently eligible for IRS PPS hours. ' +
@@ -108,7 +116,7 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
       );
     }
     const fromNumber = picked.phone;
-    console.log(`[voice-provider] using from=${picked.label || fromNumber} (${picked.tz})`);
+    console.log(`[voice-provider] using from=${picked.label || fromNumber} (${picked.tz})${(params.excludeFromNumbers?.length || 0) > 0 ? ` excluding ${params.excludeFromNumbers!.length} prior` : ''}`);
 
     // Load expert's stored SSN + DOB — the IRS requires the practitioner to
     // authenticate themselves (not just the client) before releasing
@@ -220,10 +228,43 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
       },
     });
 
-    return { call_id: res.call_id, provider: 'retell', status: res.call_status };
+    return { call_id: res.call_id, provider: 'retell', status: res.call_status, from_number: fromNumber };
   }
 
   // --- Bland fallback (current production) ---
+  // Pre-fetch SSN/DOB the same way the Retell branch does. Without this,
+  // when an IRS agent answers and asks the practitioner to authenticate,
+  // the AI has no answer to give and the call dies unproductively (the
+  // 2026-04-24 Donna Clarin pattern: 12 min agent-reached call → no
+  // transcripts because verification failed). Pulled and decrypted here
+  // and passed through to Bland; Bland's pathway prompt references the
+  // {expert_ssn_for_speech} / {expert_dob_for_speech} variables.
+  let blandExpertSsnForSpeech = '';
+  let blandExpertDobForSpeech = '';
+  try {
+    const admin = createAdminClient();
+    const { data: profile } = await (admin.from('profiles' as any) as any)
+      .select('ssn_encrypted, dob_encrypted, irs_credentials_consented_at, irs_credentials_used_count')
+      .eq('id', params.metadata.expertId)
+      .single();
+    if (profile?.ssn_encrypted && profile?.dob_encrypted && profile?.irs_credentials_consented_at) {
+      const ssn = decryptCredential(profile.ssn_encrypted);
+      const dob = decryptCredential(profile.dob_encrypted);
+      blandExpertSsnForSpeech = formatSSNForSpeech(ssn);
+      blandExpertDobForSpeech = formatDOBForSpeech(dob);
+      await (admin.from('profiles' as any) as any)
+        .update({ irs_credentials_used_count: (profile.irs_credentials_used_count || 0) + 1 })
+        .eq('id', params.metadata.expertId);
+    } else {
+      console.warn(`[voice-provider:bland] expert ${params.metadata.expertId} has no stored SSN/DOB - IRS may refuse to release transcripts`);
+    }
+  } catch (err) {
+    console.error('[voice-provider:bland] failed to load expert credentials:', err);
+  }
+
+  // Bland's lib/bland.initiateCall handles its own from-number selection
+  // internally; surfacing the picked value to the caller for retry-chain
+  // tracking is a Phase 2 enhancement (MOD-211).
   const blandRes = await bland.initiateCall({
     expertName: params.expertName,
     cafNumber: params.cafNumber,
@@ -236,6 +277,8 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
     metadata: params.metadata,
     callMode: params.callMode,
     callbackPhone: params.callbackPhone,
+    expertSsnForSpeech: blandExpertSsnForSpeech,
+    expertDobForSpeech: blandExpertDobForSpeech,
   });
   return { call_id: blandRes.call_id, provider: 'bland', status: blandRes.status };
 }

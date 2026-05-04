@@ -65,6 +65,19 @@ export interface BlandCallParams {
 
   /** Expert's personal phone for transfer/callback (required if callMode != 'ai_full') */
   callbackPhone?: string;
+
+  /**
+   * Pre-formatted SSN/DOB strings for IRS practitioner authentication.
+   * The IRS PPS agent typically asks the calling practitioner to verify
+   * their identity before releasing transcripts. Without these, calls
+   * that reach an agent fail at the verification step. Both values are
+   * decrypted from `profiles.ssn_encrypted` / `profiles.dob_encrypted`
+   * upstream and passed in speech-ready form (e.g. SSN "1-2-3, 4-5,
+   * 6-7-8-9", DOB "March 14, 1985"). Empty string if unavailable; the
+   * pathway prompt will gracefully decline rather than hallucinate.
+   */
+  expertSsnForSpeech?: string;
+  expertDobForSpeech?: string;
 }
 
 export interface BlandCallResponse {
@@ -315,14 +328,25 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
   const apiKey = getApiKey();
   const appUrl = getAppUrl();
   const webhookSecret = process.env.BLAND_WEBHOOK_SECRET || '';
-  const maxDuration = parseInt(process.env.BLAND_MAX_CALL_DURATION || '90', 10);
+  // Hard cap call duration in MINUTES. Bland's API treats this as minutes,
+  // so 90 = 90 minutes. We had a $10.69 60-minute hold-burn 2026-04-29 because
+  // BLAND_MAX_CALL_DURATION was set to "90\n" (90 min) — calls sat on hold
+  // for an hour with no value. Defensive defaults + a hard ceiling regardless
+  // of env value prevent that from recurring.
+  const HARD_CEILING_MINUTES = 35;            // never exceed regardless of env
+  const DEFAULT_HOLD_TRANSFER_MINUTES = 30;   // sane default for hold-and-transfer
+  const DEFAULT_AI_FULL_MINUTES = 35;         // ai_full needs longer for fax cycles
+  const envValue = parseInt((process.env.BLAND_MAX_CALL_DURATION || '').trim(), 10);
+  const maxDuration = Number.isFinite(envValue) && envValue > 0
+    ? Math.min(envValue, HARD_CEILING_MINUTES)
+    : DEFAULT_HOLD_TRANSFER_MINUTES;
   const pathwayId = process.env.BLAND_IRS_PPS_PATHWAY_ID;
 
   // ai_full mode needs longer duration — each entity requires its own fax→hold→confirm cycle (~8 min each)
-  // 3 entities max × 8 min + 17 min fixed (phone tree + queue + greeting + wrap) ≈ 41 min
+  // 3 entities max × 8 min + 11 min fixed (phone tree + queue + greeting + wrap) ≈ 35 min
   const callMode = params.callMode || 'hold_and_transfer';
   const effectiveMaxDuration = callMode === 'ai_full'
-    ? Math.max(maxDuration, 45) // 45 min for full AI calls (3 entities w/ individual fax holds)
+    ? Math.min(Math.max(maxDuration, DEFAULT_AI_FULL_MINUTES), HARD_CEILING_MINUTES)
     : maxDuration;
 
   const body: Record<string, unknown> = {
@@ -349,6 +373,15 @@ export async function initiateCall(params: BlandCallParams): Promise<BlandCallRe
       expert_fax: params.expertFax || '',
       expert_phone: params.expertPhone || '',
       entities: params.entities,
+      // Practitioner authentication credentials (speech-formatted upstream).
+      // Reference these in the pathway prompt as
+      // {{request_data.expert_ssn_for_speech}} / {{...expert_dob_for_speech}}
+      // when the IRS agent asks "what is the practitioner's SSN and DOB?"
+      // expert_credentials_available='true' lets the prompt branch on
+      // whether to attempt verification or politely decline.
+      expert_ssn_for_speech: params.expertSsnForSpeech || '',
+      expert_dob_for_speech: params.expertDobForSpeech || '',
+      expert_credentials_available: params.expertSsnForSpeech ? 'true' : 'false',
     },
   };
 
