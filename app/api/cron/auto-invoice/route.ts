@@ -426,6 +426,12 @@ export async function GET(request: NextRequest) {
           }).eq('id', insertedInvoice.id);
 
           console.log(`[${client.name}] Mercury invoice ${mercuryInvoice.id} sent to ${client.billing_ap_email} ($${grandTotal})`);
+
+          // Auto-send the itemized breakdown PDF to AP recipients exactly
+          // ONCE per invoice (Matt 2026-05-04: future dunning reminders for
+          // unpaid invoices skip the breakdown — just send the payment
+          // nudge). The breakdown_sent_at column is the idempotence guard.
+          await sendBreakdownOnce(insertedInvoice.id, client.name);
         } catch (mercuryErr) {
           const msg = mercuryErr instanceof Error ? mercuryErr.message : 'Mercury error';
           console.error(`[${client.name}] Mercury invoice creation failed: ${msg}`);
@@ -464,5 +470,46 @@ export async function GET(request: NextRequest) {
       { error: 'Cron job failed', details: errorMessage },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * Fire the itemized breakdown PDF to AP recipients exactly once per invoice.
+ * Idempotent via `invoices.breakdown_sent_at` — second invocation no-ops.
+ * Non-blocking: any send failure is logged but doesn't fail the surrounding
+ * invoice creation (the Mercury invoice is already in the customer's inbox).
+ */
+async function sendBreakdownOnce(invoiceId: string, clientName: string): Promise<void> {
+  const supabase = createAdminClient();
+  // Atomic-ish check: if breakdown_sent_at is already set, skip. Race window
+  // is tiny (single cron, single thread per invoice) and the worst case is
+  // one duplicate send — acceptable.
+  const { data: row } = await (supabase.from('invoices') as any)
+    .select('breakdown_sent_at')
+    .eq('id', invoiceId)
+    .single();
+  if (row?.breakdown_sent_at) {
+    console.log(`[${clientName}] breakdown already sent (${row.breakdown_sent_at}), skipping`);
+    return;
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
+  const cronSecret = process.env.CRON_SECRET || '';
+  try {
+    const res = await fetch(`${appUrl}/api/admin/email-invoice-breakdown?invoiceId=${invoiceId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${cronSecret}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[${clientName}] breakdown send failed (${res.status}): ${body.slice(0, 200)}`);
+      return;
+    }
+    await (supabase.from('invoices') as any)
+      .update({ breakdown_sent_at: new Date().toISOString() })
+      .eq('id', invoiceId);
+    console.log(`[${clientName}] breakdown PDF sent + stamped`);
+  } catch (err) {
+    console.error(`[${clientName}] breakdown send threw:`, err instanceof Error ? err.message : err);
   }
 }

@@ -240,6 +240,11 @@ async function handle(request: NextRequest) {
         mercury_pdf_url: getMercuryInvoicePdfUrl(mercuryInvoice.slug),
       }).eq('id', inv.id);
 
+      // Auto-fire breakdown PDF exactly once per invoice (Matt 2026-05-04).
+      // Idempotent via invoices.breakdown_sent_at column. Same code path as
+      // the auto-invoice cron; future dunning emails skip this attachment.
+      await sendBreakdownOnce(supabase, inv.id, client.name);
+
       report.totals.sent++;
       report.results.push({
         invoiceId: inv.id,
@@ -268,6 +273,44 @@ async function handle(request: NextRequest) {
   }
 
   return NextResponse.json(report);
+}
+
+/**
+ * Fire the itemized breakdown PDF to AP recipients exactly once per invoice.
+ * Idempotent via `invoices.breakdown_sent_at`. Non-blocking on failure.
+ */
+async function sendBreakdownOnce(
+  supabase: ReturnType<typeof createAdminClient>,
+  invoiceId: string,
+  clientName: string,
+): Promise<void> {
+  const { data: row } = await (supabase.from('invoices') as any)
+    .select('breakdown_sent_at')
+    .eq('id', invoiceId)
+    .single();
+  if (row?.breakdown_sent_at) {
+    console.log(`[resync] ${clientName}: breakdown already sent (${row.breakdown_sent_at})`);
+    return;
+  }
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
+  const cronSecret = process.env.CRON_SECRET || '';
+  try {
+    const res = await fetch(`${appUrl}/api/admin/email-invoice-breakdown?invoiceId=${invoiceId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${cronSecret}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[resync] ${clientName}: breakdown send failed ${res.status}: ${body.slice(0, 200)}`);
+      return;
+    }
+    await (supabase.from('invoices') as any)
+      .update({ breakdown_sent_at: new Date().toISOString() })
+      .eq('id', invoiceId);
+    console.log(`[resync] ${clientName}: breakdown sent + stamped`);
+  } catch (err) {
+    console.error(`[resync] ${clientName}: breakdown send threw:`, err instanceof Error ? err.message : err);
+  }
 }
 
 export async function GET(request: NextRequest) {
