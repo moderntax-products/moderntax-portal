@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     const requestIds = requests.map((r: any) => r.id);
     const { data: entities } = await supabase
       .from('request_entities')
-      .select('id, request_id, status, entity_name, created_at')
+      .select('id, request_id, status, entity_name, created_at, signed_8821_url, signature_id, signature_created_at, signer_email, signer_first_name, signer_last_name')
       .in('request_id', requestIds) as { data: any[] | null; error: any };
 
     // Group entities by request
@@ -131,9 +131,31 @@ export async function GET(request: NextRequest) {
 
     // Summary stats
     const totalIncomplete = requests.length;
+
+    // "Stale" should mean WE'RE blocking the request — not the taxpayer.
+    // A request whose only outstanding entities are awaiting signature is
+    // blocked on the client signing the 8821, not on us. Lumping those into
+    // staleCount falsely flags accounts like Centerstone (5 entities pending
+    // signature for 5-21 days because taxpayers haven't signed yet — Matt
+    // 2026-05-04). Carve those out of staleCount; awaitingSigCount tracks
+    // them separately and the new 8821-processor-followup cron nudges the
+    // processor to chase the client.
+    const entitiesByRequest = new Map<string, any[]>();
+    for (const e of (entities || [])) {
+      const arr = entitiesByRequest.get(e.request_id) || [];
+      arr.push(e);
+      entitiesByRequest.set(e.request_id, arr);
+    }
     const staleCount = requests.filter((r: any) => {
       const age = (now.getTime() - new Date(r.created_at).getTime()) / (1000 * 60 * 60 * 24);
-      return age >= 3;
+      if (age < 3) return false;
+      const reqEntities = entitiesByRequest.get(r.id) || [];
+      const stillPending = reqEntities.filter((e: any) => !['completed', 'failed'].includes(e.status));
+      // If every still-pending entity is awaiting signature, the blocker is
+      // the taxpayer — don't count this as stale.
+      const allAwaitingSignature = stillPending.length > 0 &&
+        stillPending.every((e: any) => e.status === '8821_sent' && !e.signed_8821_url);
+      return !allAwaitingSignature;
     }).length;
 
     // Bottleneck counts
@@ -141,7 +163,8 @@ export async function GET(request: NextRequest) {
     const unassignedCount = allPendingEntities.filter((e: any) => {
       return ['irs_queue', 'processing'].includes(e.status) && !assignmentMap.has(e.id);
     }).length;
-    const awaitingSigCount = allPendingEntities.filter((e: any) => e.status === '8821_sent').length;
+    const awaitingSigCount = allPendingEntities.filter((e: any) =>
+      e.status === '8821_sent' && !e.signed_8821_url).length;
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
 
