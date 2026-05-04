@@ -38,7 +38,18 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Fetch completed signature requests from Dropbox Sign (max 5 pages of 20)
+    // Fetch signature requests from Dropbox Sign. We pass query='complete'
+    // but their API has historically returned non-complete requests anyway,
+    // and this cron used to download whatever PDF the API gave us — even
+    // for awaiting_signature requests. Result: signed_8821_url got
+    // populated with paths to unsigned template PDFs, AI calls then faxed
+    // blank 8821s to IRS (Matt 2026-05-04: 3 Centerstone entities were
+    // sitting in irs_queue with fake signed_8821_url values).
+    //
+    // Defense: always re-verify is_complete + every signature has
+    // status_code='signed' BEFORE downloading and writing signed_8821_url.
+    // The 'complete' filter remains as an optimization (smaller initial
+    // page), but the per-row check below is the actual gate.
     const api = getApi();
     const allRequests: any[] = [];
     let page = 1;
@@ -100,6 +111,18 @@ export async function GET(request: NextRequest) {
       }
 
       try {
+        // Hard gate: only download if Dropbox Sign confirms ALL signers
+        // have actually signed. Without this check, downloadSignedPdf
+        // happily returns the unsigned template PDF for awaiting_signature
+        // requests — and we've been writing those into signed_8821_url.
+        const isComplete = dsReq.isComplete === true;
+        const sigList = (dsReq.signatures || []) as { statusCode?: string }[];
+        const allSigned = sigList.length > 0 && sigList.every(s => s.statusCode === 'signed');
+        if (!isComplete || !allSigned) {
+          console.log(`[auto-sync-8821] Skip ${signatureRequestId} — is_complete=${isComplete}, signers=[${sigList.map(s => s.statusCode).join(',')}]`);
+          skipped++;
+          continue;
+        }
         // Download signed PDF
         const pdfBuffer = await downloadSignedPdf(signatureRequestId);
 
