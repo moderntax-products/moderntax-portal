@@ -6,28 +6,39 @@ import Link from 'next/link';
  * Admin Billing Dashboard
  *
  * Pricing model:
- *   - $59.98/entity with pre-signed 8821 uploaded (PDF intake or reorder)
- *   - $69.98/entity with 8821 signature required (CSV intake)
- *   - $2,499/month fixed for Clearfirm (API intake)
+ *   - Per-client billing rate from `clients.billing_rate_pdf` (Centerstone +
+ *     TMC = $59.98, Cal Statewide CDC = $79.98 per their respective MSAs).
+ *     Falls back to $59.98 if not set.
+ *   - $2,499/month fixed for Clearfirm (subscription model)
  *   - $39.98/API call for Employer.com (employment product)
- *   - Reorders: flat $59.98 rate
+ *   - Reorders charged at the same per-client rate (per signed contracts)
  *   - Free trial: first 3 entities free per client
+ *
+ * Bug fixed 2026-05-04: this page used to apply a flat $59.98/$69.98
+ * across all clients regardless of contracted rate, so Cal Statewide CDC
+ * (contracted at $79.98/TIN per MSA) showed as $59.98 in the admin
+ * dashboard. Now reads each client's billing_rate_pdf directly.
  */
 
-// Billing rate constants
-const RATES = {
-  PRE_SIGNED_8821: 59.98,    // PDF intake — 8821 already signed
-  REQUIRES_8821: 69.98,      // CSV intake — needs 8821 signature
-  REORDER: 59.98,            // Flat reorder rate
-  CLEARFIRM_MONTHLY: 2499.00, // Fixed monthly
-  EMPLOYER_API: 39.98,        // Per API call
+// Display defaults — only used when a client has no billing_rate_pdf set yet
+const DEFAULT_RATES = {
+  PRE_SIGNED_8821: 59.98,
+  CLEARFIRM_MONTHLY: 2499.00,
+  EMPLOYER_API: 39.98,
 };
 
-function getEntityRate(intakeMethod: string, productType: string, clientSlug: string): number {
+function getEntityRate(
+  _intakeMethod: string,
+  productType: string,
+  clientSlug: string,
+  clientBillingRatePdf: number | null | undefined,
+): number {
   if (clientSlug === 'clearfirm') return 0; // Fixed monthly, not per-entity
-  if (productType === 'employment') return RATES.EMPLOYER_API;
-  if (intakeMethod === 'pdf' || intakeMethod === 'manual') return RATES.PRE_SIGNED_8821;
-  return RATES.REQUIRES_8821; // csv or api (non-clearfirm)
+  if (productType === 'employment') return DEFAULT_RATES.EMPLOYER_API;
+  // Per-client contracted rate. Per Matt 2026-05-01: every entity bills at
+  // the client's contracted rate regardless of intake method (the prior
+  // CSV-vs-PDF split was an unsigned $10 markup not in any contract).
+  return clientBillingRatePdf || DEFAULT_RATES.PRE_SIGNED_8821;
 }
 
 function formatCurrency(amount: number): string {
@@ -106,6 +117,7 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
     billingMethod: string | null;
     outstandingInvoices: number;
     overdueInvoices: number;
+    billingRatePdf: number;     // contracted per-TIN rate from MSA
   }> = {};
 
   // Init client map
@@ -119,10 +131,11 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
       totalRevenueAllTime: 0,
       freeTrialEntities: 0,
       isFixedRate: c.slug === 'clearfirm',
-      fixedAmount: c.slug === 'clearfirm' ? RATES.CLEARFIRM_MONTHLY : 0,
+      fixedAmount: c.slug === 'clearfirm' ? DEFAULT_RATES.CLEARFIRM_MONTHLY : 0,
       billingMethod: c.billing_payment_method,
       outstandingInvoices: 0,
       overdueInvoices: 0,
+      billingRatePdf: c.billing_rate_pdf || DEFAULT_RATES.PRE_SIGNED_8821,
     };
   });
 
@@ -156,7 +169,7 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
 
       const completedDate = new Date(entity.completed_at);
       const isFree = isFreeTrialClient.has(entity.id);
-      const rate = isFree ? 0 : getEntityRate(req.intake_method, req.product_type, clientData.slug);
+      const rate = isFree ? 0 : getEntityRate(req.intake_method, req.product_type, clientData.slug, clientData.billingRatePdf);
 
       // All time
       clientData.totalEntitiesAllTime++;
@@ -209,7 +222,7 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
       const client = (clients || []).find((c: any) => c.id === inv.client_id);
       return client?.slug === 'clearfirm';
     });
-    clearfirmClient.totalRevenueAllTime = clearfirmInvoices.length * RATES.CLEARFIRM_MONTHLY + clearfirmClient.revenueThisMonth;
+    clearfirmClient.totalRevenueAllTime = clearfirmInvoices.length * DEFAULT_RATES.CLEARFIRM_MONTHLY + clearfirmClient.revenueThisMonth;
     totals.totalRevenueAllTime = Object.values(clientRevenueMap).reduce((sum, c) => sum + c.totalRevenueAllTime, 0);
   }
 
@@ -320,34 +333,29 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
           </div>
         </div>
 
-        {/* Pricing Reference */}
+        {/* Pricing Reference — three MSA tiers (per the 2026-06-01 standardized MSA) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-10">
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Pricing Schedule</h3>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Pricing Tiers (Standard MSA)</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-lg font-bold text-mt-dark">{formatCurrency(RATES.PRE_SIGNED_8821)}</p>
-              <p className="text-xs text-gray-500 mt-1">Pre-signed 8821</p>
-              <p className="text-xs text-gray-400">(PDF/manual intake)</p>
+              <p className="text-lg font-bold text-mt-dark">$79.98</p>
+              <p className="text-xs text-gray-500 mt-1">Tier A - PAYG</p>
+              <p className="text-xs text-gray-400">no deposit</p>
             </div>
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-lg font-bold text-mt-dark">{formatCurrency(RATES.REQUIRES_8821)}</p>
-              <p className="text-xs text-gray-500 mt-1">Requires 8821 sig</p>
-              <p className="text-xs text-gray-400">(CSV intake)</p>
-            </div>
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-lg font-bold text-mt-dark">{formatCurrency(RATES.REORDER)}</p>
-              <p className="text-xs text-gray-500 mt-1">Reorders</p>
-              <p className="text-xs text-gray-400">(flat rate)</p>
-            </div>
-            <div className="text-center p-3 bg-blue-50 rounded-lg">
-              <p className="text-lg font-bold text-blue-700">{formatCurrency(RATES.CLEARFIRM_MONTHLY)}</p>
-              <p className="text-xs text-gray-500 mt-1">Clearfirm</p>
-              <p className="text-xs text-gray-400">(fixed monthly)</p>
+            <div className="text-center p-3 bg-emerald-50 rounded-lg">
+              <p className="text-lg font-bold text-emerald-700">$59.98</p>
+              <p className="text-xs text-gray-500 mt-1">Tier B - Deposit</p>
+              <p className="text-xs text-gray-400">$2,500 onboarding</p>
             </div>
             <div className="text-center p-3 bg-indigo-50 rounded-lg">
-              <p className="text-lg font-bold text-indigo-700">{formatCurrency(RATES.EMPLOYER_API)}</p>
-              <p className="text-xs text-gray-500 mt-1">Employer.com</p>
-              <p className="text-xs text-gray-400">(per API call)</p>
+              <p className="text-lg font-bold text-indigo-700">$39.99</p>
+              <p className="text-xs text-gray-500 mt-1">Tier C - Platform/API</p>
+              <p className="text-xs text-gray-400">$2,500/mo subscription</p>
+            </div>
+            <div className="text-center p-3 bg-blue-50 rounded-lg">
+              <p className="text-lg font-bold text-blue-700">{formatCurrency(DEFAULT_RATES.CLEARFIRM_MONTHLY)}</p>
+              <p className="text-xs text-gray-500 mt-1">Clearfirm (legacy)</p>
+              <p className="text-xs text-gray-400">fixed monthly</p>
             </div>
           </div>
         </div>

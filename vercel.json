@@ -25,6 +25,10 @@
       "schedule": "0 15 * * 1-5"
     },
     {
+      "path": "/api/cron/may-marketing-batch",
+      "schedule": "0 16 * * 1-5"
+    },
+    {
       "path": "/api/cron/auto-sync-8821",
       "schedule": "0 10 * * *"
     },
