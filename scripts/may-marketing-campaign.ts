@@ -52,8 +52,8 @@ const limit = limitArg >= 0 ? parseInt(process.argv[limitArg + 1] || '0', 10) : 
 const testToArg = process.argv.find(a => a.startsWith('--test-to='));
 const testTo = testToArg ? testToArg.split('=')[1] : null;
 
-if (!['lenders', 'compliance', 'all'].includes(target)) {
-  console.error('Usage: npx tsx scripts/may-marketing-campaign.ts <lenders|compliance|all> [--send] [--limit N]');
+if (!['lenders', 'compliance', 'borrowers', 'all'].includes(target)) {
+  console.error('Usage: npx tsx scripts/may-marketing-campaign.ts <lenders|compliance|borrowers|all> [--send] [--limit N]');
   process.exit(1);
 }
 
@@ -339,6 +339,130 @@ async function sendLenderCampaign() {
 }
 
 // ---------------------------------------------------------------------------
+// Segment C — Borrower / SBA-applicant outreach (personal-email leads
+// caught in HubSpot from past 8821 signer flows)
+//
+// Inverse of the lender filter: only personal-email domains, only
+// contacts whose company doesn't signal a lender. These are typically
+// small business owners who signed an 8821 for an SBA loan and got
+// pulled into HubSpot as a contact. They're not lender prospects but
+// they ARE qualified prospects for our SBA compliance / tax prep /
+// refund credit / pre-approval check-up services.
+// ---------------------------------------------------------------------------
+
+async function sendBorrowerCampaign() {
+  console.log('Loading HubSpot leads from cache for borrower segment...');
+  let leads: HsLead[];
+  try {
+    leads = await fetchHubspotLeads();
+  } catch (err) {
+    console.error('HubSpot fetch failed:', (err as Error).message);
+    return;
+  }
+
+  // Inverse filter: keep ONLY personal-email + non-lender-company contacts.
+  // Still apply the exclude-emails list for internal safety.
+  const borrowerProspects = leads.filter(l => {
+    if (EXCLUDE_EMAILS.has(l.email)) return false;
+    const domain = l.email.split('@')[1] || '';
+    if (!PERSONAL_EMAIL_DOMAINS.has(domain)) return false;
+    if (isLenderCompany(l.company)) return false;
+    return true;
+  });
+  console.log(`Borrower prospects (personal-email, non-lender company): ${borrowerProspects.length}`);
+
+  // Dedupe — skip anyone already sent from this segment OR the lender segment.
+  // (Don't double-mail someone who got the lender pitch by mistake earlier.)
+  const sentLog = testTo ? new Set<string>() : await loadSentLog();
+  const unsent = borrowerProspects.filter(l => !sentLog.has(l.email));
+  console.log(`Already sent: ${borrowerProspects.length - unsent.length}`);
+  console.log(`Remaining to mail: ${unsent.length}`);
+
+  // Default: send all in one go for borrowers (small list ~50). Allow --limit override.
+  const effectiveLimit = testTo ? 1 : (limit > 0 ? limit : unsent.length);
+  const trimmed = unsent.slice(0, effectiveLimit);
+  console.log(`Will ${send ? 'SEND' : '[dry-run] preview'} ${trimmed.length} email${trimmed.length === 1 ? '' : 's'}${testTo ? ` (test-to: ${testTo})` : ''}`);
+
+  let sent_ = 0;
+  let failed = 0;
+  const sentRecords: { email: string; segment: string; sentAt: string }[] = [];
+
+  for (const lead of trimmed) {
+    const firstName = lead.firstName || lead.email.split('@')[0].split('.')[0];
+    const greeting = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+    const company = lead.company ? ` for ${lead.company}` : '';
+
+    const bodyHtml = `
+<p>Hi ${escapeHtml(greeting)},</p>
+<p>You signed an IRS Form 8821 with us recently as part of an SBA loan application${escapeHtml(company)}. We're ModernTax — the tax verification platform your lender uses to pull IRS transcripts.</p>
+<p>Quick offer: while we have your authorization on file, we can do a few things to help on the tax side that most SBA borrowers leave on the table.</p>
+
+<h3 style="font-size:16px;color:#0a1929;margin:28px 0 10px 0;">Four ways we can help</h3>
+
+<div style="background:#f0fdf4;border-left:4px solid #00C48C;padding:14px 18px;margin:14px 0;border-radius:4px;">
+<p style="margin:0 0 6px 0;"><strong>1. SBA Compliance Check-Up</strong> &nbsp;<em style="color:#15803d;font-size:13px;">free</em></p>
+<p style="margin:0;font-size:14px;color:#444;">15-minute review of your IRS standing — unfiled returns, balances due, liens, levies, audit indicators. Useful before applying for the next loan or refinance.</p>
+</div>
+
+<div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px 18px;margin:14px 0;border-radius:4px;">
+<p style="margin:0 0 6px 0;"><strong>2. Refund &amp; Credit Assessment</strong> &nbsp;<em style="color:#1d4ed8;font-size:13px;">contingency-based</em></p>
+<p style="margin:0;font-size:14px;color:#444;">We scan your transcripts for unclaimed refunds, ERC, R&amp;D credits, energy credits, and other money the IRS may owe you. We only get paid if we recover something.</p>
+</div>
+
+<div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px 18px;margin:14px 0;border-radius:4px;">
+<p style="margin:0 0 6px 0;"><strong>3. Pre-Approval Tax Check-In</strong> &nbsp;<em style="color:#92400e;font-size:13px;">before your next loan</em></p>
+<p style="margin:0;font-size:14px;color:#444;">Underwriters look for the same red flags every time. We check your IRS records before you apply — so you walk in knowing the answer.</p>
+</div>
+
+<div style="background:#fdf4ff;border-left:4px solid #a855f7;padding:14px 18px;margin:14px 0;border-radius:4px;">
+<p style="margin:0 0 6px 0;"><strong>4. Tax Prep &amp; Resolution</strong> &nbsp;<em style="color:#7c3aed;font-size:13px;">starting at \$300</em></p>
+<p style="margin:0;font-size:14px;color:#444;">Quarterly estimates, S-corp election, business returns, installment agreements, penalty abatement. We do this work daily for SBA borrowers.</p>
+</div>
+
+<p style="text-align:center;margin:28px 0;">
+<a href="${HUBSPOT_BOOKING}" style="display:inline-block;background:#00C48C;color:#fff;padding:14px 36px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px;">Book a 15-minute review &nbsp;&rarr;</a>
+</p>
+
+<p style="font-size:14px;color:#444;">No obligation. If everything looks clean, we'll tell you that and you'll have one less thing to worry about. If we find something, you'll know what to do about it.</p>
+<p style="margin-top:24px;">Matt Parker<br><span style="color:#666;">Founder, ModernTax</span></p>`;
+
+    const html = marketingShell({
+      preheader: 'Free SBA compliance check-up + refund/credit assessment for past 8821 signers.',
+      bodyHtml,
+    });
+
+    if (!send) {
+      console.log(`  [dry-run] -> ${lead.email} (${greeting}, ${lead.company || 'no company'})`);
+      sent_++;
+      continue;
+    }
+    const recipient = testTo || lead.email;
+    const subject = `${testTo ? '[TEST] ' : ''}${greeting} - free SBA compliance check-up + refund credit scan`;
+    try {
+      await sgMail.send({
+        to: recipient,
+        from: { email: FROM_EMAIL, name: FROM_NAME },
+        replyTo: REPLY_TO,
+        subject,
+        html,
+        categories: ['may2026', 'borrower_outreach', ...(testTo ? ['test_send'] : [])],
+        customArgs: { segment: 'borrowers', original_recipient: lead.email },
+      });
+      sent_++;
+      if (!testTo) {
+        sentRecords.push({ email: lead.email, segment: 'borrowers', sentAt: new Date().toISOString() });
+      }
+      await new Promise(r => setTimeout(r, 50));
+    } catch (err) {
+      failed++;
+      console.error(`  FAIL ${recipient}:`, (err as Error).message);
+    }
+  }
+  if (sentRecords.length > 0) await appendSentLog(sentRecords);
+  console.log(`\nBorrower campaign: ${sent_} ${send ? 'sent' : 'previewed'}, ${failed} failed`);
+}
+
+// ---------------------------------------------------------------------------
 // Segment B — Compliance prospects
 // ---------------------------------------------------------------------------
 
@@ -477,6 +601,7 @@ async function main() {
   console.log(`May Marketing Campaign — ${send ? 'SEND' : '[dry-run]'} mode\n`);
   if (target === 'lenders' || target === 'all') await sendLenderCampaign();
   if (target === 'compliance' || target === 'all') await sendComplianceCampaign();
+  if (target === 'borrowers' || target === 'all') await sendBorrowerCampaign();
   if (!send) console.log('\nDRY-RUN. Re-run with --send to fire for real.');
 }
 main().catch(e => { console.error(e); process.exit(1); });
