@@ -46,6 +46,54 @@ interface HsLead {
   lastDemo: string | null;
 }
 
+// Domains explicitly excluded from the lender campaign — non-lenders that
+// slipped through the initial cache build. Per Matt's review of the first
+// 50 sends 2026-05-04: ~44% were mis-targeted (industry orgs, PE/VC firms,
+// risk insurance, event planners, accelerators, foreign legal). Hard-block
+// these so future cache rebuilds + cron runs skip them.
+const RUNTIME_EXCLUDE_DOMAINS = new Set([
+  // Industry orgs
+  'naggl.org', '43north.org', 'ftcafe.org',
+  // Big-co non-banks
+  'wpp.com', 'wfp.org', 'monaco.com',
+  // Risk / insurance / event services
+  'rizerisk.com', 'eventfullyyourz.com',
+  // PE / VC / accelerators
+  'gener8tor.com', 'battery.com', 'serentcapital.com', 'mpkequitypartners.com',
+  // Adjacent — payments/legal/valuation/consulting
+  'remitian.com', 'admlegal.rs', 'lrmlenderconsultants.com',
+  'ampbusinessvaluations.com', 'sbp-online.com',
+]);
+
+// Personal email providers — typically signers (taxpayers/borrowers) who
+// got into HubSpot via 8821 flows. Skip unless their company name signals
+// a likely lender contact ('bank', 'capital', 'lending', 'cdc', etc.).
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'outlook.com', 'aol.com',
+  'comcast.net', 'verizon.net', 'me.com', 'msn.com',
+]);
+const LENDER_COMPANY_KEYWORDS = [
+  'bank', 'capital', 'lending', 'lender', 'finance', 'financial',
+  'cdc', 'credit union', 'sba', 'fund', 'mortgage', 'loan',
+];
+
+function isLenderCompany(company: string | null): boolean {
+  if (!company) return false;
+  const lower = company.toLowerCase();
+  return LENDER_COMPANY_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+function shouldExclude(lead: HsLead): { exclude: boolean; reason?: string } {
+  const domain = lead.email.split('@')[1]?.toLowerCase() || '';
+  if (RUNTIME_EXCLUDE_DOMAINS.has(domain)) {
+    return { exclude: true, reason: `domain:${domain}` };
+  }
+  if (PERSONAL_EMAIL_DOMAINS.has(domain) && !isLenderCompany(lead.company)) {
+    return { exclude: true, reason: `personal-email:${domain} (no lender keyword in company)` };
+  }
+  return { exclude: false };
+}
+
 export async function GET(request: NextRequest) {
   const auth = request.headers.get('authorization');
   if (!auth || auth !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -74,6 +122,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Lead cache not found', details: (err as Error).message }, { status: 500 });
   }
 
+  // Apply runtime filters (non-lender domains + taxpayer-personal-emails).
+  // Track per-reason counts so the response payload shows what was kept vs
+  // why we skipped — useful when reviewing why a batch is smaller than 25.
+  const skipReasons = new Map<string, number>();
+  const filteredLeads = leads.filter(l => {
+    const r = shouldExclude(l);
+    if (r.exclude) {
+      skipReasons.set(r.reason!, (skipReasons.get(r.reason!) || 0) + 1);
+      return false;
+    }
+    return true;
+  });
+
   // Load sent log from Supabase (persistent across cron runs)
   const supabase = createAdminClient();
   const { data: sentRows } = await (supabase
@@ -81,9 +142,10 @@ export async function GET(request: NextRequest) {
     .select('email');
   const sentSet = new Set((sentRows || []).map((r: any) => (r.email as string).toLowerCase()));
 
-  const unsent = leads.filter(l => !sentSet.has(l.email));
+  const unsent = filteredLeads.filter(l => !sentSet.has(l.email));
   const batch = unsent.slice(0, DAILY_BATCH);
-  console.log(`[may-marketing-batch] addressable=${leads.length} sent=${sentSet.size} remaining=${unsent.length} firing=${batch.length}`);
+  console.log(`[may-marketing-batch] addressable=${leads.length} after-filter=${filteredLeads.length} sent=${sentSet.size} remaining=${unsent.length} firing=${batch.length}`);
+  console.log(`[may-marketing-batch] excluded by runtime filter: ${[...skipReasons.entries()].map(([r, c]) => `${r}=${c}`).join(', ') || 'none'}`);
 
   if (batch.length === 0) {
     return NextResponse.json({

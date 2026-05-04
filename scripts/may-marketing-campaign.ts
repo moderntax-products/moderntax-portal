@@ -147,6 +147,14 @@ const EXCLUDE_DOMAINS = new Set([
   'greenhillsventures.com', 'sba.gov',
   // Major data competitors / partners
   'experian.com',
+  // Mis-targeted in May 1+4 batches (Matt review 2026-05-04). Industry orgs,
+  // PE/VC, risk insurance, event services, accelerators, foreign legal, etc.
+  'naggl.org', '43north.org', 'ftcafe.org',
+  'wpp.com', 'wfp.org', 'monaco.com',
+  'rizerisk.com', 'eventfullyyourz.com',
+  'gener8tor.com', 'battery.com', 'serentcapital.com', 'mpkequitypartners.com',
+  'remitian.com', 'admlegal.rs', 'lrmlenderconsultants.com',
+  'ampbusinessvaluations.com', 'sbp-online.com',
 ]);
 
 // Specific emails to exclude (internal contractors, test accounts)
@@ -154,6 +162,24 @@ const EXCLUDE_EMAILS = new Set([
   'calculatednumbers@gmail.com',  // LaTonya - expert
   'matthewaparker@icloud.com',    // Matt's testing account
 ]);
+
+// Personal email providers — typically signers (taxpayers/borrowers) who
+// got into HubSpot via 8821 flows, not actual lender prospects. Skip
+// unless their company name signals a likely lender contact.
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'outlook.com', 'aol.com',
+  'comcast.net', 'verizon.net', 'me.com', 'msn.com',
+]);
+const LENDER_COMPANY_KEYWORDS = [
+  'bank', 'capital', 'lending', 'lender', 'finance', 'financial',
+  'cdc', 'credit union', 'sba', 'fund', 'mortgage', 'loan',
+];
+
+function isLenderCompany(company: string | null): boolean {
+  if (!company) return false;
+  const lower = company.toLowerCase();
+  return LENDER_COMPANY_KEYWORDS.some(kw => lower.includes(kw));
+}
 
 /** Read/write the persistent record of who's already received the campaign. */
 async function loadSentLog(): Promise<Set<string>> {
@@ -193,14 +219,29 @@ async function sendLenderCampaign() {
   }
   console.log(`Total leads fetched: ${leads.length}`);
 
-  // Filter (defensive — cache is pre-filtered, but keep this as a safety belt)
+  // Filter (defensive — cache is pre-filtered, but keep this as a safety belt).
+  // Tracks per-reason skips so the operator can see *why* contacts dropped.
+  const skipReasons: Record<string, number> = {};
   const addressable = leads.filter(l => {
-    if (EXCLUDE_EMAILS.has(l.email)) return false;
+    if (EXCLUDE_EMAILS.has(l.email)) {
+      skipReasons['excluded-email'] = (skipReasons['excluded-email'] || 0) + 1;
+      return false;
+    }
     const domain = l.email.split('@')[1] || '';
-    if (EXCLUDE_DOMAINS.has(domain)) return false;
+    if (EXCLUDE_DOMAINS.has(domain)) {
+      skipReasons[`domain:${domain}`] = (skipReasons[`domain:${domain}`] || 0) + 1;
+      return false;
+    }
+    if (PERSONAL_EMAIL_DOMAINS.has(domain) && !isLenderCompany(l.company)) {
+      skipReasons['personal-email-no-lender-company'] = (skipReasons['personal-email-no-lender-company'] || 0) + 1;
+      return false;
+    }
     return true;
   });
   console.log(`Addressable after filtering: ${addressable.length}`);
+  if (Object.keys(skipReasons).length > 0) {
+    console.log(`Skipped: ${Object.entries(skipReasons).map(([r, c]) => `${r}=${c}`).join(', ')}`);
+  }
 
   // Skip anyone already sent this campaign (persists across runs in
   // scripts/data/may2026-sent.json). Keeps the daily 25/day rhythm
