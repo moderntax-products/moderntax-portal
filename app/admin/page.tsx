@@ -573,123 +573,111 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 Billing
               </Link>
               <Link
-                href="/admin/email-intake"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Email Intake
-              </Link>
-              <Link
-                href="/admin/analytics"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Analytics
-              </Link>
-              <Link
-                href="/admin/experts"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                IRS Experts
-              </Link>
-              <Link
                 href="/admin/clearfirm-bot"
                 className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors"
               >
                 Clearfirm Bot
               </Link>
-              <Link
-                href="/admin/team"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Team
-              </Link>
-              <Link
-                href="/admin/pending-signups"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors"
-                title="Sign-ups awaiting admin approval"
-              >
-                Pending Signups
-              </Link>
-              <Link
-                href="/admin/payroll"
-                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                title="Expert payroll — close periods + mark paid"
-              >
-                Payroll
-              </Link>
-              <Link
-                href="/"
-                className="text-gray-600 hover:text-gray-900 font-medium text-xs sm:text-sm"
-              >
-                Dashboard
-              </Link>
+              <details className="relative group">
+                <summary className="list-none cursor-pointer px-3 py-1.5 text-xs sm:text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1">
+                  More
+                  <svg className="w-3 h-3 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </summary>
+                <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+                  <Link href="/admin/email-intake" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Email Intake</Link>
+                  <Link href="/admin/analytics" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Analytics</Link>
+                  <Link href="/admin/experts" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">IRS Experts</Link>
+                  <Link href="/admin/team" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Team</Link>
+                  <Link href="/admin/payroll" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Payroll</Link>
+                  <Link
+                    href="/admin/pending-signups"
+                    className="block px-4 py-2 text-sm text-amber-800 bg-amber-50 hover:bg-amber-100"
+                    title="Sign-ups awaiting admin approval"
+                  >
+                    Pending Signups
+                  </Link>
+                  <div className="border-t border-gray-100 my-1" />
+                  <Link href="/" className="block px-4 py-2 text-sm text-gray-500 hover:bg-gray-50">← Main Dashboard</Link>
+                </div>
+              </details>
             </div>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-12">
-        {/* System-wide Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 mb-8 sm:mb-12">
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-xs sm:text-sm font-medium">Total Entities</p>
-                <p className="text-2xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">{totalStats.total}</p>
-              </div>
-              <div className="p-3 bg-mt-green bg-opacity-10 rounded-lg">
-                <svg className="w-6 h-6 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-xs sm:text-sm font-medium">Completed</p>
-                <p className="text-2xl sm:text-3xl font-bold text-green-600 mt-1 sm:mt-2">{totalStats.completed}</p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
-                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-xs sm:text-sm font-medium">Pending</p>
-                <p className="text-2xl sm:text-3xl font-bold text-yellow-600 mt-1 sm:mt-2">{totalStats.pending}</p>
-              </div>
-              <div className="p-3 bg-yellow-100 rounded-lg">
-                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-600 text-xs sm:text-sm font-medium">Failed</p>
-                <p className="text-2xl sm:text-3xl font-bold text-red-600 mt-1 sm:mt-2">{totalStats.failed}</p>
-              </div>
-              <div className="p-3 bg-red-100 rounded-lg">
-                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4v2m0 0v2m0-2h2m-2 0h-2" />
-                </svg>
-              </div>
-            </div>
-          </div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {/* ===== ACTION RIBBON — what needs attention right now =====
+            Replaces the old 4 entity-count cards + 5 revenue KPI cards.
+            Each tile is a clickable anchor jumping to the relevant
+            section below (or another admin page). Counts come from
+            existing variables — no extra queries. */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-6">
+          {/* Q2 progress — first tile, links to Billing detail */}
+          <Link href="/admin/billing" className="bg-white rounded-lg border border-gray-200 p-3 hover:border-mt-green hover:shadow-sm transition-all">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">{revenueMetrics.quarter_label}</p>
+            <p className="text-lg font-bold text-mt-dark mt-0.5">{q2ProgressPct.toFixed(1)}%</p>
+            <p className="text-[11px] text-gray-500">{formatDollars(revenueMetrics.totals.projected_q2)} / {formatDollars(revenueMetrics.q2_target_dollars)}</p>
+          </Link>
+          {/* Open AR */}
+          <a href="#revenue-detail" className={`rounded-lg border p-3 hover:shadow-sm transition-all ${revenueMetrics.totals.open_ar_q2 > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}>
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Open AR</p>
+            <p className={`text-lg font-bold mt-0.5 ${revenueMetrics.totals.open_ar_q2 > 0 ? 'text-amber-700' : 'text-gray-400'}`}>{formatDollars(revenueMetrics.totals.open_ar_q2)}</p>
+            <p className="text-[11px] text-gray-500">{revenueMetrics.ar_aging.rows.length} invoice{revenueMetrics.ar_aging.rows.length !== 1 ? 's' : ''}</p>
+          </a>
+          {/* Overdue 15+ days — red if > 0 */}
+          {(() => {
+            const overdueAmt = revenueMetrics.ar_aging.overdue_15_30.amount + revenueMetrics.ar_aging.overdue_30_plus.amount;
+            const overdueCount = revenueMetrics.ar_aging.overdue_15_30.invoice_count + revenueMetrics.ar_aging.overdue_30_plus.invoice_count;
+            return (
+              <a href="#revenue-detail" className={`rounded-lg border p-3 hover:shadow-sm transition-all ${overdueAmt > 0 ? 'bg-red-50 border-red-300' : 'bg-white border-gray-200'}`}>
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Overdue 15d+</p>
+                <p className={`text-lg font-bold mt-0.5 ${overdueAmt > 0 ? 'text-red-700' : 'text-gray-400'}`}>{formatDollars(overdueAmt)}</p>
+                <p className="text-[11px] text-gray-500">{overdueCount} late</p>
+              </a>
+            );
+          })()}
+          {/* Bottlenecks — count of items needing attention */}
+          <a href="#bottlenecks" className={`rounded-lg border p-3 hover:shadow-sm transition-all ${bottlenecks.length > 0 ? 'bg-red-50 border-red-300' : 'bg-white border-gray-200'}`}>
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Blocking</p>
+            <p className={`text-lg font-bold mt-0.5 ${bottlenecks.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{bottlenecks.length}</p>
+            <p className="text-[11px] text-gray-500">{staleBottlenecks.length} stale · {unassignedBottlenecks.length} unassigned</p>
+          </a>
+          {/* Pending entities — neutral */}
+          <a href="#all-requests" className="bg-white rounded-lg border border-gray-200 p-3 hover:border-mt-green hover:shadow-sm transition-all">
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Pending</p>
+            <p className="text-lg font-bold text-yellow-600 mt-0.5">{totalStats.pending}</p>
+            <p className="text-[11px] text-gray-500">of {totalStats.total} total</p>
+          </a>
+          {/* Failed entities */}
+          <a href="#all-requests" className={`rounded-lg border p-3 hover:shadow-sm transition-all ${totalStats.failed > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Failed</p>
+            <p className={`text-lg font-bold mt-0.5 ${totalStats.failed > 0 ? 'text-red-700' : 'text-gray-400'}`}>{totalStats.failed}</p>
+            <p className="text-[11px] text-gray-500">{totalStats.completed} completed</p>
+          </a>
         </div>
 
-        {/* ===== REVENUE & Q2 PROGRESS (real-time, Mercury-synced) ===== */}
-        <div className="mb-8 sm:mb-12">
+        {/* ===== REVENUE & Q2 PROGRESS — collapsed by default. The action
+            ribbon above already shows the 1-line summary; this <details>
+            holds the full breakdown for when you want to drill in. ===== */}
+        <details id="revenue-detail" className="mb-6 group">
+          <summary className="list-none cursor-pointer flex items-center justify-between bg-white rounded-lg shadow px-5 py-3 border border-gray-200 hover:border-mt-green/40 transition-colors">
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <span className="text-base font-bold text-mt-dark">Revenue & AR detail</span>
+              <span className="text-xs text-gray-500">
+                {revenueMetrics.quarter_label} paid {formatDollars(revenueMetrics.totals.paid_q2)} ·
+                YTD {formatDollars(revenueMetrics.totals.paid_ytd)} ·
+                All-time {formatDollars(revenueMetrics.totals.paid_all_time)} ·
+                Gap to target {formatDollars(q2GapDollars)}
+              </span>
+            </div>
+            <svg className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </summary>
+          <div className="mt-4">
           {/* Q2 Progress Bar */}
           <div className="bg-white rounded-lg shadow p-5 sm:p-6 mb-6 border border-mt-green/20">
             <div className="flex flex-wrap items-baseline justify-between mb-3 gap-2">
@@ -732,48 +720,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
             </div>
           </div>
 
-          {/* KPI Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6 mb-8">
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-emerald-500">
-              <p className="text-gray-600 text-sm font-medium">Q2 Paid</p>
-              <p className="text-xl sm:text-3xl font-bold text-emerald-600 mt-1 sm:mt-2">
-                {formatDollars(revenueMetrics.totals.paid_q2)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">Mercury-confirmed</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-amber-400">
-              <p className="text-gray-600 text-sm font-medium">Open AR</p>
-              <p className="text-xl sm:text-3xl font-bold text-amber-600 mt-1 sm:mt-2">
-                {formatDollars(revenueMetrics.totals.open_ar_q2)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {revenueMetrics.ar_aging.rows.length} open invoice{revenueMetrics.ar_aging.rows.length !== 1 ? 's' : ''}
-              </p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-red-400">
-              <p className="text-gray-600 text-sm font-medium">Overdue 15+ days</p>
-              <p className={`text-xl sm:text-3xl font-bold mt-1 sm:mt-2 ${revenueMetrics.ar_aging.overdue_15_30.amount + revenueMetrics.ar_aging.overdue_30_plus.amount > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatDollars(revenueMetrics.ar_aging.overdue_15_30.amount + revenueMetrics.ar_aging.overdue_30_plus.amount)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {revenueMetrics.ar_aging.overdue_15_30.invoice_count + revenueMetrics.ar_aging.overdue_30_plus.invoice_count} overdue
-              </p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-mt-green">
-              <p className="text-gray-600 text-sm font-medium">2026 YTD Paid</p>
-              <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">
-                {formatDollars(revenueMetrics.totals.paid_ytd)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">Jan 1 → today</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-blue-400">
-              <p className="text-gray-600 text-sm font-medium">All-Time Paid</p>
-              <p className="text-xl sm:text-3xl font-bold text-mt-dark mt-1 sm:mt-2">
-                {formatDollars(revenueMetrics.totals.paid_all_time)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">Since inception</p>
-            </div>
-          </div>
+          {/* KPI Cards removed — same numbers now live in the action
+              ribbon at the top of the page (Open AR, Overdue 15d+) and in
+              the summary line of this <details> (Q2 paid, YTD, all-time).
+              Eliminating the 5-card row was the highest-leverage cleanup
+              for clutter — no information loss. */}
 
           {/* Per-Client Billing Table */}
           <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
@@ -913,11 +864,12 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </div>
             </div>
           )}
-        </div>
+          </div>
+        </details>
 
-        {/* Bottleneck Resolution Center */}
+        {/* Bottleneck Resolution Center — anchor target from action ribbon */}
         {bottlenecks.length > 0 && (
-          <div className="mb-8 sm:mb-12 space-y-4">
+          <div id="bottlenecks" className="mb-8 sm:mb-12 space-y-4 scroll-mt-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1167,9 +1119,25 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         )}
 
-        {/* Compliance Marketing Funnel */}
+        {/* Compliance Marketing Funnel — collapsed by default */}
         {complianceFlaggedEntities.length > 0 && (
-          <div className="mb-12 space-y-6">
+          <details className="mb-8 group">
+            <summary className="list-none cursor-pointer flex items-center justify-between bg-white rounded-lg shadow px-5 py-3 border border-gray-200 hover:border-mt-green/40 transition-colors">
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <span className="text-base font-bold text-mt-dark">
+                  Compliance Marketing
+                </span>
+                <span className="text-xs text-gray-500">
+                  {complianceFlaggedEntities.length} flagged ·
+                  {' '}{complianceFlaggedEntities.filter((e: any) => e.hasCritical).length} critical ·
+                  {' '}{dripStats.enrolled} enrolled · {dripStats.clicked} clicked · {dripStats.booked} booked
+                </span>
+              </div>
+              <svg className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+          <div className="mt-4 space-y-6">
             {/* Funnel Stats */}
             <div className="bg-gradient-to-r from-red-50 to-amber-50 border border-red-200 rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
@@ -1302,6 +1270,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </div>
             </div>
           </div>
+          </details>
         )}
 
         {/* Compliance Opportunities — Breakdown by flag type for tax prep/planning outreach */}
@@ -1331,9 +1300,22 @@ export default async function AdminPage({ searchParams }: PageProps) {
           </div>
         )}
 
-        {/* Client Stats */}
-        <div className="mb-12">
-          <h2 className="text-xl sm:text-2xl font-bold text-mt-dark mb-4 sm:mb-6">Client Overview</h2>
+        {/* Client Stats — collapsed by default */}
+        <details className="mb-8 group">
+          <summary className="list-none cursor-pointer flex items-center justify-between bg-white rounded-lg shadow px-5 py-3 border border-gray-200 hover:border-mt-green/40 transition-colors">
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <span className="text-base font-bold text-mt-dark">Client Overview</span>
+              <span className="text-xs text-gray-500">
+                {(clients || []).length} client{(clients || []).length !== 1 ? 's' : ''} ·
+                {' '}{(clients || []).filter((c: any) => c.free_trial).length} on trial ·
+                {' '}{totalStats.completed} entities completed across all clients
+              </span>
+            </div>
+            <svg className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </summary>
+          <div className="mt-4">
           <div className="bg-white rounded-lg shadow overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1425,20 +1407,34 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </table>
             </div>
           </div>
-        </div>
+          </div>
+        </details>
 
-        {/* Recent Invoices */}
+        {/* Recent Invoices — collapsed by default */}
         {(allInvoices || []).length > 0 && (
-          <div className="mb-12">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-              <h2 className="text-xl sm:text-2xl font-bold text-mt-dark">Recent Invoices</h2>
-              <Link
-                href="/admin/billing"
-                className="text-sm font-medium text-mt-green hover:underline"
-              >
-                View Full Billing Dashboard →
-              </Link>
-            </div>
+          <details className="mb-8 group">
+            <summary className="list-none cursor-pointer flex items-center justify-between bg-white rounded-lg shadow px-5 py-3 border border-gray-200 hover:border-mt-green/40 transition-colors">
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <span className="text-base font-bold text-mt-dark">Recent Invoices</span>
+                <span className="text-xs text-gray-500">
+                  Last {(allInvoices || []).length} ·
+                  {' '}{(allInvoices || []).filter((i: any) => i.status === 'paid').length} paid ·
+                  {' '}{(allInvoices || []).filter((i: any) => i.status === 'sent').length} sent
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <Link
+                  href="/admin/billing"
+                  className="text-xs font-medium text-mt-green hover:underline"
+                >
+                  Full billing →
+                </Link>
+                <svg className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-180 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </summary>
+          <div className="mt-4">
             <div className="bg-white rounded-lg shadow overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -1485,10 +1481,12 @@ export default async function AdminPage({ searchParams }: PageProps) {
               </div>
             </div>
           </div>
+          </details>
         )}
 
-        {/* All Requests */}
-        <div>
+        {/* All Requests — anchor target from action ribbon. Stays
+            visible by default since it's the live activity feed. */}
+        <div id="all-requests" className="scroll-mt-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <h2 className="text-xl sm:text-2xl font-bold text-mt-dark">All Requests</h2>
             <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
