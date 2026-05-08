@@ -144,6 +144,30 @@ export async function POST(request: NextRequest) {
         update.coaching_notes = notes || 'Hold timeout — no callback option offered, hung up after 5 min';
         break;
 
+      case 'wait_too_long_no_callback':
+        // IRS said wait > 15 min and didn't offer a callback option. AI hangs
+        // up; setting classified_outcome here gives the call-completion
+        // webhook (lib/irs-call-retry.handleCompletedCall) an authoritative
+        // signal so it auto-retries from a different from-number.
+        update.status = 'failed';
+        update.callback_status = 'no_answer';
+        update.ended_at = now;
+        update.error_message = `IRS wait > 15 min with no callback option (estimated ${estimated_wait_minutes || '?'} min). Auto-retrying.`;
+        update.coaching_notes = `Hung up — IRS estimated ${estimated_wait_minutes || '?'} min wait, no callback offered. System will retry.`;
+        update.classified_outcome = 'wait_too_long_no_callback';
+        break;
+
+      case 'overflow_rejected':
+        // IRS recording: "We are unable to handle your call at this time."
+        // AI ended call. Mark for auto-retry.
+        update.status = 'failed';
+        update.callback_status = 'no_answer';
+        update.ended_at = now;
+        update.error_message = 'IRS overflow rejection — auto-retrying.';
+        update.coaching_notes = 'IRS rejected call due to high volume. System will retry.';
+        update.classified_outcome = 'high_volume_rejected';
+        break;
+
       case 'expert_pre_connected':
         // Expert was pre-connected to the call
         update.callback_status = 'transferring';

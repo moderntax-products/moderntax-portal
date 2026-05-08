@@ -436,8 +436,8 @@ export function buildToolsForIrsPps(appUrl: string, webhookSecret: string, callb
       type: 'custom',
       name: 'notify_status',
       description:
-        'Report call-level status changes so the ops dashboard reflects reality. Events include wait_estimate, holding, callback_accepted, overflow_rejected, agent_answered.',
-      url: `${appUrl}/api/expert/irs-call/transfer-notify`,
+        'Report call-level status changes so the ops dashboard reflects reality. Events include wait_estimate, holding, callback_accepted, overflow_rejected, wait_too_long_no_callback, agent_answered.',
+      url: `${appUrl}/api/expert/irs-call/status-update`,
       method: 'POST',
       headers: { 'x-bland-secret': webhookSecret },
       parameters: {
@@ -452,6 +452,7 @@ export function buildToolsForIrsPps(appUrl: string, webhookSecret: string, callb
               'holding',
               'callback_accepted',
               'overflow_rejected',
+              'wait_too_long_no_callback',
               'agent_answered',
             ],
           },
@@ -583,13 +584,25 @@ You will eventually hear one of:
 - "We estimate your wait time..." → call notify_status(event="wait_estimate", estimated_wait_minutes=Y) and proceed to PHASE 2.
 - "We are unable to handle your call at this time" → call notify_status(event="overflow_rejected"), say "Thank you, I'll try again later", call end_call.
 
-PHASE 2 — CALLBACK OR HOLD
+PHASE 2 — DECIDE: CALLBACK, HOLD, OR HANG UP
 
-Prefer callback when offered.
+When the IVR says "We estimate your wait time is X minutes", silently note X (the wait estimate). You will use it below.
 
-If the IVR says "we can call you back": call press_digit with "1", wait for the prompt for the 10-digit number, press each digit of {{callback_phone}} via press_digit, press "1" to confirm if asked. Then call notify_status(event="callback_accepted") and call end_call.
+DECISION TREE — apply in this order:
 
-If no callback option: call notify_status(event="holding") and stay silent. Do not speak during hold music or recorded hold-loop messages.
+A. If the IVR offers a callback ("we can call you back", "press 1 to receive a call back", "schedule a return call"):
+   ALWAYS take the callback. This is the preferred path for any wait estimate of 30 minutes or more, and is acceptable at any wait length.
+   1. Call press_digit with "1".
+   2. Wait for the prompt asking for the 10-digit callback number, then press each digit of {{callback_phone}} via press_digit.
+   3. Press "1" to confirm if asked.
+   4. Call notify_status(event="callback_accepted", estimated_wait_minutes=X, callback_phone="{{callback_phone}}").
+   5. Call end_call.
+
+B. If NO callback option is offered (the IVR proceeds straight to hold music after the wait estimate):
+   - If X is greater than 15 minutes: the wait is too long without a callback. Call notify_status(event="wait_too_long_no_callback", estimated_wait_minutes=X). Then call end_call. The system will automatically retry later.
+   - If X is 15 minutes or less (or no wait estimate was given before hold music): call notify_status(event="holding", estimated_wait_minutes=X). Stay silent. Do not speak during hold music or recorded hold-loop messages.
+
+Important: always call notify_status(event="wait_estimate", estimated_wait_minutes=X) the moment you first hear the wait estimate, BEFORE you take the callback / hang up / hold action above.
 
 PHASE 3 — LIVE AGENT ANSWERS
 
