@@ -130,10 +130,19 @@ export function isIrsOpenFor(tz: string, at: Date = new Date()): boolean {
 export function pickFromNumber(
   pool: PhonePoolEntry[] = loadPhonePool(),
   at: Date = new Date(),
+  excludeNumbers: string[] = [],
 ): PhonePoolEntry | null {
   if (pool.length === 0) return null;
 
-  const eligible = pool
+  // MOD-211: in a retry chain, callers pass the from-numbers already
+  // tried for this entity so we rotate to a fresh one. If every number
+  // has been tried, fall back to the entire pool (better to retry from
+  // any open number than fail).
+  const excluded = new Set(excludeNumbers);
+  const filtered = pool.filter(p => !excluded.has(p.phone));
+  const candidates = filtered.length > 0 ? filtered : pool;
+
+  const eligible = candidates
     .map((entry, idx) => {
       const hr = localHour(entry.tz, at);
       const open = isIrsOpenFor(entry.tz, at);

@@ -1,9 +1,15 @@
 /**
  * Voice-provider router — abstracts away whether we're using Bland or Retell.
  *
- * Set `CALL_PROVIDER=retell` in env to route new outbound calls through
- * Retell (after scripts/retell-setup.ts has provisioned the agent + phone).
- * Default is `bland` for safety during the migration window.
+ * AS OF MAY 2026: PRODUCTION IS ON RETELL. Every successful IRS PPS call
+ * since April 29 has been a Retell call (`call_<hex>` format). The Bland
+ * API key in env is no longer valid (returns AUTH_FAILURE) and the
+ * `lib/bland.ts` path is kept only as a hard-rollback option in the
+ * unlikely event Retell goes down. CALL_PROVIDER env is set to `retell`.
+ *
+ * The default below is now `retell` (was `bland`) so that even if the env
+ * var goes missing or the value is mis-set, calls route to the working
+ * provider rather than the dead one. This mirrors the actual prod state.
  *
  * Callers pass a provider-agnostic CallParams shape; the router adapts to
  * each provider's SDK. Stop / status / live-listen helpers are also routed.
@@ -28,8 +34,10 @@ import { createAdminClient } from './supabase-server';
 export type VoiceProvider = 'bland' | 'retell';
 
 export function activeProvider(): VoiceProvider {
-  const v = (process.env.CALL_PROVIDER || 'bland').toLowerCase();
-  return v === 'retell' ? 'retell' : 'bland';
+  // Default flipped May 2026: Retell is now production. The Bland fallback
+  // is only reachable when an admin explicitly sets CALL_PROVIDER=bland.
+  const v = (process.env.CALL_PROVIDER || 'retell').toLowerCase();
+  return v === 'bland' ? 'bland' : 'retell';
 }
 
 /**
