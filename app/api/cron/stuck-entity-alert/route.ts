@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import sgMail from '@sendgrid/mail';
+import { requireBearer } from '@/lib/auth-util';
 
 interface StuckEntity {
   entity_name: string;
@@ -29,15 +30,8 @@ export const maxDuration = 60;
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 

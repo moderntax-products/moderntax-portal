@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
+import { requireBearer } from '@/lib/auth-util';
 import * as DropboxSign from '@dropbox/sign';
 
 const DESIGNEES = {
@@ -48,12 +49,8 @@ function getTemplateId(formType: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 

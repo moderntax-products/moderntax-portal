@@ -11,29 +11,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendProcessorWeeklySummary } from '@/lib/sendgrid';
+import { rollingBusinessWeek } from '@/lib/business-day';
+import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 
-    // Calculate date range for last 7 days
+    // Rolling 7-day business window anchored on 4 AM PT — same definition as
+    // manager-weekly-summary so the two emails reconcile if compared.
     const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const weekAgoISO = weekAgo.toISOString();
-    const weekRange = `${weekAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    const week = rollingBusinessWeek(now);
+    const weekAgoISO = week.start.toISOString();
+    const weekRange = week.rangeLabel;
 
     // Get processors only (managers get their own weekly summary via manager-weekly-summary cron)
     const { data: processors, error: usersError } = await supabase

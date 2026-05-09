@@ -14,16 +14,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendExpertCallbackNotification } from '@/lib/sendgrid';
+import { requireHeaderSecret } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   try {
     // Validate webhook secret
-    const webhookSecret = request.headers.get('x-bland-secret');
-    const expectedSecret = process.env.BLAND_WEBHOOK_SECRET;
-
-    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const unauthorized = requireHeaderSecret(request, 'x-bland-secret', process.env.BLAND_WEBHOOK_SECRET);
+    if (unauthorized) return unauthorized;
 
     const body = await request.json();
     const { session_id, event, estimated_wait_minutes, callback_phone, notes } = body;

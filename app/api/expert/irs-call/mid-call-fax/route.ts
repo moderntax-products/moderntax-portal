@@ -18,14 +18,19 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
+import { requireHeaderSecret } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   try {
     // Tools-secret check. Both Bland (x-bland-secret) and Retell (we set the
-    // same header on the Retell tool definition) send the secret.
-    const headerSecret = request.headers.get('x-bland-secret') || request.headers.get('x-mt-tool-secret');
-    const expectedSecret = process.env.BLAND_WEBHOOK_SECRET || process.env.MT_TOOL_SECRET;
-    if (!headerSecret || !expectedSecret || headerSecret !== expectedSecret) {
+    // same header on the Retell tool definition) send the secret. Either
+    // header can carry either env var's secret — accept any valid pairing,
+    // all checks constant-time.
+    const blandOk = !requireHeaderSecret(request, 'x-bland-secret', process.env.BLAND_WEBHOOK_SECRET);
+    const blandViaMt = !requireHeaderSecret(request, 'x-bland-secret', process.env.MT_TOOL_SECRET);
+    const mtOk = !requireHeaderSecret(request, 'x-mt-tool-secret', process.env.MT_TOOL_SECRET);
+    const mtViaBland = !requireHeaderSecret(request, 'x-mt-tool-secret', process.env.BLAND_WEBHOOK_SECRET);
+    if (!blandOk && !blandViaMt && !mtOk && !mtViaBland) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

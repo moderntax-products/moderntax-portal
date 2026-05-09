@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
+import { sha256Hex, safeEqual } from '@/lib/auth-util';
 
 interface EmploymentIntakeBody {
   request_token: string;
@@ -37,15 +38,18 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createAdminClient();
+    // Lookup by SHA-256 hash + constant-time compare. The plaintext
+    // clients.api_key column is being phased out. See
+    // supabase/migration-api-key-hashing.sql.
+    const presentedHash = sha256Hex(apiKey);
 
-    // Look up client by API key
     const { data: client, error: clientError } = await supabase
       .from('clients')
-      .select('id, name, slug, api_key, api_request_limit')
-      .eq('api_key', apiKey)
-      .single();
+      .select('id, name, slug, api_key_hash, api_request_limit')
+      .eq('api_key_hash', presentedHash)
+      .single() as { data: { id: string; name: string; slug: string; api_key_hash: string; api_request_limit: number | null } | null; error: any };
 
-    if (clientError || !client) {
+    if (clientError || !client || !safeEqual(client.api_key_hash, presentedHash)) {
       return NextResponse.json(
         { error: 'Invalid API key' },
         { status: 401 }

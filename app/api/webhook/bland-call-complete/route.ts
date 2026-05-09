@@ -9,16 +9,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { parseTranscriptOutcomes, extractAgentInfo } from '@/lib/bland';
+import { requireHeaderSecret } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   try {
     // Validate webhook secret (fail closed — reject if env var is not set)
-    const webhookSecret = request.headers.get('x-bland-secret');
-    const expectedSecret = process.env.BLAND_WEBHOOK_SECRET;
-
-    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
+    const unauthorized = requireHeaderSecret(request, 'x-bland-secret', process.env.BLAND_WEBHOOK_SECRET);
+    if (unauthorized) {
       console.error('Bland webhook: invalid or missing secret');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized;
     }
 
     const body = await request.json();
@@ -302,6 +301,23 @@ export async function POST(request: NextRequest) {
       } as any);
     } catch (auditErr) {
       console.error('Audit log failed:', auditErr);
+    }
+
+    // MOD-211 auto-retry coordinator. Classifies the call outcome
+    // (high_volume_rejected vs callback_scheduled vs agent_reached) and,
+    // if retryable, fires a fresh attempt from a different from-number.
+    // Best-effort — wrapped so a retry-coordinator failure never breaks
+    // the webhook ack to bland.
+    try {
+      const { handleCompletedCall } = await import('@/lib/irs-call-retry');
+      const retryResult = await handleCompletedCall(session.id);
+      console.log(
+        `[bland-webhook] retry coordinator: outcome=${retryResult.outcome} action=${retryResult.action}` +
+        (retryResult.newSessionId ? ` newSession=${retryResult.newSessionId}` : '') +
+        (retryResult.chainRootId ? ` chainRoot=${retryResult.chainRootId}` : ''),
+      );
+    } catch (retryErr) {
+      console.error('[bland-webhook] auto-retry coordinator failed (non-blocking):', retryErr);
     }
 
     return NextResponse.json({ received: true, sessionId: session.id });

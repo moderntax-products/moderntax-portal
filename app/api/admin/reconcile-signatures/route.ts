@@ -19,12 +19,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { downloadSignedPdf } from '@/lib/dropbox-sign';
+import { requireBearer } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   try {
     // Auth
-    const authHeader = request.headers.get('authorization');
-    const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+    const isCron = !requireBearer(request, process.env.CRON_SECRET);
     if (!isCron) {
       const cookieStore = await cookies();
       const supabase = createServerRouteClient(cookieStore);
@@ -168,8 +168,7 @@ export async function GET(request: NextRequest) {
   // Convenience: GET returns the count of candidates without mutating anything.
   // Useful for admin UI to show "N signatures awaiting reconciliation".
   try {
-    const authHeader = request.headers.get('authorization');
-    const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+    const isCron = !requireBearer(request, process.env.CRON_SECRET);
     if (!isCron) {
       const cookieStore = await cookies();
       const supabase = createServerRouteClient(cookieStore);

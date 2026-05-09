@@ -1,31 +1,37 @@
 /**
  * Admin Daily Summary Cron Job
- * Sends daily operations summary to all admins
- * GET /api/cron/admin-daily-summary
  *
- * Includes: new requests, completions, failures, expert activity, SLA compliance, revenue
- * Scheduled: Daily at 6:00 PM UTC (vercel.json)
+ * Sends daily operations summary to all admins covering ModernTax's full
+ * cross-timezone business day:
+ *
+ *   START: 4 AM Pacific (= 7 AM Eastern) — earliest expert/processor active
+ *   END:   7 PM Eastern (= 4 PM Pacific) — last east-coast workday minute
+ *
+ * That's the "daily activity window" Matt cares about. Anything fired during
+ * this 12-hour span counts toward today's summary; activity outside that
+ * window (overnight UTC, weekends, etc.) doesn't pollute the numbers.
+ *
+ * Cron schedule: 23:00 UTC daily (vercel.json) — that's 7 PM ET in EDT,
+ * 6 PM ET in EST. Fires right at-or-just-before the east-coast cutoff so
+ * the email lands in admin inboxes at end of business.
+ *
+ * GET /api/cron/admin-daily-summary
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendAdminDailySummary } from '@/lib/sendgrid';
 import type { AdminDailySummaryStats } from '@/lib/types';
+import { businessDayStart, pacificDateLabel } from '@/lib/business-day';
+import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 
@@ -44,17 +50,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Calculate date range for today
+    // Business-day window: 4 AM PT through current time (cron fires at 7 PM
+    // ET). All "today's …" stats use this anchor — see lib/business-day.ts
+    // for the full rationale and helpers.
     const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = businessDayStart(now);
     const todayISO = todayStart.toISOString();
-    const dateLabel = now.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    const dateLabel = pacificDateLabel(now);
 
     // New entities today (from requests created today)
     const { data: newRequestsData } = await supabase

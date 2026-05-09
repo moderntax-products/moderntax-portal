@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendTrialWelcomeEmail } from '@/lib/sendgrid';
 import { signUnsubscribeToken } from '@/lib/unsubscribe-tokens';
+import { requireBearer } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   return handler(request);
@@ -30,10 +31,8 @@ export async function GET(request: NextRequest) {
 
 async function handler(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid CRON_SECRET' }, { status: 401 });
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const admin = createAdminClient();
     const now = Date.now();

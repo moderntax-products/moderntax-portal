@@ -25,12 +25,18 @@ import { createAdminClient } from '@/lib/supabase-server';
 import sgMail from '@sendgrid/mail';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { requireBearer } from '@/lib/auth-util';
 
 if (process.env.SENDGRID_API_KEY) sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const FROM_EMAIL = 'hello@moderntax.io';
 const FROM_NAME = 'Matt at ModernTax';
-const REPLY_TO = 'hello@moderntax.io';
+// Per May-7 review: week-1 results showed 54% open + 32% click but 0 inbound
+// replies — hypothesis is that replies-to-hello@ felt newsletter-y. Routing
+// replies to matt@moderntax.io so engaged readers reach the founder directly.
+// Keeping FROM as hello@ avoids spam-filter churn from a fresh sender domain
+// at every bank's IT.
+const REPLY_TO = 'matt@moderntax.io';
 const PORTAL_SIGNUP = 'https://portal.moderntax.io/signup?utm_source=may2026&utm_medium=email&utm_campaign=lender_reactivation';
 const SUBSTACK_URL = 'https://moderntax.substack.com';
 const DAILY_BATCH = 25;
@@ -95,10 +101,8 @@ function shouldExclude(lead: HsLead): { exclude: boolean; reason?: string } {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = request.headers.get('authorization');
-  if (!auth || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
   if (!process.env.SENDGRID_API_KEY) {
     return NextResponse.json({ error: 'SENDGRID_API_KEY not configured' }, { status: 500 });
   }

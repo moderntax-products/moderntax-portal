@@ -22,6 +22,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import sgMail from '@sendgrid/mail';
+import { requireBearer } from '@/lib/auth-util';
 
 if (process.env.SENDGRID_API_KEY) sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -56,10 +57,8 @@ interface ProcessorBucket {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = request.headers.get('authorization');
-  if (!auth || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
 
   if (!process.env.SENDGRID_API_KEY) {
     return NextResponse.json({ error: 'SENDGRID_API_KEY not configured' }, { status: 500 });

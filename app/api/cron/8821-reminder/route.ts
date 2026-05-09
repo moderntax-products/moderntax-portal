@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendReminder } from '@/lib/dropbox-sign';
 import sgMail from '@sendgrid/mail';
+import { requireBearer } from '@/lib/auth-util';
 
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io';
 
@@ -52,10 +53,8 @@ export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   // Verify cron secret
-  const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
 
   try {
     const supabase = createAdminClient();

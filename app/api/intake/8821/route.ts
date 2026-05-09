@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import * as XLSX from 'xlsx';
 
 // --- Types ---
@@ -81,20 +82,25 @@ function parseSignatureDate(raw: string): string | null {
 export async function POST(request: NextRequest) {
   try {
     // --- Auth ---
+    // Lookup by SHA-256 hash of the presented key, then constant-time
+    // verify. The plaintext column (clients.api_key) is being phased out;
+    // see supabase/migration-api-key-hashing.sql for the schema and
+    // backfill notes.
     const apiKey = request.headers.get('x-api-key');
     if (!apiKey) {
       return NextResponse.json({ error: 'Missing x-api-key header' }, { status: 401 });
     }
 
     const supabase = createAdminClient();
+    const presentedHash = sha256Hex(apiKey);
 
     const { data: client, error: clientError } = await supabase
       .from('clients')
-      .select('id, name, slug')
-      .eq('api_key', apiKey)
-      .single();
+      .select('id, name, slug, api_key_hash')
+      .eq('api_key_hash', presentedHash)
+      .single() as { data: { id: string; name: string; slug: string; api_key_hash: string } | null; error: any };
 
-    if (clientError || !client) {
+    if (clientError || !client || !safeEqual(client.api_key_hash, presentedHash)) {
       return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
     }
 

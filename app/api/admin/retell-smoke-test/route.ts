@@ -30,14 +30,13 @@ import {
   formatFormForSpeech, formatYearsForSpeech,
   formatNATOSpelling, ordinalWord,
 } from '@/lib/crypto';
+import { requireBearer } from '@/lib/auth-util';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
-  const auth = request.headers.get('authorization');
-  if (!auth || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
 
   const body = await request.json().catch(() => ({} as any));
   const to: string | undefined = body.to;

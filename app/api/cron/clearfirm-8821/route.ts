@@ -17,6 +17,7 @@ import { generate8821PDF, DESIGNEES } from '@/lib/8821-pdf';
 import type { DesigneeInfo } from '@/lib/8821-pdf';
 import * as DropboxSign from '@dropbox/sign';
 import { Readable } from 'stream';
+import { requireBearer } from '@/lib/auth-util';
 
 function getDesignee(entity: any): DesigneeInfo {
   if (entity.designee_key && DESIGNEES[entity.designee_key]) {
@@ -37,15 +38,8 @@ export const maxDuration = 60;
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 

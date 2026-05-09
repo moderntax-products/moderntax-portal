@@ -13,11 +13,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient } from '@/lib/supabase-server';
 import { loadPhonePool, isIrsOpenFor, localHour, pickFromNumber } from '@/lib/phone-pool';
+import { requireBearer } from '@/lib/auth-util';
 
 export async function GET(request: NextRequest) {
   // Allow either CRON_SECRET (for scheduled polling) or admin session.
-  const auth = request.headers.get('authorization');
-  const isCron = !!auth && auth === `Bearer ${process.env.CRON_SECRET}`;
+  const isCron = !requireBearer(request, process.env.CRON_SECRET);
 
   if (!isCron) {
     const cookieStore = await cookies();

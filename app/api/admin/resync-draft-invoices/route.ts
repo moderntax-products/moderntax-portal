@@ -32,6 +32,7 @@ import {
   getMercuryInvoicePdfUrl,
   getMercuryPayUrl,
 } from '@/lib/mercury';
+import { requireBearer } from '@/lib/auth-util';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -55,10 +56,8 @@ type ResyncReport = {
 };
 
 async function handle(request: NextRequest) {
-  const auth = request.headers.get('authorization');
-  if (!auth || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
   if (!process.env.MERCURY_API_KEY) {
     return NextResponse.json({ error: 'MERCURY_API_KEY not configured' }, { status: 500 });
   }

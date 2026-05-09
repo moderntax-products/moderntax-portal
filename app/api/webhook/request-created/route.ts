@@ -3,14 +3,15 @@ import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireBearer, requireHeaderSecret } from '@/lib/auth-util';
 
 export async function POST(request: NextRequest) {
   try {
-    // Validate internal webhook secret
-    const webhookSecret = request.headers.get('x-webhook-secret') || request.headers.get('authorization')?.replace('Bearer ', '');
-    const expectedSecret = process.env.WEBHOOK_API_KEY;
-
-    if (!expectedSecret || !webhookSecret || webhookSecret !== expectedSecret) {
+    // Validate internal webhook secret — accept either the dedicated header
+    // or an Authorization: Bearer with the same WEBHOOK_API_KEY value.
+    const headerOk = !requireHeaderSecret(request, 'x-webhook-secret', process.env.WEBHOOK_API_KEY);
+    const bearerOk = !requireBearer(request, process.env.WEBHOOK_API_KEY);
+    if (!headerOk && !bearerOk) {
       console.error('request-created webhook: invalid or missing secret');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

@@ -16,21 +16,15 @@ import {
   getMercuryInvoicePdfUrl,
   getMercuryPayUrl,
 } from '@/lib/mercury';
+import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid CRON_SECRET' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
 
@@ -50,7 +44,7 @@ export async function GET(request: NextRequest) {
     const periodStartDate = new Date(periodStart);
     const periodEndDate = new Date(periodEnd + 'T23:59:59.999Z');
 
-    // Get all clients (including Mercury integration fields)
+    // Get all clients (including Mercury + Stripe integration fields)
     const { data: clients, error: clientsError } = await supabase
       .from('clients')
       .select(
@@ -59,6 +53,10 @@ export async function GET(request: NextRequest) {
         'billing_model, subscription_monthly_amount, subscription_included_entities, subscription_overage_rate, ' +
         'billing_effective_from, billing_notes, ' +
         'mercury_customer_id, ' +
+        // Stripe payment-method-on-file fields. When stripe_payment_method_id
+        // is set + status='active', the cron auto-charges via Stripe and
+        // skips the Mercury invoice block.
+        'stripe_customer_id, stripe_payment_method_id, payment_method_status, ' +
         'address_line1, address_line2, address_city, address_state, address_postal_code, address_country'
       ) as {
         data: {
@@ -266,14 +264,52 @@ export async function GET(request: NextRequest) {
         // Round each subtotal to cents
         monitoringAmount = Math.round(monitoringAmount * 100) / 100;
 
+        // --- Cash-Flow Analysis Pack line: $49.99 × packs generated this period ---
+        // Each cash_flow_pack lives on entity.gross_receipts.cash_flow_pack,
+        // with billed=false until this cron picks it up. Idempotency: once we
+        // mark billed=true the next run skips it. The pack price is captured
+        // on the entity at generation time so a later price change doesn't
+        // retroactively re-bill prior packs.
+        const cashFlowPacks: Array<{ entityId: string; entityName: string; price: number; generated_at: string }> = [];
+        let cashFlowAmount = 0;
+        const { data: candidatesForCashFlow } = await supabase
+          .from('request_entities')
+          .select('id, entity_name, gross_receipts, requests!inner(client_id)')
+          .eq('requests.client_id', client.id)
+          .not('gross_receipts->cash_flow_pack', 'is', null) as { data: any[] | null };
+
+        for (const ent of (candidatesForCashFlow || [])) {
+          const pack = ent.gross_receipts?.cash_flow_pack;
+          if (!pack || pack.billed === true) continue;
+          if (!pack.generated_at) continue;
+          const genAt = new Date(pack.generated_at);
+          // Only bill packs generated in this billing window (or earlier
+          // unbilled packs, which is the catch-up case for the very first run).
+          if (genAt > periodEndDate) continue;
+          const price = typeof pack.price === 'number' ? pack.price : 49.99;
+          cashFlowPacks.push({
+            entityId: ent.id,
+            entityName: ent.entity_name,
+            price,
+            generated_at: pack.generated_at,
+          });
+          cashFlowAmount += price;
+        }
+        cashFlowAmount = Math.round(cashFlowAmount * 100) / 100;
+
         // Skip only for per-TIN clients with zero activity. Subscription
         // clients always get invoiced for the flat monthly fee.
-        if (!isSubscription && totalEntities === 0 && monitoringEntities === 0) {
+        if (
+          !isSubscription &&
+          totalEntities === 0 &&
+          monitoringEntities === 0 &&
+          cashFlowPacks.length === 0
+        ) {
           skipped++;
           continue;
         }
 
-        const grandTotal = Math.round((totalAmount + monitoringAmount) * 100) / 100;
+        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount) * 100) / 100;
 
         // Generate invoice number: INV-{year}-{month}-{slug}
         const slugUpper = client.slug.toUpperCase().slice(0, 4);
@@ -314,10 +350,46 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
+        // Mark cash-flow packs as billed against this invoice. Done after the
+        // invoice row is in place so the linkage survives a partial Mercury
+        // failure (we'd rather have the pack on a draft invoice than risk
+        // double-billing on a retry).
+        for (const pack of cashFlowPacks) {
+          const { data: ent } = await supabase
+            .from('request_entities')
+            .select('gross_receipts')
+            .eq('id', pack.entityId)
+            .single() as { data: { gross_receipts: any } | null };
+          if (!ent?.gross_receipts?.cash_flow_pack) continue;
+          const updated = {
+            ...ent.gross_receipts,
+            cash_flow_pack: {
+              ...ent.gross_receipts.cash_flow_pack,
+              billed: true,
+              billed_at: new Date().toISOString(),
+              invoice_id: insertedInvoice.id,
+              invoice_number: invoiceNumber,
+            },
+          };
+          await supabase
+            .from('request_entities')
+            .update({ gross_receipts: updated })
+            .eq('id', pack.entityId);
+        }
+
         // ---------------------------------------------------------------
-        // Mercury: find-or-create customer + create invoice (emailed immediately)
-        // If MERCURY_API_KEY is missing OR customer provisioning fails, leave
-        // the invoice in draft so admin can retry manually.
+        // Mercury (ACH) is the BILLING channel for monthly invoices, per
+        // Matt's May 2026 split:
+        //   • Mercury (ACH)  → monthly usage invoices + $2,500/mo platform fees
+        //   • Stripe (card)  → upgrades, in-app add-on purchases, monitoring
+        //                       upsells (handled by separate one-off endpoints)
+        //
+        // The Stripe auto-charge block that lived here (May 2026 v1) was
+        // removed because it conflicted with the Mercury-owns-monthly-invoices
+        // model. Stripe payment-method-on-file is still required after the
+        // free trial — but the saved card is for one-off purchases (cash-flow
+        // pack, monitoring enrollment, tier upgrade fees), NOT for the
+        // monthly usage rollup.
         // ---------------------------------------------------------------
         if (!process.env.MERCURY_API_KEY) {
           console.warn(`[${client.name}] MERCURY_API_KEY not set — invoice ${invoiceNumber} left as draft`);

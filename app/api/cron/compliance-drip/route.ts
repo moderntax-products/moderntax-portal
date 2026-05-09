@@ -4,18 +4,17 @@
  * Also enrolls newly flagged entities that don't have a drip record yet.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { classifyFlags, sendDripEmail, getNextEmailDueDate, DRIP_SCHEDULE_DAYS } from '@/lib/compliance-drip';
+import { requireBearer } from '@/lib/auth-util';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   // Verify cron secret
-  const authHeader = req.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const unauthorized = requireBearer(req, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

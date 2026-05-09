@@ -1,27 +1,33 @@
 /**
  * IRS Call Scheduler Cron
- * Runs every 5 minutes during IRS PPS hours (7am-7pm ET, Mon-Fri)
  *
- * Finds scheduled call sessions where scheduled_for <= NOW()
- * and fires them via Bland AI.
+ * Sweeps every 15 minutes M-F and fires any call where
+ * scheduled_for <= NOW() AND status='scheduled'.
+ *
+ * MAY 8 FIX:
+ *   - The cron used to run once per day at 14:00 UTC (7 AM PT). A call
+ *     scheduled for 12:30 PM PT today (Blue Peaks Roofing) sat in
+ *     `scheduled` status all day because the cron wouldn't fire again
+ *     until tomorrow's 7 AM run. New schedule: every 15 min M-F so
+ *     calls fire close to their scheduled time.
+ *   - Replaced direct `lib/bland.initiateCall()` import with the
+ *     `lib/voice-provider.initiateCall()` router so calls route to
+ *     Retell (production default) instead of dead Bland.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
-import { initiateCall } from '@/lib/bland';
+import { fireScheduledCall } from '@/lib/fire-call';
 import { loadPhonePool, isIrsOpenFor, pickFromNumber } from '@/lib/phone-pool';
+import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 30;
 
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
     const now = new Date();
@@ -88,98 +94,19 @@ export async function GET(request: NextRequest) {
 
     for (const session of dueSessions) {
       try {
-        // Fetch the call entities for this session
-        const { data: callEntities } = await supabase
-          .from('irs_call_entities' as any)
-          .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years)')
-          .eq('call_session_id', session.id) as { data: any[]; error: any };
-
-        if (!callEntities || callEntities.length === 0) {
-          console.error(`Scheduled call ${session.id}: no entities found`);
-          failed++;
-          results.push({ sessionId: session.id, status: 'no_entities' });
-          continue;
-        }
-
-        // Fetch expert profile for full details
-        const { data: expertProfile } = await supabase
-          .from('profiles')
-          .select('id, full_name, caf_number, phone_number, fax_number, address')
-          .eq('id', session.expert_id)
-          .single();
-
-        if (!expertProfile) {
-          console.error(`Scheduled call ${session.id}: expert profile not found`);
-          failed++;
-          results.push({ sessionId: session.id, status: 'expert_not_found' });
-          continue;
-        }
-
-        // Update status to initiating
-        await supabase
-          .from('irs_call_sessions' as any)
-          .update({ status: 'initiating', initiated_at: now.toISOString() })
-          .eq('id', session.id);
-
-        // Determine call mode and callback phone
-        const callMode = session.callback_mode === 'irs_callback' ? 'irs_callback'
-          : session.callback_mode === 'transfer' ? 'hold_and_transfer'
-          : (session.callback_phone ? 'hold_and_transfer' : 'ai_full');
-        const callbackPhone = session.callback_phone || expertProfile.phone_number || undefined;
-
-        // Fire the Bland AI call
-        const blandResponse = await initiateCall({
-          expertName: session.expert_name || expertProfile.full_name,
-          cafNumber: session.caf_number || expertProfile.caf_number,
-          expertFax: session.expert_fax || expertProfile.fax_number || undefined,
-          expertPhone: expertProfile.phone_number || undefined,
-          expertAddress: expertProfile.address || undefined,
-          callMode,
-          callbackPhone,
-          entities: callEntities.map((ce: any) => ({
-            entityId: ce.entity_id,
-            taxpayerName: ce.taxpayer_name,
-            taxpayerTid: ce.taxpayer_tid,
-            tidKind: (ce.request_entities?.tid_kind || 'EIN') as 'SSN' | 'EIN',
-            formType: ce.form_type,
-            years: ce.tax_years,
-          })),
-          metadata: {
-            sessionId: session.id,
-            expertId: session.expert_id,
-            assignmentIds: callEntities.map((ce: any) => ce.assignment_id),
-          },
-        });
-
-        // Update session with Bland call ID
-        await supabase
-          .from('irs_call_sessions' as any)
-          .update({
-            bland_call_id: blandResponse.call_id,
-            status: 'ringing',
-          })
-          .eq('id', session.id);
-
-        // Transition assignments to in_progress
-        for (const ce of callEntities) {
-          await supabase
-            .from('expert_assignments')
-            .update({ status: 'in_progress' })
-            .eq('id', ce.assignment_id)
-            .eq('status', 'assigned');
-        }
-
+        // Delegate to lib/fire-call — single source of truth, also used by
+        // the inline-fire path in /api/expert/irs-call/initiate when an
+        // expert schedules a call within 5 min of "now".
+        const r = await fireScheduledCall(supabase as any, session.id);
         processed++;
-        results.push({ sessionId: session.id, status: 'fired', });
-
-        console.log(`Scheduled call ${session.id} fired: Bland call ${blandResponse.call_id}`);
+        results.push({ sessionId: session.id, status: 'fired' });
+        console.log(`Scheduled call ${session.id} fired via ${r.provider}: call_id=${r.call_id}`);
       } catch (err) {
         console.error(`Failed to fire scheduled call ${session.id}:`, err);
         failed++;
-
-        // Mark as failed
-        await supabase
-          .from('irs_call_sessions' as any)
+        // fire-call.ts already rolls the session to status='failed' on
+        // unrecoverable errors; record the error in the response payload.
+        await (supabase.from('irs_call_sessions' as any) as any)
           .update({
             status: 'failed',
             ended_at: now.toISOString(),

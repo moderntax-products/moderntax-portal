@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendCompletionNotification, sendAdminFailureAlert } from '@/lib/sendgrid';
 import { logAuditFromRequest } from '@/lib/audit';
+import { requireHeaderSecret } from '@/lib/auth-util';
 import type { RequestStatus } from '@/lib/types';
 
 interface WebhookPayload {
@@ -26,21 +27,16 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = createAdminClient();
 
-    // Validate API key
-    const apiKey = request.headers.get('x-api-key');
-    const expectedApiKey = process.env.WEBHOOK_API_KEY;
-
-    if (!apiKey || !expectedApiKey || apiKey !== expectedApiKey) {
+    // Validate API key (constant-time)
+    const unauthorized = requireHeaderSecret(request, 'x-api-key', process.env.WEBHOOK_API_KEY);
+    if (unauthorized) {
       // Audit log: unauthorized webhook attempt
       await logAuditFromRequest(supabase, request, {
         action: 'login_failed',
         resourceType: 'webhook',
         details: { reason: 'Invalid API key' },
       });
-      return NextResponse.json(
-        { error: 'Unauthorized: Invalid API key' },
-        { status: 401 }
-      );
+      return unauthorized;
     }
 
     // Parse request body

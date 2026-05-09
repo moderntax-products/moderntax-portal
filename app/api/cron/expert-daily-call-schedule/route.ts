@@ -12,22 +12,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendExpertDailyCallSchedule } from '@/lib/sendgrid';
 import { randomUUID } from 'crypto';
+import { pacificDate } from '@/lib/business-day';
+import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 30;
 
 export async function GET(request: NextRequest) {
   try {
     // Validate CRON_SECRET
-    const cronSecret = request.headers.get('Authorization');
-    const expectedSecret = process.env.CRON_SECRET;
-
-    if (!cronSecret || !expectedSecret || cronSecret !== `Bearer ${expectedSecret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+    if (unauthorized) return unauthorized;
 
     const supabase = createAdminClient();
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    // PT calendar date — used as the schedule_date dedupe key. UTC date was
+    // off-by-one when this cron is manually triggered after 5 PM PT (UTC has
+    // already rolled to "tomorrow"); PT keeps "today" stable through the
+    // entire 4 AM–7 PM ET business window.
+    const today = pacificDate(now);
 
     // Check if weekday (IRS PPS closed weekends)
     const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));

@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { sha256Hex, safeEqual } from '@/lib/auth-util';
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,15 +25,17 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createAdminClient();
+    // Lookup by SHA-256 hash + constant-time compare. See
+    // supabase/migration-api-key-hashing.sql.
+    const presentedHash = sha256Hex(apiKey);
 
-    // Validate API key
     const { data: client } = await supabase
       .from('clients')
-      .select('id, name')
-      .eq('api_key', apiKey)
-      .single();
+      .select('id, name, api_key_hash')
+      .eq('api_key_hash', presentedHash)
+      .single() as { data: { id: string; name: string; api_key_hash: string } | null };
 
-    if (!client) {
+    if (!client || !safeEqual(client.api_key_hash, presentedHash)) {
       return NextResponse.json(
         { error: 'Invalid API key' },
         { status: 401 }
@@ -132,15 +135,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     const supabase = createAdminClient();
+    // Lookup by SHA-256 hash + constant-time compare. See
+    // supabase/migration-api-key-hashing.sql.
+    const presentedHash = sha256Hex(apiKey);
 
-    // Validate API key
     const { data: client } = await supabase
       .from('clients')
-      .select('id, name')
-      .eq('api_key', apiKey)
-      .single();
+      .select('id, name, api_key_hash')
+      .eq('api_key_hash', presentedHash)
+      .single() as { data: { id: string; name: string; api_key_hash: string } | null };
 
-    if (!client) {
+    if (!client || !safeEqual(client.api_key_hash, presentedHash)) {
       return NextResponse.json(
         { error: 'Invalid API key' },
         { status: 401 }
