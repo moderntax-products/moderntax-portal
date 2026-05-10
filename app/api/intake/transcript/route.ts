@@ -337,3 +337,220 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+/**
+ * GET /api/intake/transcript?token=<request_token>
+ *
+ * Partner result-polling endpoint. Mirrors the shape of
+ * /api/webhook/employment-result?token=. Returns:
+ *   - request status + per-entity status
+ *   - transcript URLs (signed, 1-hour expiry) for both PDF + HTML
+ *   - compliance summary parsed from gross_receipts (severity, flags,
+ *     financials, recent transaction codes — first 10 by date)
+ *   - signed_8821_url if present
+ *
+ * Both Moxie and Collective demos asked for this. Today partners get
+ * webhook callbacks via lib/webhook (push); this endpoint is the pull
+ * counterpart for clients that want to poll on their own cadence.
+ *
+ * Auth: x-api-key (hashed lookup, constant-time verified).
+ *
+ * Response shape:
+ *   {
+ *     request_id, status, request_status, completed_at,
+ *     entities: [{
+ *       entity_id, entity_name, tid, form_type, years, status,
+ *       signed_8821_url,
+ *       transcript_urls: string[],            // signed PDF URLs
+ *       transcript_html_urls: string[],       // signed HTML URLs
+ *       compliance: {
+ *         severity: 'CRITICAL' | 'WARNING' | 'CLEAN',
+ *         flags: [{ type, severity, message }],
+ *         financials: { ... },
+ *         recent_transactions: [{ code, explanation, date, amount }],
+ *       } | null,
+ *       completed_at,
+ *     }]
+ *   }
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const apiKey = request.headers.get('x-api-key');
+    if (!apiKey) {
+      return NextResponse.json({ error: 'Missing x-api-key header' }, { status: 401 });
+    }
+
+    const supabase = createAdminClient();
+    const presentedHash = sha256Hex(apiKey);
+
+    const { data: client } = await supabase
+      .from('clients')
+      .select('id, name, api_key_hash')
+      .eq('api_key_hash', presentedHash)
+      .single() as { data: { id: string; name: string; api_key_hash: string } | null };
+
+    if (!client || !safeEqual(client.api_key_hash, presentedHash)) {
+      return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
+    }
+
+    const token = request.nextUrl.searchParams.get('token');
+    if (!token) {
+      return NextResponse.json(
+        { error: 'token query parameter is required' },
+        { status: 400 },
+      );
+    }
+
+    const { data: req } = await supabase
+      .from('requests')
+      .select('id, status, product_type, external_request_token, created_at, completed_at')
+      .eq('external_request_token', token)
+      .eq('client_id', client.id)
+      .maybeSingle() as { data: any };
+
+    if (!req) {
+      return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    }
+
+    // Pull every entity in the request — for transcript orders, multiple
+    // entities per request is the common shape (vs. employment which is
+    // 1 borrower per request).
+    const { data: entities } = await supabase
+      .from('request_entities')
+      .select('id, entity_name, tid, tid_kind, form_type, years, status, signed_8821_url, transcript_urls, transcript_html_urls, gross_receipts, completed_at, signature_created_at')
+      .eq('request_id', req.id)
+      .order('created_at', { ascending: true }) as { data: any[] | null };
+
+    // Sign each storage path so the partner can fetch directly. Cap the
+    // number of signed-URL operations per response to avoid runaway
+    // round-trips on requests with many entities × many transcripts.
+    const MAX_URLS_PER_ENTITY = 20;
+
+    const resolveUrls = async (paths: string[] | null): Promise<string[]> => {
+      if (!paths || paths.length === 0) return [];
+      const out: string[] = [];
+      for (const p of paths.slice(0, MAX_URLS_PER_ENTITY)) {
+        // Skip if already a full URL (legacy data may store signed URLs).
+        if (p.startsWith('http')) {
+          out.push(p);
+          continue;
+        }
+        const { data: signed } = await supabase.storage
+          .from('uploads')
+          .createSignedUrl(p, 3600);
+        if (signed?.signedUrl) out.push(signed.signedUrl);
+      }
+      return out;
+    };
+
+    /** Pull the most recent N transactions from gross_receipts. */
+    const pickRecentTransactions = (gr: any): any[] => {
+      if (!gr) return [];
+      // gross_receipts can be { transactionCodes: [...] } from the
+      // compliance screener, or per-form keys like { '1120S_RoA_2023':
+      // { transactionCodes: [...] } }. Flatten + sort by date desc.
+      const all: any[] = [];
+      const collect = (txs: any) => {
+        if (Array.isArray(txs)) {
+          for (const t of txs) {
+            if (t && typeof t === 'object' && t.code) all.push(t);
+          }
+        }
+      };
+      if (gr.transactionCodes) collect(gr.transactionCodes);
+      for (const key of Object.keys(gr)) {
+        const v = gr[key];
+        if (v && typeof v === 'object' && v.transactionCodes) {
+          collect(v.transactionCodes);
+        }
+      }
+      return all
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+        .slice(0, 10);
+    };
+
+    /** Pick the worst severity across all per-form entries. */
+    const aggregateCompliance = (gr: any): any | null => {
+      if (!gr) return null;
+      const allFlags: any[] = [];
+      let financials: any = null;
+      const sevRank: Record<string, number> = { CRITICAL: 3, WARNING: 2, CLEAN: 1 };
+      let worstSeverity = 'CLEAN';
+
+      const merge = (entry: any) => {
+        if (!entry || typeof entry !== 'object') return;
+        if (entry.severity && (sevRank[entry.severity] || 0) > (sevRank[worstSeverity] || 0)) {
+          worstSeverity = entry.severity;
+        }
+        if (Array.isArray(entry.flags)) allFlags.push(...entry.flags);
+        if (entry.financials && !financials) financials = entry.financials;
+      };
+
+      // Top-level (single screener output)
+      merge(gr);
+      // Per-form keys (e.g. '1120S_RoA_2023')
+      for (const key of Object.keys(gr)) {
+        const v = gr[key];
+        if (v && typeof v === 'object' && (v.severity || v.flags || v.financials)) {
+          merge(v);
+        }
+      }
+
+      if (!worstSeverity && !allFlags.length && !financials) return null;
+      return {
+        severity: worstSeverity,
+        flags: allFlags,
+        financials,
+        recent_transactions: pickRecentTransactions(gr),
+      };
+    };
+
+    const entitiesOut = await Promise.all(
+      (entities || []).map(async (e: any) => ({
+        entity_id: e.id,
+        entity_name: e.entity_name,
+        tid: e.tid,
+        tid_kind: e.tid_kind,
+        form_type: e.form_type,
+        years: e.years,
+        status: e.status,
+        signed_8821_url: e.signed_8821_url
+          ? (await supabase.storage.from('uploads').createSignedUrl(e.signed_8821_url, 3600)).data?.signedUrl || null
+          : null,
+        signature_created_at: e.signature_created_at,
+        transcript_urls: await resolveUrls(e.transcript_urls),
+        transcript_html_urls: await resolveUrls(e.transcript_html_urls),
+        compliance: aggregateCompliance(e.gross_receipts),
+        completed_at: e.completed_at,
+      })),
+    );
+
+    // Audit log — we want a record of every partner result-pull so we
+    // can spot abuse (e.g. someone scraping all completed requests).
+    await logAuditFromRequest(supabase, request, {
+      action: 'transcript_result_retrieved',
+      resourceType: 'request',
+      resourceId: req.id,
+      details: {
+        client_name: client.name,
+        request_token: token,
+        entity_count: entitiesOut.length,
+      },
+    });
+
+    return NextResponse.json({
+      request_id: token,
+      status: req.status === 'completed' ? 'completed' : 'pending',
+      request_status: req.status,
+      created_at: req.created_at,
+      completed_at: req.completed_at,
+      entities: entitiesOut,
+    });
+  } catch (err) {
+    console.error('[transcript-intake GET] Error:', err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 },
+    );
+  }
+}

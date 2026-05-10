@@ -53,7 +53,10 @@ export type AuditAction =
   | 'irs_call_cancelled'
   | 'irs_credentials_updated'
   | 'irs_credentials_deleted'
-  | 'entity_metadata_updated';
+  | 'entity_metadata_updated'
+  | 'partner_8821_pdf_uploaded'
+  | 'partner_monitoring_enrolled'
+  | 'transcript_result_retrieved';
 
 export interface AuditEvent {
   action: AuditAction;

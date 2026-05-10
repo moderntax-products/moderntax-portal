@@ -14,7 +14,17 @@ import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 const ENROLLMENT_FEE = 19.99;  // one-time when monitoring is enrolled
 const PER_PULL_FEE   = 59.98;  // billed only when a new transcript is delivered (not on no-record-found pulls)
 
-function computeNextPullDate(frequency: string, customDays?: number | null, fromDate?: Date): string {
+/**
+ * Supported cadences. Exported so the partner intake endpoint
+ * (/api/intake/monitoring) can validate against the same set without
+ * drift. 'annual' added for portfolio-management use cases (Moxie demo)
+ * where the lender just wants one fresh pull per year after the loan
+ * closes — no need for monthly/quarterly noise.
+ */
+export const MONITORING_FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'annual', 'custom'] as const;
+export type MonitoringFrequency = typeof MONITORING_FREQUENCIES[number];
+
+export function computeNextPullDate(frequency: string, customDays?: number | null, fromDate?: Date): string {
   const base = fromDate || new Date();
   const next = new Date(base);
 
@@ -27,6 +37,9 @@ function computeNextPullDate(frequency: string, customDays?: number | null, from
       break;
     case 'quarterly':
       next.setMonth(next.getMonth() + 3);
+      break;
+    case 'annual':
+      next.setFullYear(next.getFullYear() + 1);
       break;
     case 'custom':
       next.setDate(next.getDate() + (customDays || 30));
@@ -101,14 +114,17 @@ export async function POST(request: NextRequest) {
     if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
 
     const body = await request.json();
-    const { entityId, requestId, frequency, customIntervalDays, nextPullDate, expiresAt } = body;
+    const { entityId, requestId, frequency, customIntervalDays, nextPullDate, expiresAt, skipInitialPull } = body;
 
     if (!entityId || !requestId) {
       return NextResponse.json({ error: 'entityId and requestId required' }, { status: 400 });
     }
 
-    if (!['weekly', 'monthly', 'quarterly', 'custom'].includes(frequency)) {
-      return NextResponse.json({ error: 'Invalid frequency' }, { status: 400 });
+    if (!MONITORING_FREQUENCIES.includes(frequency)) {
+      return NextResponse.json(
+        { error: `Invalid frequency. Allowed: ${MONITORING_FREQUENCIES.join(', ')}` },
+        { status: 400 },
+      );
     }
 
     if (frequency === 'custom' && (!customIntervalDays || customIntervalDays < 1)) {
@@ -187,9 +203,19 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Trigger immediate first pull ---
-    // Find expert with fewest active assignments (round-robin)
+    // Find expert with fewest active assignments (round-robin).
+    //
+    // Partners can opt out by passing skipInitialPull=true, which is the
+    // portfolio-management mode Moxie asked for: enroll a brand-new
+    // business in monitoring so it'll be pulled when its first tax year
+    // becomes due, but DON'T fire an expert assignment now (no records
+    // exist yet — pulling immediately is wasted spend on no-record-found).
     let immediateAssignment: any = null;
-    try {
+    if (skipInitialPull) {
+      // Skip the assignment block entirely. The cron sweep
+      // (lib/auto-enroll-monitoring + monitoring-repull) will pick this
+      // up on next_pull_date.
+    } else try {
       const { data: experts } = await adminSupabase
         .from('profiles')
         .select('id, full_name, email')
