@@ -14,6 +14,10 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Enables `prose` utility classes for nicely-formatted markdown
+    // output (used by app/docs/api for the partner API reference).
+    require('@tailwindcss/typography'),
+  ],
 };
 export default config;

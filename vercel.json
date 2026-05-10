@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/cron/admin-daily-summary",
-      "schedule": "0 22 * * *"
+      "schedule": "0 23 * * *"
     },
     {
       "path": "/api/cron/manager-weekly-summary",
@@ -35,6 +35,14 @@
     {
       "path": "/api/cron/auto-assign-experts",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/auto-enroll-monitoring",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/expert-stale-session-cleanup",
+      "schedule": "0 14 * * *"
     },
     {
       "path": "/api/cron/auto-complete-requests",
@@ -69,12 +77,36 @@
       "schedule": "0 15 * * *"
     },
     {
+      "path": "/api/cron/clearfirm-sla-fail",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/admin-pipeline-status",
       "schedule": "0 13 * * *"
     },
     {
       "path": "/api/cron/irs-call-scheduler",
       "schedule": "0 14 * * 1-5"
+    },
+    {
+      "path": "/api/cron/irs-call-scheduler",
+      "schedule": "0 16 * * 1-5"
+    },
+    {
+      "path": "/api/cron/irs-call-scheduler",
+      "schedule": "0 18 * * 1-5"
+    },
+    {
+      "path": "/api/cron/irs-call-scheduler",
+      "schedule": "0 20 * * 1-5"
+    },
+    {
+      "path": "/api/cron/irs-call-scheduler",
+      "schedule": "0 22 * * 1-5"
+    },
+    {
+      "path": "/api/cron/irs-call-scheduler",
+      "schedule": "0 0 * * 2-6"
     },
     {
       "path": "/api/cron/compliance-drip",
@@ -106,6 +138,12 @@
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" },
         { "key": "Access-Control-Max-Age", "value": "86400" }
+      ]
+    },
+    {
+      "source": "/docs/:path*",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "index, follow" }
       ]
     },
     {
