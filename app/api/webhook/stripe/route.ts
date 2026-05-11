@@ -117,6 +117,70 @@ export async function POST(request: NextRequest) {
           break;
         }
 
+        // -------------------------------------------------------------------
+        // Check Reissue Service ($1,000) — premium recovery service
+        // -------------------------------------------------------------------
+        // Started by an admin clicking "Request Check Reissue" on the ERC
+        // report. /api/billing/purchase creates the Stripe Checkout session;
+        // this handler flips payment_status to 'paid' so the admin queue
+        // can start the actual work (Form 8822-B + IRS reissuance call).
+        if (session.metadata?.flow === 'check_reissue') {
+          const checkReissueId = session.metadata.check_reissue_id;
+          if (!checkReissueId) {
+            console.warn('[stripe-webhook] check_reissue without check_reissue_id metadata');
+            break;
+          }
+          const paymentIntentId = typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id;
+          const { error: upErr } = await (admin
+            .from('check_reissue_requests' as any) as any)
+            .update({
+              payment_status: 'paid',
+              paid_at: new Date().toISOString(),
+              stripe_payment_intent_id: paymentIntentId || null,
+              billed_at: new Date().toISOString(),
+            })
+            .eq('id', checkReissueId);
+          if (upErr) {
+            console.error(`[stripe-webhook] check_reissue payment update failed for ${checkReissueId}:`, upErr.message);
+          } else {
+            console.log(`[stripe-webhook] check_reissue ${checkReissueId} marked paid (amount=$${(session.amount_total || 0) / 100})`);
+          }
+          break;
+        }
+
+        // -------------------------------------------------------------------
+        // ERC Full-Sweep Premium ($79.98) — per-entity upgrade
+        // -------------------------------------------------------------------
+        // Flips erc_full_sweep_paid=true on the entity. Expert sees the
+        // upgrade marker and pulls all 6–7 eligible ERC quarters instead
+        // of the base 3.
+        if (session.metadata?.flow === 'erc_full_sweep') {
+          const entityId = session.metadata.entity_id;
+          if (!entityId) {
+            console.warn('[stripe-webhook] erc_full_sweep without entity_id metadata');
+            break;
+          }
+          const paymentIntentId = typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id;
+          const { error: upErr } = await (admin
+            .from('request_entities') as any)
+            .update({
+              erc_full_sweep_paid: true,
+              erc_full_sweep_paid_at: new Date().toISOString(),
+              erc_full_sweep_payment_intent_id: paymentIntentId || null,
+            })
+            .eq('id', entityId);
+          if (upErr) {
+            console.error(`[stripe-webhook] erc_full_sweep update failed for ${entityId}:`, upErr.message);
+          } else {
+            console.log(`[stripe-webhook] erc_full_sweep paid on entity ${entityId} (amount=$${(session.amount_total || 0) / 100})`);
+          }
+          break;
+        }
+
         // PRIMARY save path for the Checkout Session flow (payment-method
         // attach via mode=setup). Retrieve the SetupIntent → its payment_method
         // → persist to clients.

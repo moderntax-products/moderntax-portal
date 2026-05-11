@@ -12,6 +12,7 @@ import { useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
+import { PRICE_ERC_BASE, PRICE_ERC_FULL_SWEEP_PREMIUM, PRICE_ERC_FULL_SWEEP_TOTAL, PRICE_CHECK_REISSUE, fmtUsd, fmtUsdShort } from '@/lib/pricing';
 
 const ENTITY_TRANSCRIPT_PRICE = 19.99;
 const CASH_FLOW_PACK_PRICE = 49.99;
@@ -557,6 +558,19 @@ export function CsvUploadFlow() {
               {!nonStandardRows.some(r => r.formType === '941') && (
                 <>. Please describe the specific years / context needed for the expert.</>
               )}
+            </div>
+          )}
+          {/* ERC pricing notice — shows when any 941 row is present so partners
+              understand the tier structure before submitting. */}
+          {nonStandardRows.some(r => r.formType === '941') && (
+            <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900">
+              <p className="font-semibold mb-1">ERC analysis pricing — applies to {nonStandardRows.filter(r => r.formType === '941').length} 941 row{nonStandardRows.filter(r => r.formType === '941').length === 1 ? '' : 's'}:</p>
+              <ul className="space-y-0.5 list-disc list-inside ml-1">
+                <li><strong>{fmtUsd(PRICE_ERC_BASE)}</strong> per entity (base) — covers up to 3 ERC-eligible quarters + automated ERC status report</li>
+                <li><strong>+ {fmtUsd(PRICE_ERC_FULL_SWEEP_PREMIUM)}</strong> premium per entity to pull ALL 6–7 eligible quarters (2020 Q2–Q4 + 2021 Q1–Q3, plus Q4 2021 for Recovery Startup Businesses) — total <strong>{fmtUsd(PRICE_ERC_FULL_SWEEP_TOTAL)}/entity</strong> for full coverage</li>
+                <li><strong>{fmtUsdShort(PRICE_CHECK_REISSUE)} per check</strong> — premium recovery service if the report surfaces a refund-returned-undelivered status (we file Form 8822-B + call the IRS reissuance line on the client&apos;s behalf)</li>
+              </ul>
+              <p className="mt-1 text-blue-700">Mention &ldquo;full sweep&rdquo; in the Notes field below if you want the premium tier applied to these entities.</p>
             </div>
           )}
           <textarea

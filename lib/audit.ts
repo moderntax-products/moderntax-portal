@@ -56,7 +56,9 @@ export type AuditAction =
   | 'entity_metadata_updated'
   | 'partner_8821_pdf_uploaded'
   | 'partner_monitoring_enrolled'
-  | 'transcript_result_retrieved';
+  | 'transcript_result_retrieved'
+  | 'check_reissue_requested'
+  | 'check_reissue_status_changed';
 
 export interface AuditEvent {
   action: AuditAction;

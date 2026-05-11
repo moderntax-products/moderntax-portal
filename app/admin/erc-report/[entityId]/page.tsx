@@ -16,6 +16,9 @@
 import { redirect } from 'next/navigation';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import { buildERCReport, ercStatusLabel, type ERCStatus, type ERCQuarter } from '@/lib/erc-analysis';
+import { PRICE_CHECK_REISSUE, PRICE_ERC_FULL_SWEEP_PREMIUM, fmtUsdShort } from '@/lib/pricing';
+import { RequestCheckReissueButton } from '@/components/RequestCheckReissueButton';
+import { UpgradeToFullSweepButton } from '@/components/UpgradeToFullSweepButton';
 import Link from 'next/link';
 
 interface PageProps {
@@ -74,6 +77,18 @@ export default async function ERCReportPage({ params }: PageProps) {
   const report = buildERCReport(entity.entity_name, entity.tid, transcripts);
   const clientName = (entity as any).requests?.clients?.name || 'Unknown';
   const loanNumber = (entity as any).requests?.loan_number || '';
+
+  // Existing check-reissue requests for this entity — so the button on
+  // each undelivered quarter row can render in the right state.
+  const { data: reissueRows } = await admin
+    .from('check_reissue_requests' as any)
+    .select('id, status, tax_year, tax_quarter')
+    .eq('entity_id', entityId)
+    .not('status', 'in', '("cancelled","failed")') as { data: any[] | null };
+  const reissueByQuarter = new Map<string, { id: string; status: string }>();
+  for (const r of reissueRows || []) {
+    reissueByQuarter.set(`${r.tax_year}-Q${r.tax_quarter}`, { id: r.id, status: r.status });
+  }
 
   // -------------------------------------------------------------------------
   // Status color mapping — used by table rows + the summary chips
@@ -153,11 +168,22 @@ export default async function ERCReportPage({ params }: PageProps) {
             </div>
           </div>
 
-          {/* Missing-quarter callout */}
+          {/* Missing-quarter callout — pairs with the upgrade-to-full-sweep CTA when applicable */}
           {report.missingQuarters.length > 0 && (
             <div className="bg-purple-50 border border-purple-200 rounded p-3 text-sm text-purple-900">
-              <strong>Missing transcripts:</strong> {report.missingQuarters.map(q => `${q.year} Q${q.quarter}`).join(', ')}.
-              To complete the analysis, pull 941 Account Transcripts for these tax periods. Some may have legitimate ERC claims that don&apos;t show here.
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <strong>Missing transcripts:</strong> {report.missingQuarters.map(q => `${q.year} Q${q.quarter}`).join(', ')}.
+                  To complete the analysis, pull 941 Account Transcripts for these tax periods. Some may have legitimate ERC claims that don&apos;t show here.
+                </div>
+                {entity.form_type === '941' && (
+                  <UpgradeToFullSweepButton
+                    entityId={entityId}
+                    alreadyPaid={!!entity.erc_full_sweep_paid}
+                    premiumPrice={PRICE_ERC_FULL_SWEEP_PREMIUM}
+                  />
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -199,14 +225,37 @@ export default async function ERCReportPage({ params }: PageProps) {
               Action items ({report.summary.actionRequiredCount})
             </h2>
             <ul className="space-y-3">
-              {report.quarters.filter(q => q.actionRequired).map(q => (
-                <li key={`action-${q.year}-${q.quarter}`} className="border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r">
-                  <p className="text-sm font-semibold text-amber-900">
-                    {q.year} Q{q.quarter} ({fmtUsd(q.totalRecoverable)} at stake)
-                  </p>
-                  <p className="text-sm text-amber-900 mt-1">{q.actionRequired}</p>
-                </li>
-              ))}
+              {report.quarters.filter(q => q.actionRequired).map(q => {
+                const existing = reissueByQuarter.get(`${q.year}-Q${q.quarter}`);
+                const isUndelivered = q.status === 'refund_returned_undelivered';
+                return (
+                  <li key={`action-${q.year}-${q.quarter}`} className="border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r">
+                    <p className="text-sm font-semibold text-amber-900">
+                      {q.year} Q{q.quarter} ({fmtUsd(q.totalRecoverable)} at stake)
+                    </p>
+                    <p className="text-sm text-amber-900 mt-1">{q.actionRequired}</p>
+                    {isUndelivered && q.refundIssuedAmount !== null && (
+                      <div className="mt-3 pt-3 border-t border-amber-300 flex items-center gap-3 flex-wrap">
+                        <RequestCheckReissueButton
+                          entityId={entityId}
+                          taxYear={q.year}
+                          taxQuarter={q.quarter}
+                          originalRefundAmount={q.refundIssuedAmount}
+                          originalRefundDate={q.refundIssuedDate}
+                          returnedUndeliveredDate={q.refundReturnedDate}
+                          existingRequestId={existing?.id || null}
+                          existingStatus={existing?.status || null}
+                          serviceFee={PRICE_CHECK_REISSUE}
+                        />
+                        <span className="text-[11px] text-amber-800">
+                          Premium recovery service: we file Form 8822-B + call the IRS reissuance line on the
+                          client&apos;s behalf. Flat {fmtUsdShort(PRICE_CHECK_REISSUE)} per check.
+                        </span>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
