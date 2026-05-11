@@ -119,6 +119,18 @@
     {
       "path": "/api/cron/trial-welcome-drip",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/email-engagement-refresh",
+      "schedule": "30 14 * * *"
+    },
+    {
+      "path": "/api/cron/email-engagement-refresh",
+      "schedule": "30 17 * * *"
+    },
+    {
+      "path": "/api/cron/email-engagement-refresh",
+      "schedule": "30 20 * * *"
     }
   ],
   "headers": [
