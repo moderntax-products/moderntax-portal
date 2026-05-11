@@ -245,7 +245,18 @@ export default async function AdminRequestManagePage({ params }: Props) {
                     </div>
                     <div>
                       <p className="text-xs text-gray-500 uppercase tracking-wide">Form</p>
-                      <p className="text-sm text-gray-700">{entity.form_type === 'W2_INCOME' ? 'W-2 / Wage & Income' : entity.form_type}</p>
+                      <p className="text-sm text-gray-700">
+                        {entity.form_type === 'W2_INCOME' ? 'W-2 / Wage & Income' : entity.form_type}
+                        {entity.form_type === '941' && (
+                          <Link
+                            href={`/admin/erc-report/${entity.id}`}
+                            className="ml-2 inline-block px-2 py-0.5 text-[11px] font-semibold text-white bg-mt-green rounded hover:bg-mt-green/90"
+                            title="Generate ERC status report from this entity's 941 transcripts"
+                          >
+                            ERC Report →
+                          </Link>
+                        )}
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs text-gray-500 uppercase tracking-wide">Years</p>
