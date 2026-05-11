@@ -88,15 +88,23 @@ async function main() {
     enable_backchannel: false,                 // never "uh-huh" the IRS — unprofessional
     language: 'en-US',
     response_engine: { type: 'retell-llm' as const, llm_id: llmId },
-    max_call_duration_ms: 25 * 60 * 1000,      // 25 min — hard cap on stuck-on-hold blast radius.
-                                               // Dropped from 60 min on 2026-05-11 after a call sat
-                                               // silently on hold for 58+ min (IRS skipped the wait-
-                                               // estimate announcement, so our wait-time decision
-                                               // tree had no X to compare against and the AI just
-                                               // held forever). $0.09/min × 25min = $2.25 worst
-                                               // case per stuck call, vs. $5.40 at the old cap.
-                                               // If we hit this cap on a legitimate fax wait, raise
-                                               // it deliberately for that flow — don't bump default.
+    max_call_duration_ms: 90 * 60 * 1000,      // 90 min — ULTIMATE safety net, not the primary
+                                               // mechanism. Legitimate live-agent conversations
+                                               // routinely run 30-60 min (multiple entities, fax
+                                               // confirmations, identity verification). The PRIMARY
+                                               // pre-agent timeout is in the prompt itself: PHASE 2
+                                               // tells the AI to call notify_status(wait_too_long_
+                                               // no_callback) + end_call after ~25 min of pre-agent
+                                               // hold. This 90-min cap only fires if the AI fails
+                                               // to enforce that rule itself. Worst-case cost at
+                                               // 90 min × $0.09/min = $8.10.
+                                               //
+                                               // History: started at 60 min, dropped to 25 min on
+                                               // 2026-05-11 (stuck call), then raised to 90 min
+                                               // later same day after Matt flagged that a 25-min
+                                               // hard cap would cut off legitimate post-agent
+                                               // conversations (where the 25-min rule shouldn't
+                                               // apply at all).
     // Pronunciation: CAF alphanumerics + "1040" etc. should be read naturally.
     pronunciation_dictionary: [
       { word: 'EIN',  alphabet: 'ipa' as const, phoneme: 'iː.aɪ.ɛn' },

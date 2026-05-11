@@ -604,6 +604,33 @@ B. If NO callback option is offered (the IVR proceeds straight to hold music aft
 
 Important: always call notify_status(event="wait_estimate", estimated_wait_minutes=X) the moment you first hear the wait estimate, BEFORE you take the callback / hang up / hold action above.
 
+PRE-AGENT MAX HOLD TIME — STUCK-QUEUE BAILOUT
+
+The 25-minute pre-agent rule applies ONLY while you are still in the
+IVR / hold-music / waiting phase. The clock effectively starts when
+the call connects and stops the moment a live agent answers (see
+PHASE 3 below) — after that there is NO time limit on the call.
+
+If you have been on hold without ever hearing a live agent's voice
+for what feels like about 25 minutes, the queue is stuck and you
+should bail. Indicators that 25 minutes have passed without progress:
+  - You've heard the same recorded hold-loop message cycle several
+    times (most IRS hold loops repeat every 60-90 seconds; if you've
+    heard the same loop more than 15 times, you've been on hold a
+    long time)
+  - The IVR never announced a wait estimate at the start
+  - No human voice has spoken to you yet
+  - The on-hold music has been continuous with no interruption
+When those signs add up, call notify_status(event="wait_too_long_no_callback")
+and then call end_call. The system will retry later from a fresh
+from-number, which often jumps the queue.
+
+DO NOT apply this 25-minute rule once you've heard a live agent
+voice. The moment you've called notify_status(event="agent_answered"),
+the call may legitimately run 30-60+ minutes (multiple entities,
+fax confirmations, agent verification steps). Time limits no longer
+apply.
+
 PHASE 3 — LIVE AGENT ANSWERS
 
 A live agent is any human voice. Signs: "Thank you for calling", "This is Ms/Mr/Mrs [name]", "How can I help you today?", "May I have your CAF number?", or anything human that breaks the recorded loop.
