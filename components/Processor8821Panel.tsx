@@ -21,7 +21,10 @@ interface Processor8821PanelProps {
 const TEMPLATE_INDIVIDUAL = '/templates/8821-individual.pdf';
 const TEMPLATE_BUSINESS = '/templates/8821-business.pdf';
 
-const FORM_TYPE_OPTIONS = ['1040', '1065', '1120', '1120S'] as const;
+// 941 added May 2026 for ERC verification workflows. (Notes-required
+// UX for non-standard forms is implemented in CsvUploadFlow; ported
+// here in a follow-up if needed — this panel is lower-volume.)
+const FORM_TYPE_OPTIONS = ['1040', '1065', '1120', '1120S', '941', '990', '1041', 'W2_INCOME'] as const;
 
 /**
  * Parse a free-text year input into a normalized array of YYYY strings.
@@ -80,6 +83,14 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
   const [yearsInput, setYearsInput] = useState((entity.years || []).join(', '));
   const [formType, setFormType] = useState<string>(entity.form_type || inferredDefaultForm);
   const [yearsErrors, setYearsErrors] = useState<string[]>([]);
+  // Borrower email — manual fallback for the case where the uploaded PDF was
+  // flattened (no DocuSign Certificate of Completion) so server-side extraction
+  // can't find the signer email. Pre-populated from the entity if already set.
+  const [borrowerEmail, setBorrowerEmail] = useState<string>(entity.signer_email || '');
+  const [borrowerEmailDirty, setBorrowerEmailDirty] = useState(false);
+  // After upload, if the API confirms no email was found anywhere, surface a
+  // visible nudge under the field so the processor knows to fill it.
+  const [needsManualEmail, setNeedsManualEmail] = useState(false);
 
   // Client-side guard mirroring the server validation — shows an inline
   // warning if the current form_type is incompatible with tid_kind.
@@ -102,6 +113,9 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
   const yearsAreEmpty = !entity.years || entity.years.length === 0;
   const yearsAreDirty = yearsInput.trim() !== (entity.years || []).join(', ');
   const formTypeIsDirty = formType !== entity.form_type;
+  // Simple client-side email validity (server re-validates with the same rule).
+  const trimmedEmail = borrowerEmail.trim();
+  const borrowerEmailValid = !trimmedEmail || /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(trimmedEmail);
 
   const handleSaveMetadata = async (opts: { silent?: boolean } = {}): Promise<boolean> => {
     const { years: parsedYears, errors } = parseYearsInput(yearsInput);
@@ -128,6 +142,11 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
           entityId: entity.id,
           years: parsedYears,
           formType,
+          // Only send borrowerEmail when the processor edited it AND it's valid —
+          // sending an empty/invalid value would either no-op or 400 on the server.
+          ...(borrowerEmailDirty && borrowerEmailValid && trimmedEmail
+            ? { borrowerEmail: trimmedEmail }
+            : {}),
         }),
       });
       const data = await res.json();
@@ -177,9 +196,14 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
       setMessage({ type: 'error', text: tidFormMismatch });
       return;
     }
+    if (!borrowerEmailValid) {
+      setMessage({ type: 'error', text: 'Borrower email is not a valid email address.' });
+      return;
+    }
 
     setUploading(true);
     setMessage(null);
+    setNeedsManualEmail(false);
 
     try {
       const formData = new FormData();
@@ -187,6 +211,11 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
       formData.append('file', file);
       formData.append('years', parsedYears.join(','));
       formData.append('formType', formType);
+      // Only send borrowerEmail when the processor actually entered one — empty
+      // string would clobber a legitimate intake-supplied value on the server.
+      if (trimmedEmail) {
+        formData.append('borrowerEmail', trimmedEmail);
+      }
 
       const res = await fetch('/api/admin/upload-8821', {
         method: 'POST',
@@ -199,7 +228,32 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
         return;
       }
 
-      setMessage({ type: 'success', text: 'Signed 8821 uploaded! Entity status updated to 8821 Signed.' });
+      // Inspect the extraction result so the processor knows whether they
+      // need to add the borrower email manually before refreshing.
+      const x = data.emailExtraction;
+      if (x?.needsManualEntry) {
+        // No email anywhere — keep the panel open, surface a clear nudge,
+        // skip the auto-refresh so they can fill in the borrower email and
+        // PATCH it through the "Save Entity Details" button.
+        setNeedsManualEmail(true);
+        setMessage({
+          type: 'success',
+          text: 'Signed 8821 uploaded. We could not detect a borrower email in the PDF — please add it below so the borrower auto-enrolls in compliance updates.',
+        });
+        if (fileRef.current) fileRef.current.value = '';
+        return;
+      }
+
+      const sourceLabel =
+        x?.signerEmailSource === 'manual'
+          ? 'using your entered borrower email'
+          : x?.signerEmailSource === 'extraction'
+            ? `borrower email auto-extracted from PDF (${x?.finalSignerEmail || ''})`
+            : '';
+      setMessage({
+        type: 'success',
+        text: `Signed 8821 uploaded! Entity status updated to 8821 Signed${sourceLabel ? ' — ' + sourceLabel : ''}.`,
+      });
       if (fileRef.current) fileRef.current.value = '';
       // Refresh page after short delay to show updated status
       setTimeout(() => window.location.reload(), 1500);
@@ -329,9 +383,48 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
           &ldquo;Year(s) or Period(s)&rdquo; field on Form 8821 and tell the expert which transcripts to pull.
         </p>
 
+        {/* Borrower email — manual fallback for the 8821 PDF extractor. We try to
+            read the signer's email from the uploaded PDF (DocuSign Certificate of
+            Completion → Signer Events), but flattened PDFs strip that page. When
+            extraction returns nothing, this field is the source of truth. */}
+        <div className="mt-3">
+          <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+            Borrower email
+            <span className="ml-1 text-gray-400 normal-case">
+              (taxpayer who signed — for transcript follow-ups + compliance updates)
+            </span>
+          </label>
+          <input
+            type="email"
+            value={borrowerEmail}
+            onChange={(e) => { setBorrowerEmail(e.target.value); setBorrowerEmailDirty(true); setNeedsManualEmail(false); }}
+            placeholder="e.g. owner@gmail.com"
+            className={`w-full px-2.5 py-1.5 text-xs border rounded-lg bg-white focus:outline-none focus:ring-1 ${
+              !borrowerEmailValid
+                ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                : needsManualEmail
+                  ? 'border-amber-400 focus:border-amber-500 focus:ring-amber-500'
+                  : 'border-indigo-300 focus:border-indigo-500 focus:ring-indigo-500'
+            }`}
+          />
+          {!borrowerEmailValid && (
+            <p className="mt-1 text-[11px] text-red-700">Not a valid email address.</p>
+          )}
+          {needsManualEmail && borrowerEmailValid && (
+            <p className="mt-1 text-[11px] text-amber-700">
+              Couldn&rsquo;t detect a borrower email in the PDF (Certificate of Completion missing). Please paste it from the DocuSign envelope, then click <strong>Save Entity Details</strong>.
+            </p>
+          )}
+          {!needsManualEmail && (
+            <p className="mt-1 text-[10px] text-gray-500">
+              Optional — if left blank, we&rsquo;ll try to read it from the uploaded PDF. Manually-entered values always win over PDF extraction.
+            </p>
+          )}
+        </div>
+
         {/* Save-only button (no upload) — useful when 8821 is already signed but
-            years/form-type were never set, like the Burger51 case. */}
-        {entity.signed_8821_url && (yearsAreDirty || formTypeIsDirty) && (
+            years/form-type/borrower-email were never set, like the Burger51 case. */}
+        {entity.signed_8821_url && (yearsAreDirty || formTypeIsDirty || (borrowerEmailDirty && borrowerEmailValid)) && (
           <div className="mt-2">
             <button
               onClick={() => handleSaveMetadata()}

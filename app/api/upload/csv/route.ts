@@ -6,7 +6,11 @@ import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
-import { inferFormTypeFromTidKind } from '@/lib/form-type-validation';
+import {
+  inferFormTypeFromTidKind,
+  normalizeFormType,
+  validateFormTypeMatchesTidKind,
+} from '@/lib/form-type-validation';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -47,8 +51,20 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
     state: normalized['state'] || '',
     zip_code: normalized['zip_code'] || normalized['zipcode'] || normalized['zip'] || '',
     signature_id: normalized['signature_id'] || normalized['signatureid'] || '',
-    'first name': normalized['first_name'] || normalized['firstname'] || '',
-    'last name': normalized['last_name'] || normalized['lastname'] || '',
+    // Accept the column-name variants real lender exports use. Cal Statewide
+    // and Centerstone both ship with combinations of {signer_, owner_, officer_}
+    // prefixes — supporting all three lets the processor upload the raw export
+    // without renaming columns. Order matters: most specific wins.
+    'first name':
+      normalized['first_name'] || normalized['firstname'] ||
+      normalized['signer_first_name'] || normalized['signerfirstname'] ||
+      normalized['owner_first_name'] || normalized['ownerfirstname'] ||
+      normalized['officer_first_name'] || normalized['officerfirstname'] || '',
+    'last name':
+      normalized['last_name'] || normalized['lastname'] ||
+      normalized['signer_last_name'] || normalized['signerlastname'] ||
+      normalized['owner_last_name'] || normalized['ownerlastname'] ||
+      normalized['officer_last_name'] || normalized['officerlastname'] || '',
     email: normalized['email'] || normalized['signer_email'] || normalized['signeremail'] || findEmailValue(normalized) || '',
     signature_created_at: normalized['signature_created_at'] || normalized['signaturecreatedat'] || '',
     credit_application_id:
@@ -61,8 +77,8 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
       '',
     years: normalized['years'] || normalized['year'] || '',
     // No hard '1040' default — let form-type resolution run against tid_kind later.
-    // Passing '' here means `validateFormType` falls through and the entity-build
-    // code infers from tid_kind instead of blindly stamping 1040.
+    // Empty string falls through `normalizeFormType()` returning null, and the
+    // entity-build code infers from tid_kind instead of blindly stamping 1040.
     form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '',
   };
 }
@@ -77,21 +93,11 @@ function findEmailValue(normalized: Record<string, string>): string {
   return '';
 }
 
-/**
- * Parse the CSV's "form" column. Returns null if unparseable, letting the
- * caller infer from tid_kind instead of blindly returning '1040'.
- */
-function validateFormType(form: string): string | null {
-  if (!form || !form.trim()) return null;
-  // Take only the part before the first comma (e.g., "1120-S, tax transcripts" → "1120-S")
-  const formPart = form.split(',')[0].trim();
-  const normalized = formPart.replace(/[\s-]/g, '').toUpperCase();
-  const valid = ['1040', '1065', '1120', '1120S'];
-  if (valid.includes(normalized)) return normalized;
-  const stripped = normalized.replace('FORM', '');
-  if (valid.includes(stripped)) return stripped;
-  return null;
-}
+// NOTE: the local validateFormType() helper used to live here. It only validated
+// the form code shape and ignored tid_kind compatibility — that's the bug that
+// produced 116 mis-routed 8821s. Replaced with normalizeFormType +
+// validateFormTypeMatchesTidKind from lib/form-type-validation, which both
+// parses the form AND auto-corrects when it conflicts with tid_kind.
 
 function parseYears(years: string): string[] {
   if (!years) return [];
@@ -151,21 +157,78 @@ export async function POST(request: NextRequest) {
       .single() as { data: { name: string } | null; error: any };
     const clientName = clientRecord?.name || 'Unknown';
 
+    // Order gate — block CSV intake if the client has used up their 3 free
+    // trial pulls AND has no payment method on file. Returns 402 Payment
+    // Required with a CTA to /payment-method so the dashboard can prompt.
+    const { checkOrderGate, buildOrderGateErrorBody } = await import('@/lib/order-gate');
+    const adminForGate = createAdminClient();
+    const gate = await checkOrderGate(adminForGate, profile.client_id);
+    if (!gate.allowed) {
+      return NextResponse.json(buildOrderGateErrorBody(gate), { status: gate.status || 402 });
+    }
+
     // Parse multipart form data
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const loanNumber = formData.get('loan_number') as string | null;
     const notes = formData.get('notes') as string | null;
     const entityTranscriptIndicesRaw = formData.get('entity_transcript_indices') as string | null;
+    const cashFlowPackIndicesRaw = formData.get('cash_flow_pack_indices') as string | null;
+    const skipMonitoringIndicesRaw = formData.get('skip_monitoring_indices') as string | null;
+    const formTypeOverridesRaw = formData.get('form_type_overrides') as string | null;
 
-    // Parse entity transcript indices (row indices from the preview that the processor selected)
-    let entityTranscriptIndices: number[] = [];
-    if (entityTranscriptIndicesRaw) {
+    // Parse the three add-on selection arrays. Each is a JSON array of row
+    // indices (0-based, matching the CSV preview). Server stores per-entity
+    // flags so the post-completion hooks (cash-flow generator, monitoring
+    // auto-enroll) know what each entity opted into.
+    const safeParseIndices = (raw: string | null, label: string): number[] => {
+      if (!raw) return [];
       try {
-        entityTranscriptIndices = JSON.parse(entityTranscriptIndicesRaw);
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter((n): n is number => typeof n === 'number') : [];
       } catch {
-        console.warn('[csv-upload] Failed to parse entity_transcript_indices');
+        console.warn(`[csv-upload] Failed to parse ${label}`);
+        return [];
       }
+    };
+    const entityTranscriptIndices = safeParseIndices(entityTranscriptIndicesRaw, 'entity_transcript_indices');
+    const cashFlowPackIndices = safeParseIndices(cashFlowPackIndicesRaw, 'cash_flow_pack_indices');
+    const skipMonitoringIndices = safeParseIndices(skipMonitoringIndicesRaw, 'skip_monitoring_indices');
+
+    // Per-row form_type overrides — the client UI lets processors override
+    // the CSV-derived form_type via the preview dropdown (the only path
+    // to flag a row as 941 when the source CSV doesn't include 941 in
+    // its form column). Indexed by rowIndex.
+    const formTypeOverridesByRow = new Map<number, string>();
+    if (formTypeOverridesRaw) {
+      try {
+        const arr = JSON.parse(formTypeOverridesRaw);
+        if (Array.isArray(arr)) {
+          for (const o of arr) {
+            if (o && typeof o.rowIndex === 'number' && typeof o.formType === 'string') {
+              formTypeOverridesByRow.set(o.rowIndex, o.formType);
+            }
+          }
+        }
+      } catch {
+        console.warn('[csv-upload] Failed to parse form_type_overrides');
+      }
+    }
+
+    // Server-side notes guard — mirror the client-side requirement so
+    // a determined caller can't bypass the UI by direct POST. Non-
+    // standard form types (941, W2_INCOME, 990, 1041) need notes
+    // explaining intent.
+    const NON_STANDARD_FORM_TYPES = new Set(['941', '990', '1041', 'W2_INCOME']);
+    const hasNonStandard = Array.from(formTypeOverridesByRow.values()).some(ft => NON_STANDARD_FORM_TYPES.has(ft));
+    if (hasNonStandard && (!notes || notes.trim().length < 10)) {
+      return NextResponse.json(
+        {
+          error: 'Notes required for 941/W2/990/1041 requests',
+          details: 'Please describe specific quarters/years and what the expert should confirm (e.g. ERC refund status, claim pending, denied).',
+        },
+        { status: 400 },
+      );
     }
 
     if (!file) {
@@ -241,8 +304,18 @@ export async function POST(request: NextRequest) {
     rows.forEach((row) => {
       const tidNorm = (row.tid || '').replace(/\D/g, '');
       const prior = existingByTid.get(tidNorm);
-      // Auto-derive first/last from "Legal Name" when split fields are missing
-      if ((!row['first name'] || !row['last name']) && row.legal_name) {
+      // Auto-derive first/last from "Legal Name" — INDIVIDUALS ONLY.
+      //
+      // For SSN/ITIN entities, legal_name IS the person's name ("Rafael
+      // Castaneda Alamillo") and splitting on whitespace gives a usable
+      // first/last. For business entities (EIN), legal_name is the company
+      // name ("RJ Custom Trailers LLC") — splitting that would silently
+      // stamp first="RJ", last="Custom Trailers LLC", which is wrong: the
+      // signer is the OFFICER, not the entity. Business rows must carry
+      // explicit signer_first_name / signer_last_name (or officer_/owner_
+      // variants — see column aliases above).
+      const isIndividual = ['SSN', 'ITIN'].includes((row.tid_kind || '').toUpperCase());
+      if (isIndividual && (!row['first name'] || !row['last name']) && row.legal_name) {
         const parts = row.legal_name.trim().split(/\s+/);
         if (parts.length >= 2) {
           if (!row['first name']) row['first name'] = parts[0];
@@ -269,13 +342,31 @@ export async function POST(request: NextRequest) {
       const rowNum = idx + 2;
       const tidNorm = (row.tid || '').replace(/\D/g, '');
       const isYearExtension = !!existingByTid.get(tidNorm);
+      const isIndividual = ['SSN', 'ITIN'].includes((row.tid_kind || '').toUpperCase());
       if (!row.legal_name) errors.push(`Row ${rowNum}: missing legal_name`);
       if (!row.tid) errors.push(`Row ${rowNum}: missing tid`);
       // For year-extension rows we don't strictly need email — the existing
       // 8821 carries forward. For new borrowers, email is required.
       if (!isYearExtension && !row.email) errors.push(`Row ${rowNum}: missing email (required for 8821 delivery — TID ${row.tid} not previously verified)`);
-      if (!row['first name']) errors.push(`Row ${rowNum}: missing first name (legal_name must contain at least two words)`);
-      if (!row['last name'])  errors.push(`Row ${rowNum}: missing last name (legal_name must contain at least two words)`);
+      // Different error messages for individual vs business — for individuals
+      // we attempt legal_name parsing first, so "missing" usually means the
+      // name was a single word. For businesses, legal_name was the entity name
+      // (we deliberately did NOT parse it) so the processor needs to add an
+      // explicit officer/owner column.
+      if (!row['first name']) {
+        errors.push(
+          isIndividual
+            ? `Row ${rowNum}: missing first name (legal_name "${row.legal_name}" must contain at least two words for individuals, OR add a signer_first_name column)`
+            : `Row ${rowNum}: missing first name — business entities (EIN) need an officer/owner name. Add a signer_first_name (or owner_first_name / officer_first_name) column to your CSV.`,
+        );
+      }
+      if (!row['last name']) {
+        errors.push(
+          isIndividual
+            ? `Row ${rowNum}: missing last name (legal_name must contain at least two words, OR add a signer_last_name column)`
+            : `Row ${rowNum}: missing last name — business entities (EIN) need an officer/owner name. Add a signer_last_name (or owner_last_name / officer_last_name) column to your CSV.`,
+        );
+      }
       if (!row.address) errors.push(`Row ${rowNum}: missing address`);
       if (!row.city) errors.push(`Row ${rowNum}: missing city`);
       if (!row.state) errors.push(`Row ${rowNum}: missing state`);
@@ -348,12 +439,76 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create request' }, { status: 500 });
     }
 
+    // Track form-type auto-corrections so the response payload can show the
+    // processor exactly what we changed and why. This is the "kill 1040-on-EIN"
+    // bug fix: the old logic silently accepted explicit form_type=1040 even
+    // when tid_kind=EIN, producing 116 rows of misrouted 8821s in production.
+    const formTypeCorrections: Array<{
+      row: number;
+      entity_name: string;
+      tid_kind: string;
+      original_form: string;
+      corrected_form: string;
+      reason: string;
+    }> = [];
+
     // Create entities from CSV rows
     const entities = rows.map((row, idx) => {
       const resolvedTidKind: 'SSN' | 'EIN' =
         ['SSN', 'ITIN'].includes(row.tid_kind?.toUpperCase()) ? 'SSN' : 'EIN';
-      // Form-type resolution: explicit column wins, otherwise infer from tid_kind.
-      const explicitForm = validateFormType(row.form);
+
+      // Form-type resolution flow:
+      //   1. If explicit form is provided, normalize it via the central lib
+      //      (handles "1120-S" / "S corp" / "FORM1040" aliases).
+      //   2. Check it against tid_kind. If it MISMATCHES (EIN entity tagged
+      //      1040, or vice versa), AUTO-CORRECT to the inferred form and
+      //      record the correction in the response. We trust tid_kind as
+      //      source of truth — TID format is the authoritative signal.
+      //   3. If no explicit form was provided, infer from tid_kind silently.
+      let resolvedForm = inferFormTypeFromTidKind(resolvedTidKind);
+      const normalizedExplicit = normalizeFormType(row.form);
+      if (normalizedExplicit) {
+        const mismatch = validateFormTypeMatchesTidKind(resolvedTidKind, normalizedExplicit);
+        if (mismatch) {
+          // Auto-correct + log. The processor sees a warning in the response
+          // and can fix their CSV mapping going forward.
+          formTypeCorrections.push({
+            row: idx + 2,
+            entity_name: row.legal_name,
+            tid_kind: resolvedTidKind,
+            original_form: row.form,
+            corrected_form: resolvedForm,
+            reason: mismatch,
+          });
+        } else {
+          resolvedForm = normalizedExplicit;
+        }
+      }
+
+      // Per-row UI override (from the preview-table dropdown) trumps the
+      // CSV-derived value. Validate it against tid_kind for safety; if
+      // the user picked an obviously-incompatible form (e.g. 1040 on an
+      // EIN row), fall back to the CSV-resolved one and log a correction.
+      const uiOverride = formTypeOverridesByRow.get(idx);
+      if (uiOverride) {
+        const normalizedUi = normalizeFormType(uiOverride);
+        if (normalizedUi) {
+          const mismatch = validateFormTypeMatchesTidKind(resolvedTidKind, normalizedUi);
+          if (mismatch) {
+            formTypeCorrections.push({
+              row: idx + 2,
+              entity_name: row.legal_name,
+              tid_kind: resolvedTidKind,
+              original_form: uiOverride,
+              corrected_form: resolvedForm,
+              reason: `UI override rejected — ${mismatch}`,
+            });
+          } else {
+            resolvedForm = normalizedUi;
+          }
+        }
+      }
+
       const entityData: Record<string, any> = {
         request_id: req.id,
         entity_name: row.legal_name,
@@ -363,7 +518,7 @@ export async function POST(request: NextRequest) {
         city: row.city || null,
         state: row.state || null,
         zip_code: row.zip_code || null,
-        form_type: explicitForm || inferFormTypeFromTidKind(resolvedTidKind),
+        form_type: resolvedForm,
         years: parseYears(row.years),
         signer_first_name: row['first name'] || null,
         signer_last_name: row['last name'] || null,
@@ -373,15 +528,36 @@ export async function POST(request: NextRequest) {
         status: row.signature_id ? '8821_signed' : 'pending',
       };
 
-      // Add entity transcript order if this row was selected
+      // Stamp per-entity add-on flags into gross_receipts. Each is read by a
+      // post-completion hook (cash-flow generator runs after transcripts upload,
+      // monitoring auto-enroll runs as the entity flips to status='completed').
+      const grossReceipts: Record<string, unknown> = {};
       if (entityTranscriptIndices.includes(idx)) {
-        entityData.gross_receipts = {
-          entity_transcript_order: {
-            requested: true,
-            price: RATE_ENTITY_TRANSCRIPT,
-            ordered_at: new Date().toISOString(),
-          },
+        grossReceipts.entity_transcript_order = {
+          requested: true,
+          price: RATE_ENTITY_TRANSCRIPT,
+          ordered_at: new Date().toISOString(),
         };
+      }
+      if (cashFlowPackIndices.includes(idx)) {
+        // Pre-order: marker for the upload-transcript completion hook to
+        // generate the cash-flow PDF as soon as transcripts are uploaded.
+        grossReceipts.cash_flow_pack_pre_ordered = {
+          requested: true,
+          price: 49.99,
+          ordered_at: new Date().toISOString(),
+        };
+      }
+      if (skipMonitoringIndices.includes(idx)) {
+        // Per-entity monitoring opt-out — overrides the client-level default-on.
+        // Read by the auto-enroll hook in app/api/expert/upload-transcript.
+        grossReceipts.skip_auto_monitoring = {
+          requested: true,
+          opted_out_at: new Date().toISOString(),
+        };
+      }
+      if (Object.keys(grossReceipts).length > 0) {
+        entityData.gross_receipts = grossReceipts;
       }
 
       return entityData;
@@ -562,6 +738,10 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Surface auto-corrections so the upload UI can show a clear warning
+    // banner: "We changed form_type 1040 → 1120 for 3 rows because tid_kind=EIN".
+    // The processor doesn't have to act on it, but they get visibility into
+    // the bug class that historically produced 116 mis-routed 8821s.
     return NextResponse.json({
       success: true,
       batch_id: batch.id,
@@ -570,6 +750,11 @@ export async function POST(request: NextRequest) {
       entities_created: entityCount,
       loan_numbers: [effectiveLoanNumber],
       repeat_entities: repeatEntities.length > 0 ? repeatEntities : undefined,
+      form_type_corrections: formTypeCorrections.length > 0 ? formTypeCorrections : undefined,
+      // Add-on counts so the UI success screen can recap "X add-ons selected".
+      entity_transcripts_ordered: entityTranscriptIndices.length || undefined,
+      cash_flow_packs_ordered: cashFlowPackIndices.length || undefined,
+      monitoring_enrollments_skipped: skipMonitoringIndices.length || undefined,
     });
   } catch (err) {
     console.error('CSV upload error:', err);

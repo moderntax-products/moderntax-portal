@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
     }
 
     // formType defaults to existing entity value, but must be a valid 8821 form code
-    const validForms = ['1040', '1065', '1120', '1120S'];
+    const validForms = ['1040', '1065', '1120', '1120S', '941'];
     const formType = formTypeRaw && validForms.includes(formTypeRaw) ? formTypeRaw : null;
 
     // Validate the optional manual borrower email. Reject anything that isn't a
@@ -351,7 +351,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const validForms = ['1040', '1065', '1120', '1120S'];
+    const validForms = ['1040', '1065', '1120', '1120S', '941'];
     const formType = formTypeRaw && validForms.includes(formTypeRaw) ? formTypeRaw : null;
 
     // Validate optional borrower email (same rule as POST).

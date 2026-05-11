@@ -14,6 +14,23 @@ import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
 
 const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const CASH_FLOW_PACK_PRICE = 49.99;
+const MONITORING_MONTHLY_PRICE = 19.99;
+
+// Form types the dropdown offers. Order: most-common first.
+// 941 (employer quarterly payroll) was added May 2026 — enables ERC
+// verification workflows (TaxTaker, R&D credit shops). Requires notes
+// because each ERC pull has specific per-quarter intent that the
+// expert needs to understand ("confirm refund issued for Q2 2021"
+// vs. "confirm claim still pending").
+const FORM_TYPE_OPTIONS = ['1040', '1065', '1120', '1120S', '941', '990', '1041', 'W2_INCOME'] as const;
+
+// Form types that benefit from the requester explaining the specific
+// intent. 1040/1065/1120/1120S are the standard SBA-lender intake mix
+// and don't need notes. Everything else (941 / W2 / 990 / 1041) is
+// a less-common request shape where the expert needs context to
+// service it correctly.
+const NON_STANDARD_FORM_TYPES = new Set(['941', '990', '1041', 'W2_INCOME']);
 
 interface CsvPreviewEntity {
   rowIndex: number;
@@ -29,10 +46,20 @@ interface CsvPreviewEntity {
   city: string;
   state: string;
   zipCode: string;
+  /** Add the $19.99 Entity Transcript (filing reqs / NAICS) — EIN entities only. */
   entityTranscript: boolean;
+  /** Auto-generate the $49.99 SBA Cash-Flow Pack after transcripts complete. */
+  cashFlowPack: boolean;
+  /** Default ON — opt-out of auto monitoring enrollment for this row. */
+  enrollMonitoring: boolean;
   missingFields: string[];
   isRepeat?: boolean;
   repeatOfName?: string;
+  /** Set when the lookup found a prior FAILED request for this TIN+name.
+   *  When true, entityTranscript is auto-checked + a banner explains why
+   *  ("prior pull failed — confirming filing requirements first"). */
+  priorFailed?: boolean;
+  priorFailedReason?: string;
 }
 
 export function CsvUploadFlow() {
@@ -50,6 +77,19 @@ export function CsvUploadFlow() {
     entities_created: number;
     loan_numbers: string[];
     entity_transcripts_ordered?: number;
+    cash_flow_packs_ordered?: number;
+    monitoring_enrollments_skipped?: number;
+    // Server-side auto-corrections of form_type when explicit value mismatched
+    // tid_kind (the "1040 on EIN" bug class). Surfaced as a warning banner so
+    // the processor sees what we changed and can fix their CSV mapping.
+    form_type_corrections?: Array<{
+      row: number;
+      entity_name: string;
+      tid_kind: string;
+      original_form: string;
+      corrected_form: string;
+      reason: string;
+    }>;
   } | null>(null);
 
   const normalizeHeader = (h: string) => h.trim().toLowerCase().replace(/\s+/g, '_');
@@ -105,6 +145,11 @@ export function CsvUploadFlow() {
           state,
           zipCode,
           entityTranscript: false,
+          // Both new add-ons default OFF for cash-flow (opt-in revenue),
+          // and ON for monitoring (matches the team-default-on behavior — the
+          // checkbox lets the processor opt OUT for sensitive entities).
+          cashFlowPack: false,
+          enrollMonitoring: true,
           missingFields: missing,
         };
       });
@@ -115,22 +160,58 @@ export function CsvUploadFlow() {
       if (tids.length > 0) {
         try {
           const supabase = createClient();
+          // Single query covers both "completed prior" and "failed prior" cases.
+          // Status 'completed' → carve-out + repeat indicator + auto-attach prior data.
+          // Status 'failed' → default-on Entity Transcript so we confirm filing
+          // requirements before re-issuing pulls (the most common reason a
+          // pull fails is wrong form_type / no return on file).
           const { data: existing } = await supabase
             .from('request_entities')
-            .select('tid, entity_name')
+            .select('tid, entity_name, status, gross_receipts, signed_8821_url')
             .in('tid', tids)
-            .not('signed_8821_url', 'is', null) as { data: { tid: string; entity_name: string }[] | null; error: unknown };
+            .in('status', ['completed', 'failed']) as { data: { tid: string; entity_name: string; status: string; gross_receipts: any; signed_8821_url: string | null }[] | null; error: unknown };
+
           if (existing && existing.length > 0) {
-            const repeatByTid = new Map(existing.map(e => [e.tid, e.entity_name]));
+            // Build two maps: one for completed (carve-out applies) and one
+            // for failed (entity transcript default-on applies). Same TIN can
+            // appear in both maps if the borrower has both a completed and a
+            // failed prior request — the completed match takes precedence for
+            // the "repeat borrower" badge.
+            const completedByTid = new Map<string, string>();
+            const failedByTid = new Map<string, string>();
+            for (const row of existing) {
+              if (row.status === 'completed' && row.signed_8821_url) {
+                completedByTid.set(row.tid, row.entity_name);
+              }
+              if (row.status === 'failed' && !completedByTid.has(row.tid)) {
+                // Pull a useful "why it failed" hint if one was logged in
+                // gross_receipts (we sometimes stash a `failure_reason` there).
+                const reason = row.gross_receipts?.failure_reason || row.gross_receipts?.last_error || 'prior pull did not return transcripts';
+                failedByTid.set(row.tid, typeof reason === 'string' ? reason : 'prior pull failed');
+              }
+            }
+
             const carveoutFields = new Set(['email', 'first name', 'last name', 'address', 'city', 'state', 'zip_code']);
             setPreviewEntities(prev => (prev || []).map(e => {
-              const repeatName = repeatByTid.get(e.tid);
-              if (!repeatName) return e;
+              const completedName = completedByTid.get(e.tid);
+              const failedReason = failedByTid.get(e.tid);
+              if (!completedName && !failedReason) return e;
               return {
                 ...e,
-                isRepeat: true,
-                repeatOfName: repeatName,
-                missingFields: e.missingFields.filter(f => !carveoutFields.has(f)),
+                ...(completedName ? {
+                  isRepeat: true,
+                  repeatOfName: completedName,
+                  missingFields: e.missingFields.filter(f => !carveoutFields.has(f)),
+                } : {}),
+                ...(failedReason ? {
+                  priorFailed: true,
+                  priorFailedReason: failedReason,
+                  // Default-on Entity Transcript when there's a prior failed
+                  // request for this TIN (regardless of tid_kind — even SSN
+                  // entities benefit from the entity-transcript filing
+                  // requirements lookup when the prior pull errored).
+                  entityTranscript: true,
+                } : {}),
               };
             }));
           }
@@ -168,7 +249,55 @@ export function CsvUploadFlow() {
     ));
   };
 
+  // Cash-Flow Pack toggles (mirror the entity-transcript pattern). Available
+  // for any entity (individual or business) — Schedule C cash flow applies to
+  // 1040 too, so we don't gate on tid_kind.
+  const toggleCashFlowPack = (rowIndex: number) => {
+    if (!previewEntities) return;
+    setPreviewEntities(previewEntities.map(e =>
+      e.rowIndex === rowIndex ? { ...e, cashFlowPack: !e.cashFlowPack } : e
+    ));
+  };
+  const toggleAllCashFlowPacks = (checked: boolean) => {
+    if (!previewEntities) return;
+    setPreviewEntities(previewEntities.map(e => ({ ...e, cashFlowPack: checked })));
+  };
+
+  // Monitoring opt-out toggles — mirrors the default-on pattern. Per-row off
+  // means "don't auto-enroll this entity at completion" (rare — typically
+  // sensitive borrowers or one-off pulls). Default-on for everyone.
+  const toggleEnrollMonitoring = (rowIndex: number) => {
+    if (!previewEntities) return;
+    setPreviewEntities(previewEntities.map(e =>
+      e.rowIndex === rowIndex ? { ...e, enrollMonitoring: !e.enrollMonitoring } : e
+    ));
+  };
+  const toggleAllEnrollMonitoring = (checked: boolean) => {
+    if (!previewEntities) return;
+    setPreviewEntities(previewEntities.map(e => ({ ...e, enrollMonitoring: checked })));
+  };
+
+  // Per-row form_type override. Most CSVs already specify the right value
+  // in a `form` / `form_type` column; this dropdown lets the processor
+  // fix it without re-uploading (and is the only way to flip something
+  // to 941 if the CSV came from a template that didn't include it).
+  const setFormType = (rowIndex: number, formType: string) => {
+    if (!previewEntities) return;
+    setPreviewEntities(previewEntities.map(e =>
+      e.rowIndex === rowIndex ? { ...e, formType } : e
+    ));
+  };
+
+  // True when ANY preview row uses a form_type that needs explanatory
+  // notes. The submit button is disabled until the notes field has
+  // something useful (>= 10 chars) when this is true.
+  const hasNonStandardForms = previewEntities?.some(e => NON_STANDARD_FORM_TYPES.has(e.formType)) || false;
+  const nonStandardRows = previewEntities?.filter(e => NON_STANDARD_FORM_TYPES.has(e.formType)) || [];
+  const notesTooShort = hasNonStandardForms && notes.trim().length < 10;
+
   const entityTranscriptCount = previewEntities?.filter(e => e.entityTranscript).length || 0;
+  const cashFlowPackCount = previewEntities?.filter(e => e.cashFlowPack).length || 0;
+  const monitoringSkipCount = previewEntities?.filter(e => !e.enrollMonitoring).length || 0;
   const einCount = previewEntities?.filter(e => e.tidKind === 'EIN').length || 0;
   const hasValidationErrors = previewEntities?.some(e => e.missingFields.length > 0) || false;
 
@@ -187,12 +316,29 @@ export function CsvUploadFlow() {
       if (notes) formData.append('notes', notes);
 
       if (previewEntities) {
-        const selectedIndices = previewEntities
-          .filter(e => e.entityTranscript)
-          .map(e => e.rowIndex);
-        if (selectedIndices.length > 0) {
-          formData.append('entity_transcript_indices', JSON.stringify(selectedIndices));
+        // Three add-on selection arrays — server stores them as flags on each
+        // entity. Cash-flow + monitoring fire after transcript completion;
+        // entity-transcript orders pull alongside the standard transcripts.
+        const transcriptIndices = previewEntities.filter(e => e.entityTranscript).map(e => e.rowIndex);
+        if (transcriptIndices.length > 0) {
+          formData.append('entity_transcript_indices', JSON.stringify(transcriptIndices));
         }
+        const cashFlowIndices = previewEntities.filter(e => e.cashFlowPack).map(e => e.rowIndex);
+        if (cashFlowIndices.length > 0) {
+          formData.append('cash_flow_pack_indices', JSON.stringify(cashFlowIndices));
+        }
+        // Inverse: rows where the processor un-checked monitoring (default ON).
+        // Server uses this to skip auto-enroll for those entities at completion.
+        const monitoringSkipIndices = previewEntities.filter(e => !e.enrollMonitoring).map(e => e.rowIndex);
+        if (monitoringSkipIndices.length > 0) {
+          formData.append('skip_monitoring_indices', JSON.stringify(monitoringSkipIndices));
+        }
+        // Per-row form_type overrides — only send rows where the user
+        // changed the value via the dropdown vs. what was in the CSV.
+        // The server uses these to override the CSV-derived form_type
+        // by rowIndex.
+        const formTypeOverrides = previewEntities.map(e => ({ rowIndex: e.rowIndex, formType: e.formType }));
+        formData.append('form_type_overrides', JSON.stringify(formTypeOverrides));
       }
 
       const res = await fetch('/api/upload/csv', { method: 'POST', body: formData });
@@ -240,6 +386,38 @@ export function CsvUploadFlow() {
             ))}
           </ul>
         </div>
+
+        {/* Form-type auto-correction warning — surfaces server-side fixes for the
+            "1040 on EIN" bug class. The upload still succeeded; we just want the
+            processor to see what we changed so they can fix their CSV mapping
+            (or their LOS export) for next time. */}
+        {result.form_type_corrections && result.form_type_corrections.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 text-left max-w-2xl mx-auto">
+            <p className="text-sm font-semibold text-amber-900 mb-2 flex items-center gap-1.5">
+              <svg className="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              Auto-corrected {result.form_type_corrections.length} form-type mismatch{result.form_type_corrections.length === 1 ? '' : 'es'}
+            </p>
+            <p className="text-xs text-amber-800 mb-2">
+              Your CSV had form codes that didn&rsquo;t match the entity&rsquo;s tid_kind. We changed them to the correct form so the 8821s won&rsquo;t be misrouted at the IRS. Update your CSV mapping to avoid this on future uploads.
+            </p>
+            <ul className="text-xs text-amber-900 space-y-1 max-h-40 overflow-y-auto pr-1">
+              {result.form_type_corrections.slice(0, 10).map((c, i) => (
+                <li key={i} className="font-mono">
+                  Row {c.row} <strong>{c.entity_name}</strong> ({c.tid_kind}):{' '}
+                  <span className="line-through text-amber-700">{c.original_form}</span> →{' '}
+                  <strong>{c.corrected_form}</strong>
+                </li>
+              ))}
+              {result.form_type_corrections.length > 10 && (
+                <li className="italic text-amber-700">
+                  +{result.form_type_corrections.length - 10} more — see audit log for full list
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
         <div className="flex gap-4 justify-center">
           <button onClick={() => router.push('/')} className="bg-mt-green text-white px-6 py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors">
             View Dashboard
@@ -362,25 +540,69 @@ export function CsvUploadFlow() {
         </label>
 
         <div className="mt-6">
-          <label className="block text-sm font-semibold text-mt-dark mb-2">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any additional context for this batch..." rows={3} disabled={isLoading}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+          <label className="block text-sm font-semibold text-mt-dark mb-2">
+            Notes{' '}
+            {hasNonStandardForms ? (
+              <span className="text-red-600 font-semibold">(required for {nonStandardRows.map(r => r.formType).filter((v, i, a) => a.indexOf(v) === i).join(', ')} requests)</span>
+            ) : (
+              <span className="text-gray-400 font-normal">(optional)</span>
+            )}
+          </label>
+          {hasNonStandardForms && (
+            <div className="mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
+              <strong>Heads-up:</strong> {nonStandardRows.length} row{nonStandardRows.length === 1 ? '' : 's'} {nonStandardRows.length === 1 ? 'uses' : 'use'} a non-standard form type
+              {nonStandardRows.some(r => r.formType === '941') && (
+                <> (941 / ERC). Please describe specific quarters needed, what you&apos;re trying to confirm (e.g. refund issued? claim pending? denied?), and any context that&apos;ll help the expert work the request correctly.</>
+              )}
+              {!nonStandardRows.some(r => r.formType === '941') && (
+                <>. Please describe the specific years / context needed for the expert.</>
+              )}
+            </div>
+          )}
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder={
+              hasNonStandardForms
+                ? 'e.g. "Confirm ERC refund status for Q2 2021 + Q3 2021. Check for TC 846 (refund issued) or TC 470 (claim pending). Years 2020-2024 in case of amended filings."'
+                : 'Any additional context for this batch...'
+            }
+            rows={hasNonStandardForms ? 4 : 3}
+            disabled={isLoading}
+            className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50 ${
+              notesTooShort ? 'border-red-300 bg-red-50' : 'border-gray-300'
+            }`}
+          />
+          {notesTooShort && (
+            <p className="text-xs text-red-600 mt-1">Please add at least a sentence describing what the expert should confirm.</p>
+          )}
         </div>
       </div>
 
       {previewEntities && previewEntities.length > 0 && (
         <div className="bg-white rounded-lg shadow p-8">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
             <div>
               <h3 className="text-lg font-bold text-mt-dark">Review Entities</h3>
               <p className="text-sm text-gray-500">{previewEntities.length} entities found in file</p>
             </div>
-            {einCount > 0 && (
-              <button type="button" onClick={() => toggleAllEntityTranscripts(entityTranscriptCount < einCount)}
-                className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
-                {entityTranscriptCount >= einCount ? 'Deselect All' : 'Select All EIN Entities'}
+            <div className="flex items-center gap-3 text-xs flex-wrap justify-end">
+              {einCount > 0 && (
+                <button type="button" onClick={() => toggleAllEntityTranscripts(entityTranscriptCount < einCount)}
+                  className="font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap">
+                  {entityTranscriptCount >= einCount ? 'Deselect all transcripts' : `+ All ${einCount} entity transcripts`}
+                </button>
+              )}
+              <button type="button" onClick={() => toggleAllCashFlowPacks(cashFlowPackCount < previewEntities.length)}
+                className="font-medium text-indigo-600 hover:text-indigo-800 transition-colors whitespace-nowrap">
+                {cashFlowPackCount >= previewEntities.length ? 'Deselect all cash-flow' : `+ All ${previewEntities.length} cash-flow packs`}
               </button>
-            )}
+              <button type="button" onClick={() => toggleAllEnrollMonitoring(monitoringSkipCount > 0)}
+                className="font-medium text-emerald-600 hover:text-emerald-800 transition-colors whitespace-nowrap"
+                title="Toggle monitoring auto-enroll for all entities">
+                {monitoringSkipCount === 0 ? 'Skip monitoring for all' : 'Re-enable monitoring'}
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -397,18 +619,32 @@ export function CsvUploadFlow() {
                     Entity Transcript
                     <span className="block text-blue-400 font-normal normal-case">${ENTITY_TRANSCRIPT_PRICE}/ea</span>
                   </th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-indigo-600 uppercase whitespace-nowrap">
+                    Cash-Flow Pack
+                    <span className="block text-indigo-400 font-normal normal-case">${CASH_FLOW_PACK_PRICE}/ea</span>
+                  </th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-emerald-600 uppercase whitespace-nowrap">
+                    Monitor
+                    <span className="block text-emerald-500 font-normal normal-case">${MONITORING_MONTHLY_PRICE}/mo</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {previewEntities.map((entity) => (
                   <tr key={entity.rowIndex} className={`border-b border-gray-100 hover:bg-gray-50 ${entity.missingFields.length > 0 ? 'bg-red-50' : entity.isRepeat ? 'bg-emerald-50/40' : ''}`}>
                     <td className="py-2.5 px-3 font-medium text-mt-dark">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span>{entity.legalName || <span className="text-red-500 italic">missing</span>}</span>
                         {entity.isRepeat && (
                           <span title={`Existing 8821 on file from prior request for "${entity.repeatOfName}". Signer details will be auto-filled.`}
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                             ↻ Repeat borrower
+                          </span>
+                        )}
+                        {entity.priorFailed && (
+                          <span title={`Prior pull for this TIN failed: ${entity.priorFailedReason}. Entity Transcript auto-selected to confirm filing requirements before re-pulling.`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                            ⚠ Prior pull failed
                           </span>
                         )}
                       </div>
@@ -441,7 +677,25 @@ export function CsvUploadFlow() {
                         <span className="text-red-500 italic">missing</span>
                       )}
                     </td>
-                    <td className="py-2.5 px-3 text-gray-600">{entity.formType}</td>
+                    <td className="py-2.5 px-3">
+                      <select
+                        value={entity.formType}
+                        onChange={(e) => setFormType(entity.rowIndex, e.target.value)}
+                        disabled={isLoading}
+                        className={`text-xs px-2 py-1 rounded border ${
+                          NON_STANDARD_FORM_TYPES.has(entity.formType)
+                            ? 'border-amber-300 bg-amber-50 text-amber-900 font-semibold'
+                            : 'border-gray-200 bg-white text-gray-700'
+                        }`}
+                        title={NON_STANDARD_FORM_TYPES.has(entity.formType)
+                          ? 'Non-standard form — please describe specific quarters / years / what you need confirmed in the Notes field below'
+                          : ''}
+                      >
+                        {FORM_TYPE_OPTIONS.map(ft => (
+                          <option key={ft} value={ft}>{ft === 'W2_INCOME' ? 'W&I' : ft}</option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="py-2.5 px-3 text-gray-600 text-xs">{entity.years || <span className="text-red-500 italic">missing</span>}</td>
                     <td className="py-2.5 px-3 text-center">
                       {entity.tidKind === 'EIN' ? (
@@ -450,6 +704,16 @@ export function CsvUploadFlow() {
                       ) : (
                         <span className="text-xs text-gray-400">N/A</span>
                       )}
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <input type="checkbox" checked={entity.cashFlowPack} onChange={() => toggleCashFlowPack(entity.rowIndex)}
+                        title="Generate the SBA Cash-Flow Pack after transcripts complete"
+                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <input type="checkbox" checked={entity.enrollMonitoring} onChange={() => toggleEnrollMonitoring(entity.rowIndex)}
+                        title="Auto-enroll in continuous monitoring after transcripts complete"
+                        className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
                     </td>
                   </tr>
                 ))}
@@ -489,22 +753,46 @@ export function CsvUploadFlow() {
             </div>
           )}
 
-          {einCount > 0 && (
-            <div className={`mt-4 rounded-lg p-3 text-sm ${entityTranscriptCount > 0 ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 border border-gray-200'}`}>
+          {/* Add-on summary — recap each selected SKU + total before submit. */}
+          {(entityTranscriptCount > 0 || cashFlowPackCount > 0 || monitoringSkipCount > 0) && (
+            <div className="mt-4 rounded-lg p-3 text-sm bg-gradient-to-br from-emerald-50 to-indigo-50 border border-mt-green/30">
+              <p className="font-semibold text-mt-dark mb-2">Add-ons selected</p>
+              <ul className="space-y-1 text-xs text-gray-700">
+                {entityTranscriptCount > 0 && (
+                  <li className="flex items-center justify-between">
+                    <span><strong>{entityTranscriptCount}</strong> × Entity Transcript</span>
+                    <span className="font-mono text-blue-700">${(entityTranscriptCount * ENTITY_TRANSCRIPT_PRICE).toFixed(2)} one-time</span>
+                  </li>
+                )}
+                {cashFlowPackCount > 0 && (
+                  <li className="flex items-center justify-between">
+                    <span><strong>{cashFlowPackCount}</strong> × Cash-Flow Pack <span className="text-gray-500">(generated after transcripts complete)</span></span>
+                    <span className="font-mono text-indigo-700">${(cashFlowPackCount * CASH_FLOW_PACK_PRICE).toFixed(2)} one-time</span>
+                  </li>
+                )}
+                <li className="flex items-center justify-between">
+                  <span>
+                    <strong>{previewEntities.length - monitoringSkipCount}</strong> × Monitoring auto-enroll
+                    {monitoringSkipCount > 0 && <span className="text-amber-700"> ({monitoringSkipCount} opted out)</span>}
+                  </span>
+                  <span className="font-mono text-emerald-700">${((previewEntities.length - monitoringSkipCount) * MONITORING_MONTHLY_PRICE).toFixed(2)}/mo</span>
+                </li>
+              </ul>
+              <p className="text-[11px] text-gray-500 mt-2 italic">
+                One-time charges hit your next monthly invoice. Monitoring billing prorates from the day the entity completes.
+              </p>
+            </div>
+          )}
+
+          {einCount > 0 && entityTranscriptCount === 0 && cashFlowPackCount === 0 && (
+            <div className="mt-4 rounded-lg p-3 text-sm bg-gray-50 border border-gray-200">
               <div className="flex items-start gap-2">
-                <span className="text-lg">{entityTranscriptCount > 0 ? '📋' : '💡'}</span>
+                <span className="text-lg">💡</span>
                 <div className="flex-1">
-                  {entityTranscriptCount > 0 ? (
-                    <p className="text-blue-800">
-                      <strong>{entityTranscriptCount} Entity Transcript{entityTranscriptCount > 1 ? 's' : ''}</strong> selected — ${(entityTranscriptCount * ENTITY_TRANSCRIPT_PRICE).toFixed(2)} add-on.
-                      Filing requirements will be confirmed before pulling income transcripts.
-                    </p>
-                  ) : (
-                    <p className="text-gray-600">
-                      <strong>Tip:</strong> Add an Entity Transcript ($19.99/ea) to confirm IRS filing requirements before pulling income transcripts.
-                      This prevents blank results from requesting the wrong form type.
-                    </p>
-                  )}
+                  <p className="text-gray-600">
+                    <strong>Tip:</strong> Add an Entity Transcript ($19.99/ea) to confirm filing requirements before pulling income transcripts.
+                    Or add a Cash-Flow Pack ($49.99/ea) to skip 30 min of underwriter Excel work after the loan is verified.
+                  </p>
                 </div>
               </div>
             </div>
@@ -512,13 +800,20 @@ export function CsvUploadFlow() {
         </div>
       )}
 
-      <button type="submit" disabled={isLoading || !file || hasValidationErrors}
+      <button type="submit" disabled={isLoading || !file || hasValidationErrors || notesTooShort}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
-        {isLoading ? 'Processing...' : hasValidationErrors ? 'Fix Missing Fields to Continue' : (
-          entityTranscriptCount > 0
-            ? `Upload & Create Requests (+${entityTranscriptCount} Entity Transcript${entityTranscriptCount > 1 ? 's' : ''}: $${(entityTranscriptCount * ENTITY_TRANSCRIPT_PRICE).toFixed(2)})`
-            : 'Upload & Create Requests'
-        )}
+        {isLoading
+          ? 'Processing...'
+          : hasValidationErrors
+          ? 'Fix Missing Fields to Continue'
+          : notesTooShort
+          ? 'Add Notes to Continue (941 / non-standard form selected)'
+          : (
+              entityTranscriptCount > 0
+                ? `Upload & Create Requests (+${entityTranscriptCount} Entity Transcript${entityTranscriptCount > 1 ? 's' : ''}: $${(entityTranscriptCount * ENTITY_TRANSCRIPT_PRICE).toFixed(2)})`
+                : 'Upload & Create Requests'
+            )
+        }
       </button>
     </form>
   );

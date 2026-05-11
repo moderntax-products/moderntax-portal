@@ -88,7 +88,15 @@ async function main() {
     enable_backchannel: false,                 // never "uh-huh" the IRS — unprofessional
     language: 'en-US',
     response_engine: { type: 'retell-llm' as const, llm_id: llmId },
-    max_call_duration_ms: 60 * 60 * 1000,      // 60 min — room for fax waits
+    max_call_duration_ms: 25 * 60 * 1000,      // 25 min — hard cap on stuck-on-hold blast radius.
+                                               // Dropped from 60 min on 2026-05-11 after a call sat
+                                               // silently on hold for 58+ min (IRS skipped the wait-
+                                               // estimate announcement, so our wait-time decision
+                                               // tree had no X to compare against and the AI just
+                                               // held forever). $0.09/min × 25min = $2.25 worst
+                                               // case per stuck call, vs. $5.40 at the old cap.
+                                               // If we hit this cap on a legitimate fax wait, raise
+                                               // it deliberately for that flow — don't bump default.
     // Pronunciation: CAF alphanumerics + "1040" etc. should be read naturally.
     pronunciation_dictionary: [
       { word: 'EIN',  alphabet: 'ipa' as const, phoneme: 'iː.aɪ.ɛn' },

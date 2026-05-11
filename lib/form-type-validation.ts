@@ -16,14 +16,21 @@
  * route can enforce them identically.
  */
 
-export const VALID_FORM_TYPES = ['1040', '1065', '1120', '1120S', '990', '1041', 'W2_INCOME'] as const;
+export const VALID_FORM_TYPES = ['1040', '1065', '1120', '1120S', '990', '1041', '941', 'W2_INCOME'] as const;
 export type FormType = (typeof VALID_FORM_TYPES)[number];
 
 export type TidKind = 'SSN' | 'EIN' | 'ITIN';
 
 const INDIVIDUAL_KINDS: TidKind[] = ['SSN', 'ITIN'];
 const INDIVIDUAL_FORMS = new Set(['1040', 'W2_INCOME']);
-const BUSINESS_FORMS = new Set(['1065', '1120', '1120S', '990', '1041']);
+// 941 is the employer quarterly payroll tax return — business-only.
+// Added as a first-class form_type to support ERC verification workflows
+// (TaxTaker POC, May 2026): partners need to confirm whether ERC refund
+// checks have been issued or denied. The transcript artifact requested
+// is a 941 Record of Account, which shows the TC 846 (refund issued) /
+// TC 290 (additional assessment) / TC 470 (claim pending) transaction
+// codes that identify ERC status by quarter.
+const BUSINESS_FORMS = new Set(['1065', '1120', '1120S', '990', '1041', '941']);
 
 /**
  * Strict compatibility check — returns null if valid, or a human-readable
@@ -42,7 +49,7 @@ export function validateFormTypeMatchesTidKind(
     return `Entity has ${k} (individual taxpayer) but form_type=${formType} is a business form. Individuals must use 1040 or W2_INCOME.`;
   }
   if (k === 'EIN' && INDIVIDUAL_FORMS.has(f)) {
-    return `Entity has EIN (business taxpayer) but form_type=${formType} is an individual form. Businesses must use 1065, 1120, 1120S, 990, or 1041.`;
+    return `Entity has EIN (business taxpayer) but form_type=${formType} is an individual form. Businesses must use 1065, 1120, 1120S, 990, 1041, or 941.`;
   }
   return null;
 }
@@ -93,6 +100,21 @@ export function normalizeFormType(raw: string | null | undefined): FormType | nu
     'WAGEINCOME': 'W2_INCOME',
     'W2INCOME': 'W2_INCOME',
     'W_2_INCOME': 'W2_INCOME',
+    // 941 (employer quarterly payroll) and its ERC-flavored aliases.
+    // Partners (TaxTaker, R&D credit shops) commonly describe these
+    // requests as "ERC check verification" rather than "941" — accept
+    // both phrasings so the CSV import doesn't reject legitimate intake.
+    'FORM941': '941',
+    'PAYROLL': '941',
+    'QUARTERLY': '941',
+    'QUARTERLYPAYROLL': '941',
+    'EMPLOYERSQUARTERLY': '941',
+    'ERC': '941',
+    'ERC941': '941',
+    'ERCCLAIM': '941',
+    'ERCREFUND': '941',
+    'ERTC': '941',
+    'EMPLOYEERETENTIONCREDIT': '941',
   };
 
   return aliases[cleaned] || null;

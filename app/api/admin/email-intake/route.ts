@@ -74,7 +74,7 @@ function validateFormType(form: string): string {
   const formPart = form.split(',')[0].trim();
   // Strip whitespace, hyphens, and normalize
   const normalized = formPart.replace(/[\s-]/g, '').toUpperCase();
-  const valid = ['1040', '1065', '1120', '1120S'];
+  const valid = ['1040', '1065', '1120', '1120S', '941'];
   if (valid.includes(normalized)) return normalized;
   // Try matching with "FORM" prefix stripped
   const stripped = normalized.replace('FORM', '');

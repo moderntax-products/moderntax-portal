@@ -25,7 +25,7 @@ interface EntityPayload {
   entity_name: string;
   tid: string;
   tid_kind?: 'EIN' | 'SSN';
-  form_type?: '1040' | '1065' | '1120' | '1120S';
+  form_type?: '1040' | '1065' | '1120' | '1120S' | '941';
   years: string[];
   address?: string;
   city?: string;
@@ -40,7 +40,7 @@ interface TranscriptIntakeBody {
   notes?: string;
 }
 
-const VALID_FORM_TYPES = ['1040', '1065', '1120', '1120S'];
+const VALID_FORM_TYPES = ['1040', '1065', '1120', '1120S', '941'];
 
 function formatTid(tid: string, kind: string): string {
   const digits = tid.replace(/\D/g, '');

@@ -46,7 +46,7 @@ export interface TaxpayerInfo {
 export interface Fill8821Options {
   taxpayer: TaxpayerInfo;
   designee: DesigneeInfo;
-  formType: '1040' | '1065' | '1120' | '1120S' | '990' | '1041';
+  formType: '1040' | '1065' | '1120' | '1120S' | '990' | '1041' | '941';
   /** Override Section 3 years (default: "2022-2026") */
   years?: string;
 }

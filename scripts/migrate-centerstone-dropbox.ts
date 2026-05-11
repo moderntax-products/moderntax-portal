@@ -344,7 +344,7 @@ async function findOrCreateEntity(
   }
 
   // Create new entity — normalize to valid DB values: 1040, 1065, 1120, 1120S
-  const validForms = ['1040', '1065', '1120', '1120S'];
+  const validForms = ['1040', '1065', '1120', '1120S', '941'];
   let normalizedForm = formType?.replace(/[\s-]/g, '').toUpperCase() || '1040';
   if (normalizedForm === 'BMF_ENTITY' || normalizedForm === 'W2_INCOME') normalizedForm = '1040';
   if (!validForms.includes(normalizedForm)) {
