@@ -102,17 +102,33 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // If no user and not on public pages, redirect to login
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/signup') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    !request.nextUrl.pathname.startsWith('/forgot-password') &&
-    !request.nextUrl.pathname.startsWith('/reset-password') &&
-    !request.nextUrl.pathname.startsWith('/api/') &&
-    !request.nextUrl.pathname.startsWith('/resolve/')
-  ) {
+  // If no user and not on public pages, redirect to login.
+  //
+  // Public surfaces (no auth required): auth flows, API routes (do their
+  // own auth), share-link resolvers, and the marketing/tour surfaces:
+  //   /sample-request, /sample-transcripts/* (the prospect demo + ERC
+  //     report sample we link from outbound emails)
+  //   /plans (pricing — linked from sample tour CTAs)
+  //   /docs and /docs/* (public API reference)
+  //   /status (live IRS PPS status board)
+  //   /sample (legacy alias)
+  const PUBLIC_PREFIXES = [
+    '/login',
+    '/signup',
+    '/auth',
+    '/forgot-password',
+    '/reset-password',
+    '/api/',
+    '/resolve/',
+    '/sample-request',
+    '/sample-transcripts',
+    '/sample',
+    '/plans',
+    '/docs',
+    '/status',
+  ];
+  const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
+  if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     const redirectResponse = NextResponse.redirect(url);
