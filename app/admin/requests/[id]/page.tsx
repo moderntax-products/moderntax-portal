@@ -347,7 +347,24 @@ export default async function AdminRequestManagePage({ params }: Props) {
                   {/* Uploaded Transcripts */}
                   {entity.transcript_urls && entity.transcript_urls.length > 0 && (
                     <div className="mt-4 pt-4 border-t border-gray-100">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Uploaded Transcripts ({entity.transcript_urls.length})</h4>
+                      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                        <h4 className="text-sm font-semibold text-gray-700">Uploaded Transcripts ({entity.transcript_urls.length})</h4>
+                        {/* Compliance Status Report — Tax Guard parity. Only surfaces
+                            once the auto-trigger has cached a report (set when entity
+                            flips to 'completed'). Lives on
+                            entity.gross_receipts.tax_liability_report. */}
+                        {entity.gross_receipts &&
+                          typeof entity.gross_receipts === 'object' &&
+                          (entity.gross_receipts as Record<string, any>).tax_liability_report && (
+                            <Link
+                              href={`/admin/compliance-status/${entity.id}`}
+                              className="inline-block px-2.5 py-1 text-[11px] font-semibold text-white bg-mt-green rounded hover:bg-mt-green/90"
+                              title="Tax Guard-parity report: filing compliance, per-period liabilities, repayment plan status"
+                            >
+                              Compliance Status Report →
+                            </Link>
+                          )}
+                      </div>
                       <div className="space-y-2">
                         {entity.transcript_urls.map((url: string, idx: number) => (
                           <TranscriptDownloadLink

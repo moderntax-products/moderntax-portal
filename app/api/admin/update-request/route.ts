@@ -4,6 +4,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendStatusChangeNotification, sendFirstTranscriptCelebrationEmail } from '@/lib/sendgrid';
 import { triggerWebhookForRequest, triggerErrorWebhookForRequest } from '@/lib/webhook';
+import { buildTaxLiabilityReport } from '@/lib/tax-liability-report';
 
 export async function POST(request: Request) {
   try {
@@ -213,6 +214,35 @@ export async function POST(request: Request) {
             }
           } catch (celebrateScanErr) {
             console.error('[update-request] first-transcript scan failed:', celebrateScanErr);
+          }
+        }
+
+        // Tax Guard-parity compliance report: when an entity flips to
+        // 'completed' we aggregate every transcript on file into a
+        // structured report (filing compliance + per-period liabilities
+        // + repayment plan) and cache it on
+        // request_entities.gross_receipts.tax_liability_report so the
+        // /admin/compliance-status/[entityId] view renders fast without
+        // re-parsing every visit. Bundled free with every transcript
+        // pull — Banc of California competitive differentiator.
+        if (status === 'completed' && oldEntityStatus !== 'completed') {
+          try {
+            const report = await buildTaxLiabilityReport(entityId, adminSupabase);
+            const { data: row } = await adminSupabase
+              .from('request_entities')
+              .select('gross_receipts')
+              .eq('id', entityId)
+              .single() as { data: { gross_receipts: Record<string, unknown> | null } | null; error: any };
+            const merged = { ...(row?.gross_receipts || {}), tax_liability_report: report };
+            await adminSupabase
+              .from('request_entities')
+              .update({ gross_receipts: merged })
+              .eq('id', entityId);
+          } catch (reportErr) {
+            // Non-fatal: the entity still completes, the report just
+            // won't be cached. /admin/compliance-status/[entityId]
+            // falls back to live computation.
+            console.error(`[update-request] tax_liability_report build failed for ${entityId}:`, reportErr);
           }
         }
 
