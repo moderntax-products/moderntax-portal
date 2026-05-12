@@ -118,6 +118,90 @@ export async function POST(request: NextRequest) {
         }
 
         // -------------------------------------------------------------------
+        // Self-Serve Pack ($239.94 / $379.99 / $159.96 / $1,000)
+        // -------------------------------------------------------------------
+        // Anonymous purchase from /sample-transcripts/erc-report. No
+        // existing client/user record. Email matt@moderntax.io with the
+        // purchase context so he can onboard them off-platform within
+        // 24 hours: create the clients + profiles rows, send a magic-
+        // link signup email, and chase the EINs they want pulled.
+        if (session.metadata?.flow === 'self_serve') {
+          const stripe = getStripe();
+          // Pull the customer record so we have an email + name to send to.
+          let customerEmail: string | null = session.customer_details?.email || null;
+          let customerName:  string | null = session.customer_details?.name  || null;
+          let companyName:   string | null = null; // built from the billing address below if present
+
+          if (!customerEmail && typeof session.customer === 'string') {
+            try {
+              const cust = await stripe.customers.retrieve(session.customer);
+              if (cust && !cust.deleted) {
+                customerEmail = cust.email || customerEmail;
+                customerName = cust.name || customerName;
+              }
+            } catch (custErr) {
+              console.warn('[stripe-webhook] self_serve: customer retrieve failed:', custErr);
+            }
+          }
+
+          const pack = session.metadata.pack || '(unknown)';
+          const packName = session.metadata.pack_name || pack;
+          const packQty  = session.metadata.pack_quantity || '1';
+          const amountUsd = (session.amount_total || 0) / 100;
+
+          const billingAddr = (session.customer_details as any)?.address;
+          if (billingAddr?.line1) {
+            companyName = `${billingAddr.line1}${billingAddr.line2 ? ', ' + billingAddr.line2 : ''}, ${billingAddr.city || ''} ${billingAddr.state || ''} ${billingAddr.postal_code || ''}`.replace(/\s+/g, ' ').trim();
+          }
+
+          // Best-effort SendGrid notify — failure shouldn't 500 the webhook
+          // since Stripe will retry on non-2xx (and we don't want the
+          // payment confirmation to be re-sent because of an email blip).
+          try {
+            const sgMail = (await import('@sendgrid/mail')).default;
+            const sgKey = process.env.SENDGRID_API_KEY;
+            if (sgKey) {
+              sgMail.setApiKey(sgKey);
+              await sgMail.send({
+                to: 'matt@moderntax.io',
+                from: { email: 'notifications@moderntax.io', name: 'ModernTax Self-Serve' },
+                replyTo: customerEmail || 'hello@moderntax.io',
+                subject: `🎉 Self-serve purchase — ${packName} ($${amountUsd.toFixed(2)})`,
+                html: `
+<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#1a1a1a;max-width:560px;margin:24px auto;padding:24px;line-height:1.55;">
+<h2 style="margin:0 0 8px;">New self-serve purchase</h2>
+<p style="color:#666;margin:0 0 24px;">A prospect bought from the public ERC sample page (no portal account yet). Onboard them within 24 hours.</p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+  <tr><td style="padding:6px 0;color:#666;width:140px;">Pack:</td><td style="padding:6px 0;"><strong>${packName}</strong> (${packQty}× pulls)</td></tr>
+  <tr><td style="padding:6px 0;color:#666;">Amount:</td><td style="padding:6px 0;"><strong>$${amountUsd.toFixed(2)}</strong></td></tr>
+  <tr><td style="padding:6px 0;color:#666;">Email:</td><td style="padding:6px 0;"><a href="mailto:${customerEmail || ''}" style="color:#00C48C;">${customerEmail || '(not collected)'}</a></td></tr>
+  <tr><td style="padding:6px 0;color:#666;">Name:</td><td style="padding:6px 0;">${customerName || '—'}</td></tr>
+  <tr><td style="padding:6px 0;color:#666;vertical-align:top;">Billing address:</td><td style="padding:6px 0;">${companyName || '—'}</td></tr>
+  <tr><td style="padding:6px 0;color:#666;">Stripe session:</td><td style="padding:6px 0;font-family:monospace;font-size:12px;">${session.id}</td></tr>
+  <tr><td style="padding:6px 0;color:#666;">Stripe customer:</td><td style="padding:6px 0;font-family:monospace;font-size:12px;">${typeof session.customer === 'string' ? session.customer : '(none)'}</td></tr>
+</table>
+<h3 style="margin:24px 0 8px;">Next steps</h3>
+<ol style="padding-left:20px;line-height:1.7;">
+  <li>Reply directly to this email — the customer is the reply-to address.</li>
+  <li>Create their <code>clients</code> + <code>profiles</code> row in Supabase admin (manager role, link to their Stripe customer id above).</li>
+  <li>Email them a magic-link sign-in + a CSV template for the entities they want pulled.</li>
+  <li>Once 8821s are signed, the existing intake flow takes over.</li>
+</ol>
+<p style="color:#888;font-size:12px;margin-top:24px;">View this purchase in <a href="https://dashboard.stripe.com/payments/${typeof session.payment_intent === 'string' ? session.payment_intent : ''}" style="color:#0066cc;">Stripe Dashboard</a>.</p>
+</body></html>`,
+              });
+              console.log(`[stripe-webhook] self_serve: alert email sent to matt@moderntax.io for ${customerEmail} (${packName}, $${amountUsd.toFixed(2)})`);
+            } else {
+              console.warn('[stripe-webhook] self_serve: SENDGRID_API_KEY missing — skipped alert email');
+            }
+          } catch (emailErr) {
+            console.error('[stripe-webhook] self_serve: alert email failed:', emailErr);
+          }
+
+          break;
+        }
+
+        // -------------------------------------------------------------------
         // Check Reissue Service ($1,000) — premium recovery service
         // -------------------------------------------------------------------
         // Started by an admin clicking "Request Check Reissue" on the ERC

@@ -16,6 +16,7 @@
 
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { SelfServePackButton } from '@/components/SelfServePackButton';
 
 const SAMPLE_BORROWER = {
   name: 'ATLANTIC SHORE BAKERY LLC',
@@ -787,14 +788,13 @@ function ERCReportSample() {
                 <p className="text-sm text-amber-900 mt-1">{q.actionRequired}</p>
                 {q.status === 'refund_returned_undelivered' && (
                   <div className="mt-3 pt-3 border-t border-amber-300 flex items-center gap-3 flex-wrap">
-                    <Link
-                      href="/login"
-                      className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded text-xs font-semibold hover:bg-amber-700"
-                    >
-                      Request Check Reissue · $1,000
-                    </Link>
+                    <SelfServePackButton
+                      pack="check-reissue"
+                      label="Request Check Reissue · $1,000"
+                      className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded text-xs font-semibold hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
                     <span className="text-[11px] text-amber-800">
-                      Sign in to pay → we file Form 8822-B + call the IRS reissuance line on the client&apos;s behalf. Flat $1,000 per check.
+                      Pay now to start the recovery — we file Form 8822-B + call the IRS reissuance line on the client&apos;s behalf. Flat $1,000 per check. No portal account required up front.
                     </span>
                   </div>
                 )}
@@ -803,23 +803,52 @@ function ERCReportSample() {
           </ul>
         </div>
 
-        {/* CTA footer */}
+        {/* CTA footer — direct purchase, no portal account required */}
         <div className="bg-gradient-to-r from-mt-dark to-mt-navy rounded-xl p-6 text-white">
-          <h3 className="text-lg font-bold mb-2">Run this on your portfolio</h3>
-          <p className="text-sm text-gray-200 mb-4 max-w-2xl">
-            For ERC-recovery firms, R&amp;D credit shops, and tax-services partners: submit a list of EINs
-            and we deliver this report for every entity within 24 hours. $79.98 base / $159.96 for full
-            6-quarter coverage. $1,000 per undelivered check we recover.
+          <h3 className="text-lg font-bold mb-2">Buy ERC pulls for your portfolio — no account needed</h3>
+          <p className="text-sm text-gray-200 mb-5 max-w-2xl">
+            For ERC-recovery firms, R&amp;D credit shops, and tax-services partners. Pay via Stripe in
+            under a minute, then we&apos;ll email you to confirm onboarding details and the EINs you want
+            pulled. First report typically delivered within 24 hours of receiving 8821s.
           </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <div className="bg-white/10 rounded-lg p-4">
+              <p className="text-[11px] uppercase tracking-wide text-gray-300">Starter</p>
+              <p className="text-xl font-bold mt-1">$239.94</p>
+              <p className="text-[11px] text-gray-300 mb-3">3 ERC entity pulls · up to 3 quarters each</p>
+              <SelfServePackButton
+                pack="erc-3-pack"
+                label="Buy 3-pack →"
+                className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              />
+            </div>
+            <div className="bg-white/10 rounded-lg p-4 ring-1 ring-mt-green/40">
+              <p className="text-[11px] uppercase tracking-wide text-mt-green font-semibold">Best value</p>
+              <p className="text-xl font-bold mt-1">$379.99</p>
+              <p className="text-[11px] text-gray-300 mb-3">5 ERC entity pulls · ~5% volume discount</p>
+              <SelfServePackButton
+                pack="erc-5-pack"
+                label="Buy 5-pack →"
+                className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              />
+            </div>
+            <div className="bg-white/10 rounded-lg p-4">
+              <p className="text-[11px] uppercase tracking-wide text-gray-300">Single full sweep</p>
+              <p className="text-xl font-bold mt-1">$159.96</p>
+              <p className="text-[11px] text-gray-300 mb-3">1 entity · ALL 6–7 ERC quarters</p>
+              <SelfServePackButton
+                pack="erc-full-sweep"
+                label="Buy full sweep →"
+                className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              />
+            </div>
+          </div>
           <div className="flex flex-wrap gap-3 text-sm">
-            <Link href="/login" className="px-4 py-2 bg-mt-green text-white rounded-lg font-semibold hover:bg-mt-green/90">
-              Sign in &amp; pay for additional pulls →
-            </Link>
             <Link href="/plans" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
               See full pricing
             </Link>
             <a href="mailto:matt@moderntax.io?subject=ERC%20pulls%20for%20our%20portfolio" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
-              Talk to Matt
+              Talk to Matt first
             </a>
           </div>
         </div>

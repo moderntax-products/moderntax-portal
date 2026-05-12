@@ -109,6 +109,44 @@ export const PRICE_ERC_FULL_SWEEP_TOTAL = PRICE_ERC_BASE + PRICE_ERC_FULL_SWEEP_
 export const PRICE_CHECK_REISSUE = 1000;
 
 // ---------------------------------------------------------------------------
+// Self-serve packs — added May 2026
+//
+// For prospects landing on /sample-transcripts/erc-report who want to try
+// the service without first creating a portal account. They pay via Stripe
+// Checkout (anonymous purchase, customer_creation: 'always'); after payment
+// we onboard them off-platform: webhook emails matt@moderntax.io with the
+// new customer's contact info, Matt creates their portal account + processes
+// their requested EINs within 24 hours.
+//
+// Pricing reflects "try-before-you-onboard" psychology: the 3-pack matches
+// the standard 3× per-entity ERC base, and the 5-pack offers a small
+// volume discount to reward larger commits.
+// ---------------------------------------------------------------------------
+
+/** 3 ERC entity pulls — exactly 3 × $79.98 (no discount). */
+export const PRICE_ERC_STARTER_PACK = 239.94;
+export const PRICE_ERC_STARTER_PACK_QUANTITY = 3;
+
+/** 5 ERC entity pulls — small volume discount (~5%). */
+export const PRICE_ERC_FIVE_PACK = 379.99;
+export const PRICE_ERC_FIVE_PACK_QUANTITY = 5;
+
+/**
+ * Catalog of self-serve packs. Drives both /api/billing/self-serve-checkout
+ * (price + product-name source-of-truth) and the /welcome page receipt.
+ * Adding a new SKU = add a row here + adjust the union type below; no
+ * other touch points needed.
+ */
+export const SELF_SERVE_CATALOG = {
+  'erc-3-pack':       { price: PRICE_ERC_STARTER_PACK,        quantity: 3, name: 'ModernTax — ERC Starter Pack (3 entities)',   description: '3 ERC entity pulls. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the per-quarter ERC status report.' },
+  'erc-5-pack':       { price: PRICE_ERC_FIVE_PACK,           quantity: 5, name: 'ModernTax — ERC 5-Pack (volume discount)',     description: '5 ERC entity pulls — saves vs. ordering individually. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the ERC status report.' },
+  'erc-full-sweep':   { price: PRICE_ERC_FULL_SWEEP_TOTAL,    quantity: 1, name: 'ModernTax — ERC Full Sweep (single entity)',   description: 'One ERC entity pull covering ALL 6–7 ERC-eligible quarters (2020 Q2–Q4 + 2021 Q1–Q3, plus Q4 2021 for Recovery Startup Businesses).' },
+  'check-reissue':    { price: PRICE_CHECK_REISSUE,           quantity: 1, name: 'ModernTax — Check Reissue Recovery Service',   description: 'Recover one undelivered IRS refund check. We file Form 8822-B + call the IRS Business & Specialty Tax line on the client\'s behalf. Flat fee per check.' },
+} as const;
+
+export type SelfServePackId = keyof typeof SELF_SERVE_CATALOG;
+
+// ---------------------------------------------------------------------------
 // Helper for currency formatting — used by UI surfaces that display prices.
 // ---------------------------------------------------------------------------
 

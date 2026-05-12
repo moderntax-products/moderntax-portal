@@ -126,6 +126,7 @@ export async function middleware(request: NextRequest) {
     '/plans',
     '/docs',
     '/status',
+    '/welcome',         // post-payment landing for self-serve buyers (no portal account yet)
   ];
   const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
   if (!user && !isPublic) {
