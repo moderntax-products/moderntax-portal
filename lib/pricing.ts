@@ -108,6 +108,16 @@ export const PRICE_ERC_FULL_SWEEP_TOTAL = PRICE_ERC_BASE + PRICE_ERC_FULL_SWEEP_
 /** Flat fee to recover one undelivered IRS refund check. */
 export const PRICE_CHECK_REISSUE = 1000;
 
+/**
+ * Stripe Checkout variant of the same service — $0.01 lower than the
+ * Mercury ACH price as a "pay now via card" psychological nudge. The
+ * cent-shave covers Stripe's 2.9% + $0.30 = ~$29.30 processing fee
+ * roughly even on the $999.99 charge. Customers who want net-15
+ * invoicing pick the $1,000 Mercury route; customers who want to
+ * just-pay-and-start pick this one.
+ */
+export const PRICE_CHECK_REISSUE_STRIPE = 999.99;
+
 // ---------------------------------------------------------------------------
 // Self-serve packs — added May 2026
 //
@@ -122,12 +132,14 @@ export const PRICE_CHECK_REISSUE = 1000;
 // the standard 3× per-entity ERC base, and the 5-pack offers a small
 // volume discount to reward larger commits.
 //
-// NOTE on check-reissue: the $1,000 IRS check-reissue service is NOT in
-// this catalog. It bills via Mercury ACH (manual invoice from Matt) — the
-// margin is too thin for Stripe's 2.9% + $0.30 to make sense, and the
-// service runs over multiple weeks so customers prefer ACH invoicing
-// over an immediate card charge. The request flow lives at
-// /api/billing/check-reissue-request (no Stripe; just emails Matt).
+// NOTE on check-reissue: TWO billing paths now, customer's choice:
+//   • Mercury ACH ($1,000) — manual invoice from Matt, net-15 friendly.
+//     Flow lives at /api/billing/check-reissue-request (no Stripe;
+//     just emails Matt to send a Mercury invoice).
+//   • Stripe Checkout ($999.99) — pay-now-with-card variant. Lives in
+//     this catalog as the 'check-reissue-stripe' SKU; the cent-shave
+//     against the Mercury price approximately covers Stripe's
+//     processing fee so net revenue lands in the same place.
 // ---------------------------------------------------------------------------
 
 /** 3 ERC entity pulls — exactly 3 × $79.98 (no discount). */
@@ -147,9 +159,10 @@ export const PRICE_ERC_FIVE_PACK_QUANTITY = 5;
  * Check-reissue is intentionally NOT here — see the Mercury ACH note above.
  */
 export const SELF_SERVE_CATALOG = {
-  'erc-3-pack':       { price: PRICE_ERC_STARTER_PACK,        quantity: 3, name: 'ModernTax — ERC Starter Pack (3 entities)',   description: '3 ERC entity pulls. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the per-quarter ERC status report.' },
-  'erc-5-pack':       { price: PRICE_ERC_FIVE_PACK,           quantity: 5, name: 'ModernTax — ERC 5-Pack (volume discount)',     description: '5 ERC entity pulls — saves vs. ordering individually. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the ERC status report.' },
-  'erc-full-sweep':   { price: PRICE_ERC_FULL_SWEEP_TOTAL,    quantity: 1, name: 'ModernTax — ERC Full Sweep (single entity)',   description: 'One ERC entity pull covering ALL 6–7 ERC-eligible quarters (2020 Q2–Q4 + 2021 Q1–Q3, plus Q4 2021 for Recovery Startup Businesses).' },
+  'erc-3-pack':            { price: PRICE_ERC_STARTER_PACK,        quantity: 3, name: 'ModernTax — ERC Starter Pack (3 entities)',   description: '3 ERC entity pulls. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the per-quarter ERC status report.' },
+  'erc-5-pack':            { price: PRICE_ERC_FIVE_PACK,           quantity: 5, name: 'ModernTax — ERC 5-Pack (volume discount)',     description: '5 ERC entity pulls — saves vs. ordering individually. Each pulls 941 Account Transcripts for up to 3 ERC-eligible quarters + auto-generates the ERC status report.' },
+  'erc-full-sweep':        { price: PRICE_ERC_FULL_SWEEP_TOTAL,    quantity: 1, name: 'ModernTax — ERC Full Sweep (single entity)',   description: 'One ERC entity pull covering ALL 6–7 ERC-eligible quarters (2020 Q2–Q4 + 2021 Q1–Q3, plus Q4 2021 for Recovery Startup Businesses).' },
+  'check-reissue-stripe':  { price: PRICE_CHECK_REISSUE_STRIPE,    quantity: 1, name: 'ModernTax — IRS Check Reissue Recovery Service', description: 'Recover one undelivered IRS refund check. We file Form 8822-B + call the IRS Business & Specialty Tax line on the client\'s behalf. Flat per-check fee. Service typically completes in 4–8 weeks plus mail delivery time.' },
 } as const;
 
 export type SelfServePackId = keyof typeof SELF_SERVE_CATALOG;

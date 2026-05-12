@@ -675,9 +675,10 @@ function ERCReportSample() {
             This is the full ERC analysis we deliver after pulling a customer&apos;s 941 Account Transcripts.
             Every IRS transaction code (TC 150, 766, 846, 740, 290, 470, 971, 976, 977) is parsed and
             mapped to per-quarter status: paid, returned, pending, denied, or no claim filed. The
-            &ldquo;Request Check Reissue&rdquo; CTA you see below collects your details and we send you a
-            <strong> Mercury ACH invoice</strong> for $1,000 — once paid, we file Form 8822-B and call the
-            IRS Business &amp; Specialty Tax line to recover the check on the client&apos;s behalf.
+            &ldquo;Request Check Reissue&rdquo; CTA below offers two ways to pay: <strong>Stripe Checkout
+            for $999.99</strong> (pay-now-with-card, instant) or a <strong>Mercury ACH invoice for $1,000</strong>
+            (net-15 friendly). Either way, we then file Form 8822-B and call the IRS Business &amp;
+            Specialty Tax line to recover the check on the client&apos;s behalf.
           </p>
           <p className="text-sm text-blue-900 mt-2">
             <Link href="/login" className="font-semibold underline">Sign in</Link>{' '}
@@ -791,14 +792,13 @@ function ERCReportSample() {
                 {q.status === 'refund_returned_undelivered' && (
                   <div className="mt-3 pt-3 border-t border-amber-300 flex flex-col items-start gap-2">
                     <CheckReissueRequestForm
-                      label="Request Check Reissue · $1,000 (Mercury ACH)"
                       prefill={{
                         refundQuarter: `${q.year} Q${q.quarter}`,
                         refundAmount: q.refundIssuedAmount ?? undefined,
                       }}
                     />
                     <span className="text-[11px] text-amber-800">
-                      We&apos;ll send a Mercury ACH invoice for $1,000 — no card up front, no portal account needed. Once paid we file Form 8822-B + call the IRS Business &amp; Specialty Tax line on the client&apos;s behalf.
+                      Pick your billing path — Stripe Checkout ($999.99, instant card charge) or Mercury ACH invoice ($1,000, net-15). Either way we file Form 8822-B + call the IRS Business &amp; Specialty Tax line on the client&apos;s behalf. No portal account required.
                     </span>
                   </div>
                 )}
