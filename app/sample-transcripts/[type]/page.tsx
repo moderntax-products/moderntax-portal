@@ -349,6 +349,145 @@ function ComplianceReport() {
           </div>
         </section>
 
+        {/* Filing Compliance — required for lender underwriting (Banc of California feedback,
+            Tax Guard parity: surface every filing the IRS expects from this entity vs. what's
+            actually on file). Pulled from Entity Transcript filing requirements + Account
+            Transcript filing history. */}
+        <section className="mb-8">
+          <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200 flex items-center gap-2">
+            <svg className="w-5 h-5 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Filing Compliance
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+              <p className="text-xs uppercase tracking-wide font-bold text-emerald-700 mb-2">Filed &amp; on file ✓</p>
+              <ul className="space-y-1.5 text-emerald-900">
+                <li className="flex justify-between"><span>1120-S — 2021</span><span className="text-xs text-emerald-700">filed 3/14/2022</span></li>
+                <li className="flex justify-between"><span>1120-S — 2022</span><span className="text-xs text-emerald-700">filed 3/12/2023</span></li>
+                <li className="flex justify-between"><span>1120-S — 2023</span><span className="text-xs text-emerald-700">filed 3/15/2024</span></li>
+                <li className="flex justify-between"><span>941 — 2023 Q1-Q4</span><span className="text-xs text-emerald-700">all filed</span></li>
+                <li className="flex justify-between"><span>940 — 2023</span><span className="text-xs text-emerald-700">filed 1/30/2024</span></li>
+              </ul>
+            </div>
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
+              <p className="text-xs uppercase tracking-wide font-bold text-amber-800 mb-2">Unfiled / late ⚠</p>
+              <ul className="space-y-2 text-amber-900">
+                <li>
+                  <div className="flex justify-between font-semibold"><span>941 — 2024 Q1</span><span className="text-xs">overdue</span></div>
+                  <p className="text-xs text-amber-800 mt-0.5">Required by 4/30/2024. No TC 150 on this period — return not filed. Filing requirement comes from Entity Transcript (941 quarterly).</p>
+                </li>
+                <li>
+                  <div className="flex justify-between font-semibold"><span>1099-MISC × 25 — 2022</span><span className="text-xs">filed late</span></div>
+                  <p className="text-xs text-amber-800 mt-0.5">Filed 6 months after the 1/31/2023 deadline. Triggered the $1,250 CIVPEN below.</p>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-3 italic">
+            Source: Entity Transcript (filing requirements: 1120-S annual, 941 quarterly, 940 annual, 1099 information returns) cross-referenced with Account Transcript filing history (TC 150 entries).
+          </p>
+        </section>
+
+        {/* Tax Liabilities by period — itemized balance breakdown. Tax Guard parity. */}
+        <section className="mb-8">
+          <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200 flex items-center gap-2">
+            <svg className="w-5 h-5 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Tax Liabilities by Period
+          </h2>
+          <div className="overflow-x-auto border border-gray-200 rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                <tr>
+                  <th className="px-4 py-2 text-left">Form / Period</th>
+                  <th className="px-4 py-2 text-right">Assessed</th>
+                  <th className="px-4 py-2 text-right">Paid</th>
+                  <th className="px-4 py-2 text-right">Balance</th>
+                  <th className="px-4 py-2 text-right">Accrued Int/Pen</th>
+                  <th className="px-4 py-2 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                <tr>
+                  <td className="px-4 py-2.5 font-semibold">1120-S — 2023</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">$5,130.42</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">$843.21</td>
+                  <td className="px-4 py-2.5 text-right font-mono font-bold text-red-700">$4,287.21</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-amber-700">$143.21</td>
+                  <td className="px-4 py-2.5"><span className="inline-block px-2 py-0.5 rounded text-xs font-semibold border bg-red-50 border-red-300 text-red-800">Open · Collection</span></td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2.5 font-semibold">CIVPEN (MFT 13) — 2022</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">$1,250.00</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">$0.00</td>
+                  <td className="px-4 py-2.5 text-right font-mono font-bold text-red-700">$1,250.00</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-amber-700">$67.50</td>
+                  <td className="px-4 py-2.5"><span className="inline-block px-2 py-0.5 rounded text-xs font-semibold border bg-red-50 border-red-300 text-red-800">Open · CP215 issued</span></td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-2.5 font-semibold">1120-S — 2021 &amp; 2022</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">—</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs">—</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-emerald-700">$0.00</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-xs text-gray-400">—</td>
+                  <td className="px-4 py-2.5"><span className="inline-block px-2 py-0.5 rounded text-xs font-semibold border bg-emerald-50 border-emerald-300 text-emerald-800">Closed · Zero balance</span></td>
+                </tr>
+                <tr className="bg-gray-50 font-semibold">
+                  <td className="px-4 py-3">Total exposure</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs">$6,380.42</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs">$843.21</td>
+                  <td className="px-4 py-3 text-right font-mono font-bold text-red-700 text-base">$5,537.21</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs text-amber-700">$210.71</td>
+                  <td className="px-4 py-3 text-xs text-gray-600">includes accruing interest</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-gray-500 mt-3 italic">
+            Sources: Record of Account (1120-S 2023, account balance + TC 196 interest + TC 276 failure-to-pay penalty); CIVPEN Account Transcript (MFT 13, TC 240 + TC 196). Per-period totals reconcile to the sum on each underlying transcript.
+          </p>
+        </section>
+
+        {/* Repayment Plan Status — Tax Guard parity. Surfaces installment agreement,
+            offer in compromise, currently-not-collectible status, or none. */}
+        <section className="mb-8">
+          <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200 flex items-center gap-2">
+            <svg className="w-5 h-5 text-mt-green" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+            </svg>
+            Repayment Plan Status
+          </h2>
+          <div className="bg-amber-50 border-l-4 border-amber-500 rounded-r p-5">
+            <p className="text-base font-bold text-amber-900 mb-1">⚠ No active repayment plan on file</p>
+            <p className="text-sm text-amber-900 mt-2">
+              The IRS account shows <strong>no installment agreement (TC 480)</strong>, <strong>no offer in compromise (TC 481)</strong>, and <strong>no currently-not-collectible status (TC 530)</strong>. The borrower is in standard collection status with the open balance and is exposed to lien/levy action if unresolved.
+            </p>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <div className="bg-white border border-amber-200 rounded p-3">
+                <p className="font-bold text-amber-900">Installment Agreement</p>
+                <p className="text-gray-600 mt-1">Not on file. Eligible: balance &lt; $50K → Online Payment Agreement, ~24h approval.</p>
+              </div>
+              <div className="bg-white border border-amber-200 rounded p-3">
+                <p className="font-bold text-amber-900">Offer in Compromise</p>
+                <p className="text-gray-600 mt-1">Not on file. Generally inappropriate for balance this size; OIC is for cases where IA isn&apos;t viable.</p>
+              </div>
+              <div className="bg-white border border-amber-200 rounded p-3">
+                <p className="font-bold text-amber-900">Currently Not Collectible</p>
+                <p className="text-gray-600 mt-1">Not on file. Reserved for hardship cases — not applicable to an operating SBA-eligible business.</p>
+              </div>
+            </div>
+            <p className="text-sm text-amber-900 mt-4">
+              <strong>Recommended path:</strong> Online Payment Agreement (OPA) on the IRS portal. For balances under $50K the IRS typically approves within 24 hours. Once active, this satisfies the SBA &quot;active resolution&quot; requirement and underwriting can proceed.
+            </p>
+          </div>
+          <p className="text-xs text-gray-500 mt-3 italic">
+            Sources: Full Account Transcript transaction-code scan (TC 480, 481, 482, 520, 530, 971 with installment action codes). Absence of these codes confirms no plan is active.
+          </p>
+        </section>
+
         {/* Findings */}
         <section className="mb-8">
           <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">Findings</h2>
