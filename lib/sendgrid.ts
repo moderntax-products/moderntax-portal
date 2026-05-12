@@ -2419,6 +2419,127 @@ export async function sendInvoiceBreakdownEmail(params: {
   }
 }
 
+/**
+ * Notify Matt that someone (anonymous prospect OR a logged-in admin) has
+ * requested the $1,000 IRS check-reissue service. Mercury ACH is the
+ * billing path — Matt manually creates the invoice in the Mercury
+ * dashboard and Mercury sends the customer the pay-by-ACH email.
+ *
+ * Two callsites:
+ *   1. /api/billing/check-reissue-request (anonymous, from /sample-transcripts/erc-report)
+ *      — `source: 'public_sample'`, no entity_id, no portal account yet.
+ *   2. /api/admin/check-reissue (authenticated admin, from /admin/erc-report/[entityId])
+ *      — `source: 'admin_portal'`, has entity context.
+ *
+ * Always sends to matt@moderntax.io regardless of which environment we're
+ * running in — this is an internal ops notification, not a customer email.
+ */
+export async function sendCheckReissueRequestNotification(opts: {
+  source: 'public_sample' | 'admin_portal';
+  /** Customer's reply-able email (where to send the Mercury ACH invoice). */
+  customerEmail: string;
+  /** Customer's business name (recipient name on the Mercury invoice). */
+  businessName: string;
+  /** Refund context — quarter / amount / notes. All optional. */
+  refundContext?: {
+    quarter?: string;       // e.g. "2020 Q4"
+    refundAmount?: number;  // dollars
+    refundDate?: string | null;
+    returnedDate?: string | null;
+    ein?: string | null;
+    notes?: string | null;
+  };
+  /** Set when the request was created from inside the portal — link back. */
+  internalContext?: {
+    checkReissueId: string;
+    entityId: string;
+    entityName?: string;
+    clientName?: string;
+    requestedByEmail?: string;
+  };
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('[sendCheckReissueRequestNotification] SENDGRID_API_KEY not set — skipping');
+    return;
+  }
+
+  const fmtMoney = (n?: number) =>
+    typeof n === 'number'
+      ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '—';
+
+  const sourceLabel = opts.source === 'public_sample'
+    ? 'Public ERC sample (anonymous prospect)'
+    : 'Admin ERC report (logged-in user)';
+
+  const ctx = opts.refundContext || {};
+  const internal = opts.internalContext;
+
+  const refundRows = [
+    ctx.quarter ? `<tr><td style="padding:6px 0;color:#6b7280;">Quarter</td><td style="padding:6px 0;font-weight:600;">${escapeHtml(ctx.quarter)}</td></tr>` : '',
+    ctx.refundAmount ? `<tr><td style="padding:6px 0;color:#6b7280;">Original refund</td><td style="padding:6px 0;font-weight:600;">${fmtMoney(ctx.refundAmount)}</td></tr>` : '',
+    ctx.refundDate ? `<tr><td style="padding:6px 0;color:#6b7280;">Issued</td><td style="padding:6px 0;">${escapeHtml(ctx.refundDate)}</td></tr>` : '',
+    ctx.returnedDate ? `<tr><td style="padding:6px 0;color:#6b7280;">Returned undelivered</td><td style="padding:6px 0;">${escapeHtml(ctx.returnedDate)}</td></tr>` : '',
+    ctx.ein ? `<tr><td style="padding:6px 0;color:#6b7280;">EIN</td><td style="padding:6px 0;font-family:monospace;">${escapeHtml(ctx.ein)}</td></tr>` : '',
+    ctx.notes ? `<tr><td style="padding:6px 0;color:#6b7280;vertical-align:top;">Notes</td><td style="padding:6px 0;white-space:pre-wrap;">${escapeHtml(ctx.notes)}</td></tr>` : '',
+  ].filter(Boolean).join('');
+
+  const internalBlock = internal ? `
+<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:12px 16px;margin:16px 0;font-size:13px;">
+  <p style="margin:0 0 6px;color:#1e3a5f;font-weight:600;">Internal context</p>
+  <p style="margin:0;">
+    Entity: <strong>${escapeHtml(internal.entityName || internal.entityId)}</strong><br>
+    ${internal.clientName ? `Client: ${escapeHtml(internal.clientName)}<br>` : ''}
+    ${internal.requestedByEmail ? `Requested by: ${escapeHtml(internal.requestedByEmail)}<br>` : ''}
+    Reissue request id: <code>${escapeHtml(internal.checkReissueId)}</code><br>
+    <a href="${appUrl}/admin/erc-report/${escapeAttr(internal.entityId)}" style="color:#2563eb;">Open ERC report →</a>
+  </p>
+</div>` : '';
+
+  const subject = `[Check Reissue · Mercury ACH] $1,000 — ${opts.businessName}`;
+  const content = `
+<p><strong>${sourceLabel}</strong> just requested the IRS Check Reissue service.</p>
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:18px 0;font-size:13px;">
+  <tbody>
+    <tr><td style="padding:6px 0;color:#6b7280;width:140px;">Business</td><td style="padding:6px 0;font-weight:600;">${escapeHtml(opts.businessName)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Email</td><td style="padding:6px 0;"><a href="mailto:${escapeAttr(opts.customerEmail)}">${escapeHtml(opts.customerEmail)}</a></td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Service fee</td><td style="padding:6px 0;font-weight:600;">$1,000.00</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Billing</td><td style="padding:6px 0;font-weight:600;color:#0369a1;">Mercury ACH (manual invoice)</td></tr>
+    ${refundRows}
+  </tbody>
+</table>
+
+${internalBlock}
+
+<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 18px;margin:20px 0;">
+  <p style="margin:0 0 6px;font-weight:700;color:#92400e;">Next step — create Mercury ACH invoice</p>
+  <ol style="margin:0;padding-left:20px;font-size:13px;color:#78350f;">
+    <li>Open Mercury → <strong>Send invoice</strong></li>
+    <li>Recipient: <code>${escapeHtml(opts.customerEmail)}</code> (${escapeHtml(opts.businessName)})</li>
+    <li>Amount: <strong>$1,000.00</strong> · Memo: "IRS check reissue recovery service${ctx.quarter ? ` — ${escapeHtml(ctx.quarter)}` : ''}"</li>
+    <li>Once paid: file Form 8822-B + call IRS Business &amp; Specialty Tax line</li>
+  </ol>
+</div>
+`.trim();
+
+  const html = createEmailTemplate('Check Reissue Requested', content);
+
+  try {
+    await sgMail.send({
+      to: 'matt@moderntax.io',
+      from: { email: fromEmail, name: 'ModernTax Notifications' },
+      subject,
+      html,
+      replyTo: opts.customerEmail,  // Reply lands in the customer's inbox
+    });
+  } catch (error) {
+    console.error('[sendCheckReissueRequestNotification] SendGrid error:', error);
+    // Don't throw — caller should still treat the request as accepted even
+    // if email delivery fails. The DB row + audit log preserves the request.
+  }
+}
+
 /** "2026-04-01" + "2026-04-30" → "April 2026". Falls back to range form. */
 function formatPeriodMonth(start: string, end: string): string {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -2435,4 +2556,74 @@ function escapeHtml(s: string | null | undefined): string {
 }
 function escapeAttr(s: string | null | undefined): string {
   return escapeHtml(s);
+}
+
+// ---------------------------------------------------------------------------
+// Calendar invite delivery
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a calendar invite (.ics) as a proper meeting email so Gmail/Outlook
+ * detect it inline (with "Yes / Maybe / No" buttons) instead of treating it
+ * as a generic attachment.
+ *
+ * The two SendGrid mechanics that make inline detection work:
+ *   1. Two `content` parts on the message — text/html (the human-readable
+ *      preamble) AND text/calendar; method=REQUEST (the actual invite).
+ *      Gmail uses the second part to render the inline event card.
+ *   2. ALSO attach the same ICS as a .ics file attachment so Outlook +
+ *      mobile clients that don't parse the multipart body still get it.
+ *
+ * Returns the SendGrid message id on success; throws on API error.
+ */
+export async function sendCalendarInvite(opts: {
+  to: { email: string; name?: string };
+  subject: string;
+  htmlPreamble: string;
+  ics: string;
+  method: 'REQUEST' | 'CANCEL';
+  /** Optional CC list — typically matt@moderntax.io for visibility. */
+  cc?: string[];
+}): Promise<string> {
+  if (!sendGridApiKey) {
+    console.warn('[sendCalendarInvite] SENDGRID_API_KEY not set — skipping');
+    return 'skipped';
+  }
+
+  const icsBase64 = Buffer.from(opts.ics, 'utf8').toString('base64');
+
+  // SendGrid's v3 API rejects MIME type parameters (";" in the type string)
+  // on both `content` parts and `attachments` — that's the magic header Gmail
+  // looks for to render inline RSVP buttons (`text/calendar; method=REQUEST`).
+  // SendGrid validation strips it: 400 "The content type cannot contain ';'".
+  //
+  // What still works across every major client when sent as a plain
+  // text/calendar attachment:
+  //   • Apple Mail / iCloud Mail → auto-detects the .ics, surfaces "Add to
+  //                                Calendar" inline in the message
+  //   • Outlook (web/desktop)    → recognizes by extension, shows event card
+  //   • Gmail                    → shows .ics as a normal attachment with an
+  //                                "Add to calendar" link on click
+  //
+  // For native Gmail inline RSVP buttons we'd need a direct SMTP path that
+  // allows MIME parameters; deferred — the attachment-based flow already
+  // gets the event onto the recipient's calendar with one click everywhere.
+  const msg: any = {
+    to: opts.to.name ? { email: opts.to.email, name: opts.to.name } : opts.to.email,
+    cc: opts.cc?.length ? opts.cc : undefined,
+    from: { email: fromEmail, name: 'ModernTax' },
+    subject: opts.subject,
+    html: opts.htmlPreamble,
+    attachments: [
+      {
+        filename: opts.method === 'CANCEL' ? 'cancel.ics' : 'invite.ics',
+        type: 'text/calendar',
+        disposition: 'attachment',
+        content: icsBase64,
+      },
+    ],
+  };
+
+  const [response] = await sgMail.send(msg);
+  return response.headers?.['x-message-id'] || 'sent';
 }

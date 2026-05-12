@@ -6,6 +6,11 @@
  * workflow (Form 8822-B + IRS Business & Specialty Tax call) billed at
  * PRICE_CHECK_REISSUE per check.
  *
+ * Billing model: Mercury ACH (manual invoice from Matt). After the row
+ * is created, we email matt@moderntax.io with the entity context so he
+ * can send a Mercury invoice from the dashboard. NO Stripe redirect —
+ * the $1,000 fee + multi-week service runs better on ACH than card.
+ *
  * Body:
  *   {
  *     entity_id:        UUID,
@@ -27,6 +32,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { PRICE_CHECK_REISSUE } from '@/lib/pricing';
+import { sendCheckReissueRequestNotification } from '@/lib/sendgrid';
 
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
@@ -71,11 +77,13 @@ export async function POST(request: NextRequest) {
 
   // Resolve request_id + client_id from the entity so the caller doesn't
   // have to pass them (the entity is the only required handle).
+  // We also pull entity_name + client name + signer_email for the
+  // Mercury invoice notification we'll send below.
   const { data: entity } = await admin
     .from('request_entities')
-    .select('id, request_id, requests(client_id)')
+    .select('id, request_id, entity_name, signer_email, requests(client_id, clients(name, billing_email))')
     .eq('id', entity_id)
-    .single() as { data: { id: string; request_id: string; requests: any } | null };
+    .single() as { data: { id: string; request_id: string; entity_name: string | null; signer_email: string | null; requests: any } | null };
   if (!entity) return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
   const client_id = entity.requests?.client_id;
   if (!client_id) return NextResponse.json({ error: 'Entity has no client linkage' }, { status: 500 });
@@ -135,10 +143,41 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  // Notify Matt — he creates the Mercury ACH invoice in the dashboard.
+  // Best-effort: a SendGrid failure must NOT block the request creation
+  // (the row + audit log are the source of truth).
+  const clientRow = entity.requests?.clients;
+  const customerEmail = clientRow?.billing_email || entity.signer_email || user.email || '';
+  if (customerEmail) {
+    await sendCheckReissueRequestNotification({
+      source: 'admin_portal',
+      customerEmail,
+      businessName: entity.entity_name || clientRow?.name || 'Unknown business',
+      refundContext: {
+        quarter: `${tax_year} Q${tax_quarter}`,
+        refundAmount: typeof original_refund_amount === 'number' ? original_refund_amount : undefined,
+        refundDate: original_refund_date || null,
+        returnedDate: returned_undelivered_date || null,
+        notes: notes || null,
+      },
+      internalContext: {
+        checkReissueId: created.id,
+        entityId: entity.id,
+        entityName: entity.entity_name || undefined,
+        clientName: clientRow?.name || undefined,
+        requestedByEmail: user.email || undefined,
+      },
+    });
+  } else {
+    console.warn('[check-reissue] no customer email resolvable for entity', entity_id, '— skipping Mercury notification');
+  }
+
   return NextResponse.json({
     id: created.id,
     status: created.status,
     service_fee: created.service_fee,
     deduped: false,
+    billing: 'mercury_ach',
+    message: 'Mercury ACH invoice will be sent within 1 business day.',
   });
 }

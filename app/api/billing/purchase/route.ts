@@ -8,12 +8,12 @@
  *
  * Supported flows (the `kind` discriminator in the request body):
  *
- *   1. kind=check_reissue
- *      Body: { kind: 'check_reissue', check_reissue_id: <uuid> }
- *      Looks up the check_reissue_requests row, charges
- *      PRICE_CHECK_REISSUE ($1,000), stores stripe_session_id on the
- *      row. Webhook flips payment_status to 'paid' on success and
- *      the admin queue can then start the work.
+ *   1. kind=check_reissue → DISABLED — billing moved to Mercury ACH.
+ *      The client-side `RequestCheckReissueButton` no longer hits this
+ *      endpoint; it just records the row via /api/admin/check-reissue
+ *      which then emails Matt to send a Mercury invoice. Kept here as
+ *      a 410 Gone so any in-flight client code surfaces a clear error
+ *      instead of silently creating a Stripe session.
  *
  *   2. kind=erc_full_sweep
  *      Body: { kind: 'erc_full_sweep', entity_id: <uuid> }
@@ -33,10 +33,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { getStripe, findOrCreateStripeCustomer } from '@/lib/stripe';
-import {
-  PRICE_CHECK_REISSUE,
-  PRICE_ERC_FULL_SWEEP_PREMIUM,
-} from '@/lib/pricing';
+import { PRICE_ERC_FULL_SWEEP_PREMIUM } from '@/lib/pricing';
+// Note: PRICE_CHECK_REISSUE was removed — check-reissue is now billed via
+// Mercury ACH (see the kind='check_reissue' branch below) and no longer
+// touches Stripe from this endpoint.
 
 interface BaseBody {
   kind: 'check_reissue' | 'erc_full_sweep';
@@ -86,74 +86,21 @@ export async function POST(request: NextRequest) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
 
     // -------------------------------------------------------------------------
-    // Flow 1: check_reissue — $1,000 per check
+    // Flow 1: check_reissue — DISABLED, moved to Mercury ACH
+    //
+    // The check-reissue service is now billed via Mercury ACH (manual invoice
+    // from Matt). Hitting this branch means a client is on a stale build —
+    // surface a clear 410 Gone with the new flow so the user isn't silently
+    // double-charged.
     // -------------------------------------------------------------------------
     if (body.kind === 'check_reissue') {
-      if (!body.check_reissue_id) {
-        return NextResponse.json({ error: 'check_reissue_id required' }, { status: 400 });
-      }
-
-      const { data: row } = await admin
-        .from('check_reissue_requests' as any)
-        .select('id, client_id, entity_id, tax_year, tax_quarter, status, payment_status, service_fee, original_refund_amount, clients:client_id(*)')
-        .eq('id', body.check_reissue_id)
-        .single() as { data: any };
-      if (!row) return NextResponse.json({ error: 'Reissue request not found' }, { status: 404 });
-      if (row.payment_status === 'paid') {
-        return NextResponse.json({ error: 'Already paid', already_paid: true }, { status: 409 });
-      }
-      // Non-admins can only pay for their own client's reissues.
-      if (!isAdmin && row.client_id !== profile.client_id) {
-        return NextResponse.json({ error: 'Not authorized for this client' }, { status: 403 });
-      }
-
-      const customerId = await findOrCreateStripeCustomer(row.clients, admin);
-      const fee = Number(row.service_fee) || PRICE_CHECK_REISSUE;
-
-      const checkout = await stripe.checkout.sessions.create({
-        mode: 'payment',
-        customer: customerId,
-        payment_method_types: ['card'],
-        line_items: [{
-          price_data: {
-            currency: 'usd',
-            unit_amount: Math.round(fee * 100),
-            product_data: {
-              name: 'ModernTax — IRS Check Reissue Recovery Service',
-              description: `${row.clients?.name || 'Client'} — Recover undelivered IRS refund check for ${row.tax_year} Q${row.tax_quarter}${row.original_refund_amount ? ` ($${Number(row.original_refund_amount).toFixed(2)} originally issued)` : ''}. We file Form 8822-B + call the IRS Business & Specialty Tax line on the client's behalf.`,
-            },
-          },
-          quantity: 1,
-        }],
-        success_url: `${baseUrl}/admin/erc-report/${row.entity_id}?reissue=paid&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url:  `${baseUrl}/admin/erc-report/${row.entity_id}?reissue=cancel`,
-        metadata: {
-          flow: 'check_reissue',
-          check_reissue_id: row.id,
-          entity_id: row.entity_id,
-          moderntax_client_id: row.client_id,
-          moderntax_user_id: user.id,
+      return NextResponse.json(
+        {
+          error: 'check_reissue is now billed via Mercury ACH, not Stripe. The /api/admin/check-reissue endpoint records the request and notifies Matt to send a Mercury invoice.',
+          billing: 'mercury_ach',
         },
-        custom_text: {
-          submit: {
-            message: 'Service begins immediately upon payment confirmation. Estimated 4–8 weeks to recover the check from the IRS, plus typical mail-delivery time. Refunded if we can\'t complete the recovery.',
-          },
-        },
-      });
-
-      if (!checkout.url) {
-        return NextResponse.json({ error: 'Stripe did not return a URL' }, { status: 500 });
-      }
-
-      // Persist the session id on the row so the webhook can match it
-      await (admin.from('check_reissue_requests' as any) as any)
-        .update({
-          payment_status: 'checkout_pending',
-          stripe_session_id: checkout.id,
-        })
-        .eq('id', row.id);
-
-      return NextResponse.json({ url: checkout.url, sessionId: checkout.id });
+        { status: 410 },
+      );
     }
 
     // -------------------------------------------------------------------------
