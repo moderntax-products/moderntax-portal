@@ -72,6 +72,14 @@ const SAMPLE = {
       sizeBytes: 92400,
       featured: true,
     },
+    {
+      type: 'erc-report',
+      label: 'ERC Status Report (941) — TaxTaker/R&D-credit partners',
+      year: 2021,
+      ext: 'HTML',
+      sizeBytes: 124800,
+      featured: true,
+    },
   ],
 };
 

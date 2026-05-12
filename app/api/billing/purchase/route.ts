@@ -64,8 +64,17 @@ export async function POST(request: NextRequest) {
       .select('role, client_id')
       .eq('id', user.id)
       .single() as { data: { role: string; client_id: string | null } | null };
-    if (!profile || profile.role !== 'admin') {
-      return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+    if (!profile) {
+      return NextResponse.json({ error: 'No profile' }, { status: 403 });
+    }
+    // Admins can purchase for any client. Managers / processors can only
+    // purchase for entities/reissues that belong to their own client. We
+    // resolve the target client_id from the body after parsing and verify
+    // it matches profile.client_id for non-admins.
+    const isAdmin = profile.role === 'admin';
+    const allowedClientRoles = ['manager', 'processor', 'team_member'];
+    if (!isAdmin && !allowedClientRoles.includes(profile.role)) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
     const body = (await request.json().catch(() => null)) as PurchaseBody | null;
@@ -92,6 +101,10 @@ export async function POST(request: NextRequest) {
       if (!row) return NextResponse.json({ error: 'Reissue request not found' }, { status: 404 });
       if (row.payment_status === 'paid') {
         return NextResponse.json({ error: 'Already paid', already_paid: true }, { status: 409 });
+      }
+      // Non-admins can only pay for their own client's reissues.
+      if (!isAdmin && row.client_id !== profile.client_id) {
+        return NextResponse.json({ error: 'Not authorized for this client' }, { status: 403 });
       }
 
       const customerId = await findOrCreateStripeCustomer(row.clients, admin);
@@ -166,6 +179,10 @@ export async function POST(request: NextRequest) {
 
       const client = ent.requests?.clients;
       if (!client) return NextResponse.json({ error: 'Entity has no client linkage' }, { status: 500 });
+      // Non-admins can only pay for their own client's entities.
+      if (!isAdmin && client.id !== profile.client_id) {
+        return NextResponse.json({ error: 'Not authorized for this client' }, { status: 403 });
+      }
 
       const customerId = await findOrCreateStripeCustomer(client, admin);
 

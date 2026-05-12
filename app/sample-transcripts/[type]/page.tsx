@@ -36,7 +36,7 @@ export const metadata = {
 export default async function SampleTranscriptPage({ params }: Props) {
   const { type } = await params;
 
-  if (!['tax-return', 'record-of-account', 'civil-penalties', 'compliance-report'].includes(type)) {
+  if (!['tax-return', 'record-of-account', 'civil-penalties', 'compliance-report', 'erc-report'].includes(type)) {
     notFound();
   }
 
@@ -52,11 +52,12 @@ export default async function SampleTranscriptPage({ params }: Props) {
         </Link>
       </div>
 
-      <div className="max-w-4xl mx-auto py-8 px-4">
+      <div className={type === 'erc-report' ? '' : 'max-w-4xl mx-auto py-8 px-4'}>
         {type === 'tax-return' && <TaxReturnTranscript />}
         {type === 'record-of-account' && <RecordOfAccount />}
         {type === 'civil-penalties' && <CivilPenalties />}
         {type === 'compliance-report' && <ComplianceReport />}
+        {type === 'erc-report' && <ERCReportSample />}
       </div>
     </div>
   );
@@ -471,6 +472,357 @@ function Finding({
         <p><span className="font-semibold">What it means:</span> {whatItMeans}</p>
         <p><span className="font-semibold">Why it matters for the loan:</span> {whyItMatters}</p>
         <p><span className="font-semibold">Next step:</span> {nextStep}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ERC STATUS REPORT — sample for the ERC / 941 product (TaxTaker POC)
+// Mirrors /admin/erc-report/[entityId] but with hand-crafted dummy data
+// so we can showcase every status in one screen.
+// ─────────────────────────────────────────────────────────────────────
+
+const SAMPLE_ERC_ENTITY = {
+  name: 'Coastal Software Labs, Inc.',
+  ein: '84-2917846',
+  client: 'TaxTaker — Sample',
+  loanNumber: 'SAMPLE-ERC-001',
+};
+
+interface SampleQuarter {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  status: 'refund_returned_undelivered' | 'refund_paid' | 'claim_pending_irs_review' | 'claim_denied_or_reduced' | 'amendment_received_no_action' | 'no_claim_filed' | 'unknown';
+  ercCreditAmount: number | null;
+  refundIssuedAmount: number | null;
+  refundIssuedDate: string | null;
+  refundReturnedDate: string | null;
+  totalRecoverable: number;
+  deadlinePassed: boolean;
+  filingDeadline: string;
+  eligibilityNote?: string;
+  actionRequired: string | null;
+  notes: string[];
+}
+
+const SAMPLE_ERC_QUARTERS: SampleQuarter[] = [
+  {
+    year: 2020,
+    quarter: 2,
+    status: 'refund_paid',
+    ercCreditAmount: -28430.12,
+    refundIssuedAmount: 30217.45,
+    refundIssuedDate: '2022-03-15',
+    refundReturnedDate: null,
+    totalRecoverable: 0,
+    deadlinePassed: true,
+    filingDeadline: '2024-04-15',
+    actionRequired: null,
+    notes: ['Refund of $30,217.45 was issued on 2022-03-15. Should be in client’s account.'],
+  },
+  {
+    year: 2020,
+    quarter: 3,
+    status: 'refund_paid',
+    ercCreditAmount: -41882.50,
+    refundIssuedAmount: 44721.30,
+    refundIssuedDate: '2022-04-08',
+    refundReturnedDate: null,
+    totalRecoverable: 0,
+    deadlinePassed: true,
+    filingDeadline: '2024-04-15',
+    actionRequired: null,
+    notes: ['Refund of $44,721.30 was issued on 2022-04-08. Should be in client’s account.'],
+  },
+  {
+    year: 2020,
+    quarter: 4,
+    status: 'refund_returned_undelivered',
+    ercCreditAmount: -36904.81,
+    refundIssuedAmount: 39612.07,
+    refundIssuedDate: '2022-06-21',
+    refundReturnedDate: '2022-07-08',
+    totalRecoverable: 39612.07,
+    deadlinePassed: true,
+    filingDeadline: '2024-04-15',
+    actionRequired: 'Update mailing address with IRS (Form 8822-B for business). Once updated, the IRS will reissue the check. May also call PPS and request reissue once address is updated.',
+    notes: [
+      'TC 960 present — a Power of Attorney / 8821 is on record at the IRS.',
+      'Refund of $39,612.07 was issued on 2022-06-21 but TC 740 shows the check was returned undelivered on 2022-07-08.',
+      'The returned amount matches the refund amount exactly — the entire check came back, not a partial.',
+    ],
+  },
+  {
+    year: 2021,
+    quarter: 1,
+    status: 'claim_pending_irs_review',
+    ercCreditAmount: -52108.20,
+    refundIssuedAmount: null,
+    refundIssuedDate: null,
+    refundReturnedDate: null,
+    totalRecoverable: 52108.20,
+    deadlinePassed: true,
+    filingDeadline: '2025-04-15',
+    actionRequired: 'Wait for IRS review to complete. The IRS may request additional documentation; respond promptly if so. Approx 41K claims remain under examination as of early 2026.',
+    notes: ['TC 470 indicates the claim is pending IRS review.', '941-X filed 2023-02-18, currently in pre-payment review queue.'],
+  },
+  {
+    year: 2021,
+    quarter: 2,
+    status: 'amendment_received_no_action',
+    ercCreditAmount: -48791.04,
+    refundIssuedAmount: null,
+    refundIssuedDate: null,
+    refundReturnedDate: null,
+    totalRecoverable: 48791.04,
+    deadlinePassed: true,
+    filingDeadline: '2025-04-15',
+    actionRequired: 'Amendment received by IRS but no refund decision yet. Average processing is 4-8 months but has stretched to 12-18 months for ERC claims. Monitor monthly.',
+    notes: ['TC 977 (amendment filed) posted 2023-08-14. No subsequent transaction codes — still in IRS processing queue.'],
+  },
+  {
+    year: 2021,
+    quarter: 3,
+    status: 'claim_denied_or_reduced',
+    ercCreditAmount: null,
+    refundIssuedAmount: null,
+    refundIssuedDate: null,
+    refundReturnedDate: null,
+    totalRecoverable: 0,
+    deadlinePassed: true,
+    filingDeadline: '2025-04-15',
+    actionRequired: 'Check for IRS Letter 105-C (disallowance notice) in client mail. If received, evaluate appeal — must be filed within 2 years of disallowance. If not received, request transcripts of notices issued.',
+    notes: [
+      'TC 290 posted with positive amount (no offsetting TC 766 credit) — claim was likely denied or significantly reduced.',
+      'TC 971 with action code 057 suggests Letter 105-C was issued. Confirm with client.',
+    ],
+  },
+  {
+    year: 2021,
+    quarter: 4,
+    status: 'no_claim_filed',
+    ercCreditAmount: null,
+    refundIssuedAmount: null,
+    refundIssuedDate: null,
+    refundReturnedDate: null,
+    totalRecoverable: 0,
+    deadlinePassed: true,
+    filingDeadline: '2025-04-15',
+    eligibilityNote: 'Q4 2021 eligible only for Recovery Startup Businesses (RSBs). All other businesses are NOT eligible for Q4 2021.',
+    actionRequired: null,
+    notes: ['No TC 971/976/977 (amendment receipt) or TC 766/846 (credit / refund) on this transcript — appears no ERC claim was ever filed for this quarter.'],
+  },
+];
+
+function ercStatusChipSample(s: SampleQuarter['status']): { bg: string; border: string; text: string; label: string } {
+  switch (s) {
+    case 'refund_returned_undelivered': return { bg: 'bg-amber-50',   border: 'border-amber-300',  text: 'text-amber-900',  label: '$$$ Returned' };
+    case 'refund_paid':                  return { bg: 'bg-emerald-50', border: 'border-emerald-300', text: 'text-emerald-800', label: 'Paid' };
+    case 'claim_pending_irs_review':     return { bg: 'bg-blue-50',    border: 'border-blue-300',   text: 'text-blue-800',   label: 'Pending' };
+    case 'claim_denied_or_reduced':      return { bg: 'bg-red-50',     border: 'border-red-300',    text: 'text-red-800',    label: 'Denied' };
+    case 'amendment_received_no_action': return { bg: 'bg-indigo-50',  border: 'border-indigo-300', text: 'text-indigo-800', label: 'Filed, waiting' };
+    case 'no_claim_filed':               return { bg: 'bg-gray-50',    border: 'border-gray-200',   text: 'text-gray-600',   label: 'No claim' };
+    case 'unknown':                      return { bg: 'bg-gray-50',    border: 'border-gray-200',   text: 'text-gray-500',   label: 'No data' };
+  }
+}
+
+function ercStatusLabelSample(s: SampleQuarter['status']): string {
+  switch (s) {
+    case 'refund_returned_undelivered': return 'Refund returned undelivered';
+    case 'refund_paid':                  return 'Refund paid';
+    case 'claim_pending_irs_review':     return 'Claim pending IRS review';
+    case 'claim_denied_or_reduced':      return 'Claim denied or reduced';
+    case 'amendment_received_no_action': return 'Amendment received, no action yet';
+    case 'no_claim_filed':               return 'No claim filed';
+    case 'unknown':                      return 'Unknown / transcript missing';
+  }
+}
+
+function fmtUsdSample(n: number | null): string {
+  if (n === null) return '—';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function ERCReportSample() {
+  const totalRecoverable = SAMPLE_ERC_QUARTERS.reduce((s, q) => s + q.totalRecoverable, 0);
+  const quartersPaid = SAMPLE_ERC_QUARTERS.filter(q => q.status === 'refund_paid').length;
+  const quartersPending = SAMPLE_ERC_QUARTERS.filter(q => q.status === 'claim_pending_irs_review' || q.status === 'amendment_received_no_action').length;
+  const quartersUndelivered = SAMPLE_ERC_QUARTERS.filter(q => q.status === 'refund_returned_undelivered').length;
+  const actionItems = SAMPLE_ERC_QUARTERS.filter(q => q.actionRequired);
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-6">
+          <Link href="/sample-request" className="text-xs text-gray-500 hover:text-gray-700">← Back to sample tour</Link>
+          <h1 className="text-2xl sm:text-3xl font-bold text-mt-dark mt-1">
+            ERC Status Report — {SAMPLE_ERC_ENTITY.name}
+          </h1>
+          <p className="text-gray-600 text-sm mt-1">
+            {SAMPLE_ERC_ENTITY.client} · EIN {SAMPLE_ERC_ENTITY.ein} · Form 941 Account Transcripts · generated from 7 transcripts on file
+          </p>
+        </div>
+
+        {/* Demo banner explaining what this is + how to act */}
+        <div className="mb-6 bg-blue-50 border-l-4 border-blue-500 rounded-r p-4">
+          <p className="text-sm font-bold text-blue-900">What you&apos;re looking at</p>
+          <p className="text-sm text-blue-900 mt-1">
+            This is the full ERC analysis we deliver after pulling a customer&apos;s 941 Account Transcripts.
+            Every IRS transaction code (TC 150, 766, 846, 740, 290, 470, 971, 976, 977) is parsed and
+            mapped to per-quarter status: paid, returned, pending, denied, or no claim filed. On real
+            customers, the &ldquo;Request Check Reissue&rdquo; CTA you see below opens a Stripe Checkout for
+            $1,000 — we then file Form 8822-B and call the IRS reissuance line on the client&apos;s behalf.
+          </p>
+          <p className="text-sm text-blue-900 mt-2">
+            <Link href="/login" className="font-semibold underline">Sign in</Link>{' '}
+            to view the real report for entities you&apos;ve ordered, or contact{' '}
+            <a className="font-semibold underline" href="mailto:matt@moderntax.io">matt@moderntax.io</a> for a free first 941 pull.
+          </p>
+        </div>
+
+        {/* Summary */}
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+          <h2 className="text-lg font-bold text-mt-dark mb-4">Recoverable summary</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-lg p-4 border bg-amber-50 border-amber-300">
+              <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Total recoverable</p>
+              <p className="text-2xl font-bold mt-1 text-amber-700">{fmtUsdSample(totalRecoverable)}</p>
+            </div>
+            <div className="rounded-lg p-4 border bg-amber-50 border-amber-300">
+              <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Returned</p>
+              <p className="text-2xl font-bold mt-1 text-amber-700">{quartersUndelivered}</p>
+              <p className="text-[11px] text-gray-500">refund check returned undelivered</p>
+            </div>
+            <div className="rounded-lg p-4 border bg-blue-50 border-blue-300">
+              <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Pending</p>
+              <p className="text-2xl font-bold mt-1 text-blue-700">{quartersPending}</p>
+              <p className="text-[11px] text-gray-500">at the IRS, awaiting decision</p>
+            </div>
+            <div className="rounded-lg p-4 border bg-emerald-50 border-emerald-300">
+              <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Already paid</p>
+              <p className="text-2xl font-bold mt-1 text-emerald-700">{quartersPaid}</p>
+              <p className="text-[11px] text-gray-500">in client&apos;s account</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Per-quarter table */}
+        <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden mb-6">
+          <div className="px-5 py-3 border-b border-gray-200 bg-gray-50">
+            <h2 className="text-base font-bold text-mt-dark">Per-quarter detail</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Eligible quarters per IRS guidance: 2020 Q2–Q4 + 2021 Q1–Q3 (most businesses). Q4 2021 only for Recovery Startup Businesses.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                <tr>
+                  <th className="px-4 py-2 text-left">Quarter</th>
+                  <th className="px-4 py-2 text-left">Status</th>
+                  <th className="px-4 py-2 text-right">ERC Credit</th>
+                  <th className="px-4 py-2 text-right">Refund Issued</th>
+                  <th className="px-4 py-2 text-right">Recoverable</th>
+                  <th className="px-4 py-2 text-left">Deadline</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {SAMPLE_ERC_QUARTERS.map(q => {
+                  const c = ercStatusChipSample(q.status);
+                  return (
+                    <tr key={`${q.year}-Q${q.quarter}`} className="hover:bg-gray-50 align-top">
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-mt-dark">{q.year} Q{q.quarter}</div>
+                        <div className="text-xs text-gray-500">period ending {q.year}-{['03-31','06-30','09-30','12-31'][q.quarter - 1]}</div>
+                        {q.eligibilityNote && <div className="text-[11px] text-amber-700 mt-1">⚠ {q.eligibilityNote}</div>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold border ${c.bg} ${c.border} ${c.text}`}>{c.label}</span>
+                        <div className="text-[11px] text-gray-500 mt-1">{ercStatusLabelSample(q.status)}</div>
+                        {q.notes.length > 0 && (
+                          <ul className="mt-2 space-y-0.5 text-[11px] text-gray-600 list-disc list-inside max-w-xs">
+                            {q.notes.map((n, i) => <li key={i}>{n}</li>)}
+                          </ul>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-xs">
+                        {q.ercCreditAmount !== null ? fmtUsdSample(Math.abs(q.ercCreditAmount)) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-xs">
+                        {q.refundIssuedAmount !== null ? (
+                          <>
+                            <div className="font-semibold">{fmtUsdSample(q.refundIssuedAmount)}</div>
+                            {q.refundIssuedDate && <div className="text-[11px] text-gray-500">{q.refundIssuedDate}</div>}
+                            {q.refundReturnedDate && <div className="text-[11px] text-amber-700">returned {q.refundReturnedDate}</div>}
+                          </>
+                        ) : '—'}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-mono ${q.totalRecoverable > 0 ? 'text-amber-700 font-bold' : 'text-gray-400'}`}>
+                        {q.totalRecoverable > 0 ? fmtUsdSample(q.totalRecoverable) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-xs">
+                        <div className={q.deadlinePassed ? 'text-red-700 font-semibold' : 'text-gray-700'}>{q.filingDeadline}</div>
+                        <div className="text-[11px] text-gray-500">{q.deadlinePassed ? 'passed' : 'open'}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Action items with "demo" payment CTAs */}
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-5 mb-6">
+          <h2 className="text-base font-bold text-mt-dark mb-3">
+            Action items ({actionItems.length})
+          </h2>
+          <ul className="space-y-3">
+            {actionItems.map(q => (
+              <li key={`action-${q.year}-${q.quarter}`} className="border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r">
+                <p className="text-sm font-semibold text-amber-900">
+                  {q.year} Q{q.quarter} ({fmtUsdSample(q.totalRecoverable)} at stake)
+                </p>
+                <p className="text-sm text-amber-900 mt-1">{q.actionRequired}</p>
+                {q.status === 'refund_returned_undelivered' && (
+                  <div className="mt-3 pt-3 border-t border-amber-300 flex items-center gap-3 flex-wrap">
+                    <Link
+                      href="/login"
+                      className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded text-xs font-semibold hover:bg-amber-700"
+                    >
+                      Request Check Reissue · $1,000
+                    </Link>
+                    <span className="text-[11px] text-amber-800">
+                      Sign in to pay → we file Form 8822-B + call the IRS reissuance line on the client&apos;s behalf. Flat $1,000 per check.
+                    </span>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* CTA footer */}
+        <div className="bg-gradient-to-r from-mt-dark to-mt-navy rounded-xl p-6 text-white">
+          <h3 className="text-lg font-bold mb-2">Run this on your portfolio</h3>
+          <p className="text-sm text-gray-200 mb-4 max-w-2xl">
+            For ERC-recovery firms, R&amp;D credit shops, and tax-services partners: submit a list of EINs
+            and we deliver this report for every entity within 24 hours. $79.98 base / $159.96 for full
+            6-quarter coverage. $1,000 per undelivered check we recover.
+          </p>
+          <div className="flex flex-wrap gap-3 text-sm">
+            <Link href="/login" className="px-4 py-2 bg-mt-green text-white rounded-lg font-semibold hover:bg-mt-green/90">
+              Sign in &amp; pay for additional pulls →
+            </Link>
+            <Link href="/plans" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
+              See full pricing
+            </Link>
+            <a href="mailto:matt@moderntax.io?subject=ERC%20pulls%20for%20our%20portfolio" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
+              Talk to Matt
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );

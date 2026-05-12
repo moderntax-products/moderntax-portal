@@ -33,10 +33,10 @@ export default async function ERCReportPage({ params }: PageProps) {
   if (!user) redirect('/login');
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, client_id')
     .eq('id', user.id)
-    .single() as { data: { role: string } | null };
-  if (!profile || profile.role !== 'admin') redirect('/');
+    .single() as { data: { role: string; client_id: string | null } | null };
+  if (!profile) redirect('/');
 
   const admin = createAdminClient();
 
@@ -45,7 +45,8 @@ export default async function ERCReportPage({ params }: PageProps) {
     .select(`
       id, entity_name, tid, tid_kind, form_type, years, status,
       transcript_urls, transcript_html_urls, completed_at, request_id,
-      requests(loan_number, clients(name))
+      erc_full_sweep_paid,
+      requests(loan_number, client_id, clients(name))
     `)
     .eq('id', entityId)
     .single() as { data: any };
@@ -57,6 +58,30 @@ export default async function ERCReportPage({ params }: PageProps) {
       </div>
     );
   }
+
+  // Access control:
+  //   - admin: see everything
+  //   - manager / processor / team_member: only if the entity's client_id
+  //     matches their own profile.client_id (TaxTaker manager viewing
+  //     their own Mento entity is the canonical case)
+  //   - expert: only if they have an active assignment on this entity
+  //   - anyone else: redirect home
+  const entityClientId = (entity as any).requests?.client_id;
+  let canView = profile.role === 'admin';
+  if (!canView && ['manager', 'processor', 'team_member'].includes(profile.role)) {
+    canView = !!entityClientId && entityClientId === profile.client_id;
+  }
+  if (!canView && profile.role === 'expert') {
+    const { data: assn } = await admin
+      .from('expert_assignments')
+      .select('id')
+      .eq('entity_id', entityId)
+      .eq('expert_id', user.id)
+      .limit(1)
+      .maybeSingle() as { data: any };
+    canView = !!assn;
+  }
+  if (!canView) redirect('/');
 
   // Pull every HTML transcript on file for this entity. Both columns get
   // checked because the upload pipeline has occasionally crossed the two
