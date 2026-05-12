@@ -258,6 +258,80 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true });
       }
 
+      case 'update_entity_form_type': {
+        // Edit the form_type on an entity AFTER the request has been
+        // submitted. Common case: processor typed "1120" when the entity
+        // actually files "1065" — IRS returns "transcripts unavailable"
+        // because there's no 1120 on file for that EIN. Generated 8821s
+        // cover the full business form set (1065/1120/1120S/990/1041),
+        // so we don't need a fresh signature — just update the form_type
+        // and re-queue the entity for the IRS pull.
+        const { entityId, formType, requeue } = body;
+        if (!entityId || !formType) {
+          return NextResponse.json({ error: 'Missing entityId or formType' }, { status: 400 });
+        }
+        const validFormTypes = ['1040', '1065', '1120', '1120S', '990', '1041', '941'];
+        if (!validFormTypes.includes(formType)) {
+          return NextResponse.json(
+            { error: `Invalid formType. Must be one of: ${validFormTypes.join(', ')}` },
+            { status: 400 },
+          );
+        }
+
+        const { data: currentEntity } = await adminSupabase
+          .from('request_entities')
+          .select('id, entity_name, form_type, status, request_id, requests:request_id(loan_number, requested_by)')
+          .eq('id', entityId)
+          .single() as { data: any; error: any };
+        if (!currentEntity) {
+          return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+        }
+
+        const oldFormType = currentEntity.form_type;
+        const update: Record<string, unknown> = { form_type: formType };
+        // If `requeue: true` is passed, kick the entity back to irs_queue
+        // so an expert picks it up again. Only safe when 8821 is already
+        // signed (the existing 8821 covers 1065/1120/1120S/990/1041
+        // uniformly, so a form_type swap inside that set doesn't break
+        // the signature scope).
+        if (requeue && ['8821_signed', 'irs_queue', 'processing', 'completed', 'failed'].includes(currentEntity.status)) {
+          update.status = 'irs_queue';
+          update.completed_at = null;
+        }
+
+        const { error: updateError } = await adminSupabase
+          .from('request_entities')
+          .update(update)
+          .eq('id', entityId);
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 });
+        }
+
+        await logAuditFromRequest(adminSupabase, request, {
+          action: 'request_created',
+          userId: user.id,
+          userEmail: user.email || '',
+          resourceType: 'entity',
+          resourceId: entityId,
+          details: {
+            admin_action: 'form_type_correction',
+            old_form_type: oldFormType,
+            new_form_type: formType,
+            requeued: !!update.status,
+            entity_name: currentEntity.entity_name,
+            loan_number: currentEntity.requests?.loan_number,
+          },
+        });
+
+        return NextResponse.json({
+          success: true,
+          entity_id: entityId,
+          old_form_type: oldFormType,
+          new_form_type: formType,
+          requeued: !!update.status,
+        });
+      }
+
       case 'update_request_notes': {
         const { requestId, notes } = body;
         if (!requestId) {
