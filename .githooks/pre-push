@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — runs before any `git push` to catch tracked files
+# that import non-tracked modules. Stops the deploy-breaking trap at the
+# source (your machine) instead of waiting for Vercel to ERROR.
+#
+# Bypass if you really need to: git push --no-verify
+set -e
+node scripts/check-untracked-imports.mjs
