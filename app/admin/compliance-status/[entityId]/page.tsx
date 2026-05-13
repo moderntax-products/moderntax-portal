@@ -42,7 +42,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
 
   const admin = createAdminClient();
 
-  const { data: entity } = await admin
+  const { data: entity, error: lookupErr } = await admin
     .from('request_entities')
     .select(`
       id, entity_name, tid, tid_kind, form_type, years, status,
@@ -51,12 +51,24 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
       requests(loan_number, client_id, clients(name))
     `)
     .eq('id', entityId)
-    .single() as { data: any };
+    .single() as { data: any; error: any };
 
-  if (!entity) {
+  if (lookupErr || !entity) {
+    // Log the actual error so we don't silently swallow it again
+    // (this happened earlier — billing_email vs billing_ap_email schema mismatch
+    // returned NULL entity for every row in the backfill, masking the real cause).
+    console.error('[compliance-status] entity lookup failed:', entityId, lookupErr);
     return (
-      <div className="max-w-3xl mx-auto p-8">
-        <p className="text-sm text-gray-700">Entity not found.</p>
+      <div className="max-w-3xl mx-auto p-8 space-y-3">
+        <p className="text-sm font-semibold text-gray-900">Unable to load entity {entityId.slice(0, 8)}…</p>
+        <p className="text-xs text-gray-600">
+          {lookupErr
+            ? `Database error: ${lookupErr.message}`
+            : 'No matching entity row found. The link may reference a deleted entity, or you may not have permission to view it.'}
+        </p>
+        <p className="text-xs text-gray-500 italic">
+          If this entity was just created, try refreshing — the build may still be picking up the latest deploy.
+        </p>
       </div>
     );
   }

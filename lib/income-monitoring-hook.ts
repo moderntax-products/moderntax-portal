@@ -53,19 +53,21 @@ export async function captureEntityIncome(
   entityId: string,
   admin: SupabaseClient,
 ): Promise<CaptureResult> {
-  // 1. Load entity + parent request for the TID + client_id context
+  // 1. Load entity + parent request for the TID + client_id context.
+  // NOTE: clients.billing_ap_email is the actual column name (not billing_email
+  // — that one doesn't exist and broke the entire backfill on first run).
   const { data: entity, error: lookupErr } = await admin
     .from('request_entities')
     .select(`
       id, entity_name, tid, form_type, transcript_html_urls, transcript_urls,
       income_baseline, income_snapshot, completed_at,
-      requests(id, client_id, clients(name, billing_email))
+      requests(id, client_id, clients(name))
     `)
     .eq('id', entityId)
     .single() as { data: any; error: any };
 
   if (lookupErr || !entity) {
-    return skipResult('entity not found');
+    return skipResult(`entity lookup failed: ${lookupErr?.message || 'no row returned'}`);
   }
   if (!entity.tid) {
     return skipResult('entity has no TID');

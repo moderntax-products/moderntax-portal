@@ -86,21 +86,89 @@ export async function POST(request: NextRequest) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
 
     // -------------------------------------------------------------------------
-    // Flow 1: check_reissue — DISABLED, moved to Mercury ACH
+    // Flow 1: check_reissue — Stripe $999.99 (instant) flow.
     //
-    // The check-reissue service is now billed via Mercury ACH (manual invoice
-    // from Matt). Hitting this branch means a client is on a stale build —
-    // surface a clear 410 Gone with the new flow so the user isn't silently
-    // double-charged.
+    // The admin Request Check Reissue button (RequestCheckReissueButton) now
+    // presents TWO billing options:
+    //   • Pay $999.99 via Stripe Checkout (this endpoint) — work starts on
+    //     payment confirmation, fastest path. Subtle $0.01 discount roughly
+    //     offsets the ~2.9% Stripe processing fee so net revenue is similar
+    //     to the $1,000 Mercury ACH path.
+    //   • Request $1,000 Mercury ACH invoice (POST /api/admin/check-reissue
+    //     without kicking off this purchase) — net-15 friendly, manual
+    //     invoice from Matt, work starts on Mercury payment confirmation.
+    //
+    // Both paths first create a row in check_reissue_requests via
+    // /api/admin/check-reissue. The Stripe path THEN calls this endpoint to
+    // generate the checkout session and stamp stripe_session_id on the row.
+    // The Mercury path stops at the email notification step.
     // -------------------------------------------------------------------------
     if (body.kind === 'check_reissue') {
-      return NextResponse.json(
-        {
-          error: 'check_reissue is now billed via Mercury ACH, not Stripe. The /api/admin/check-reissue endpoint records the request and notifies Matt to send a Mercury invoice.',
-          billing: 'mercury_ach',
+      if (!body.check_reissue_id) {
+        return NextResponse.json({ error: 'check_reissue_id required' }, { status: 400 });
+      }
+
+      const { data: row } = await admin
+        .from('check_reissue_requests' as any)
+        .select('id, client_id, entity_id, tax_year, tax_quarter, status, payment_status, service_fee, original_refund_amount, clients:client_id(*)')
+        .eq('id', body.check_reissue_id)
+        .single() as { data: any };
+      if (!row) return NextResponse.json({ error: 'Reissue request not found' }, { status: 404 });
+      if (row.payment_status === 'paid') {
+        return NextResponse.json({ error: 'Already paid', already_paid: true }, { status: 409 });
+      }
+      if (!isAdmin && row.client_id !== profile.client_id) {
+        return NextResponse.json({ error: 'Not authorized for this client' }, { status: 403 });
+      }
+
+      const customerId = await findOrCreateStripeCustomer(row.clients, admin);
+      // $999.99 (1 cent under the Mercury $1,000 invoice — psychological
+      // anchor that roughly offsets Stripe's 2.9% processing fee).
+      const fee = 999.99;
+
+      const checkout = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        customer: customerId,
+        payment_method_types: ['card'],
+        line_items: [{
+          price_data: {
+            currency: 'usd',
+            unit_amount: Math.round(fee * 100),
+            product_data: {
+              name: 'ModernTax — IRS Check Reissue Recovery Service',
+              description: `${row.clients?.name || 'Client'} — Recover undelivered IRS refund check for ${row.tax_year} Q${row.tax_quarter}${row.original_refund_amount ? ` ($${Number(row.original_refund_amount).toFixed(2)} originally issued)` : ''}. We file Form 8822-B + call the IRS Business & Specialty Tax line on the client's behalf.`,
+            },
+          },
+          quantity: 1,
+        }],
+        success_url: `${baseUrl}/admin/erc-report/${row.entity_id}?reissue=paid&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url:  `${baseUrl}/admin/erc-report/${row.entity_id}?reissue=cancel`,
+        metadata: {
+          flow: 'check_reissue',
+          check_reissue_id: row.id,
+          entity_id: row.entity_id,
+          moderntax_client_id: row.client_id,
+          moderntax_user_id: user.id,
         },
-        { status: 410 },
-      );
+        custom_text: {
+          submit: {
+            message: 'Service starts the moment payment confirms. Expected timeline: Form 8822-B filed within 1 business day, IRS Business & Specialty Tax line called within 3 business days, check reissue typically posted by IRS within 4-8 weeks of address update.',
+          },
+        },
+      });
+
+      if (!checkout.url) {
+        return NextResponse.json({ error: 'Stripe did not return a URL' }, { status: 500 });
+      }
+
+      await (admin.from('check_reissue_requests' as any) as any)
+        .update({
+          payment_status: 'checkout_pending',
+          stripe_session_id: checkout.id,
+        })
+        .eq('id', row.id);
+
+      return NextResponse.json({ url: checkout.url, sessionId: checkout.id });
     }
 
     // -------------------------------------------------------------------------

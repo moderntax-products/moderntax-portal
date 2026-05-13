@@ -820,9 +820,8 @@ function ERCReportSample() {
             Specialty Tax line to recover the check on the client&apos;s behalf.
           </p>
           <p className="text-sm text-blue-900 mt-2">
-            <Link href="/login" className="font-semibold underline">Sign in</Link>{' '}
-            to view the real report for entities you&apos;ve ordered, or contact{' '}
-            <a className="font-semibold underline" href="mailto:matt@moderntax.io">matt@moderntax.io</a> for a free first 941 pull.
+            Already have entities ordered? <Link href="/login" className="font-semibold underline">Sign in to view their reports</Link>.
+            New here? Pick a pack below — pay via Stripe, send your EINs, first report in 24 hours.
           </p>
         </div>
 
@@ -946,54 +945,51 @@ function ERCReportSample() {
           </ul>
         </div>
 
-        {/* CTA footer — direct purchase, no portal account required */}
+        {/* CTA footer — direct purchase only, no soft CTAs */}
         <div className="bg-gradient-to-r from-mt-dark to-mt-navy rounded-xl p-6 text-white">
-          <h3 className="text-lg font-bold mb-2">Buy ERC pulls for your portfolio — no account needed</h3>
+          <h3 className="text-lg font-bold mb-2">Buy ERC pulls — pay now, first report in 24 hours</h3>
           <p className="text-sm text-gray-200 mb-5 max-w-2xl">
-            For ERC-recovery firms, R&amp;D credit shops, and tax-services partners. Pay via Stripe in
-            under a minute, then we&apos;ll email you to confirm onboarding details and the EINs you want
-            pulled. First report typically delivered within 24 hours of receiving 8821s.
+            Pay via Stripe, send us your EINs, get your report. Per-quarter ERC status + Filing
+            Compliance + Tax Liabilities + Repayment Plan analysis on every entity.
+            <strong className="text-white"> Standard turnaround: 24 hours from 8821 signature.</strong>
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <div className="bg-white/10 rounded-lg p-4">
               <p className="text-[11px] uppercase tracking-wide text-gray-300">Starter</p>
               <p className="text-xl font-bold mt-1">$239.94</p>
-              <p className="text-[11px] text-gray-300 mb-3">3 ERC entity pulls · up to 3 quarters each</p>
+              <p className="text-[11px] text-gray-300 mb-3">3 entities · up to 3 quarters each · ~24h delivery</p>
               <SelfServePackButton
                 pack="erc-3-pack"
-                label="Buy 3-pack →"
+                label="Buy 3-pack — Pay $239.94 →"
                 className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               />
             </div>
             <div className="bg-white/10 rounded-lg p-4 ring-1 ring-mt-green/40">
               <p className="text-[11px] uppercase tracking-wide text-mt-green font-semibold">Best value</p>
               <p className="text-xl font-bold mt-1">$379.99</p>
-              <p className="text-[11px] text-gray-300 mb-3">5 ERC entity pulls · ~5% volume discount</p>
+              <p className="text-[11px] text-gray-300 mb-3">5 entities · up to 3 quarters each · ~24h delivery</p>
               <SelfServePackButton
                 pack="erc-5-pack"
-                label="Buy 5-pack →"
+                label="Buy 5-pack — Pay $379.99 →"
                 className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               />
             </div>
             <div className="bg-white/10 rounded-lg p-4">
-              <p className="text-[11px] uppercase tracking-wide text-gray-300">Single full sweep</p>
+              <p className="text-[11px] uppercase tracking-wide text-gray-300">Full sweep</p>
               <p className="text-xl font-bold mt-1">$159.96</p>
-              <p className="text-[11px] text-gray-300 mb-3">1 entity · ALL 6–7 ERC quarters</p>
+              <p className="text-[11px] text-gray-300 mb-3">1 entity · ALL 6–7 ERC quarters · ~24h delivery</p>
               <SelfServePackButton
                 pack="erc-full-sweep"
-                label="Buy full sweep →"
+                label="Buy full sweep — Pay $159.96 →"
                 className="inline-flex w-full justify-center items-center px-3 py-2 bg-mt-green text-white rounded font-semibold hover:bg-mt-green/90 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               />
             </div>
           </div>
-          <div className="flex flex-wrap gap-3 text-sm">
-            <Link href="/plans" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
-              See full pricing
-            </Link>
-            <a href="mailto:matt@moderntax.io?subject=ERC%20pulls%20for%20our%20portfolio" className="px-4 py-2 border border-white/30 rounded-lg text-white hover:bg-white/10">
-              Talk to Matt first
-            </a>
-          </div>
+          <p className="text-[11px] text-gray-300">
+            After payment we email you to confirm onboarding details + EINs to pull. First report
+            delivered within 24 hours of receiving signed 8821s. Volume rates (10+ entities)
+            available — see <Link href="/plans" className="underline hover:text-white">full pricing</Link>.
+          </p>
         </div>
       </div>
     </div>
