@@ -79,12 +79,18 @@ export async function POST(request: NextRequest) {
   // have to pass them (the entity is the only required handle).
   // We also pull entity_name + client name + signer_email for the
   // Mercury invoice notification we'll send below.
-  const { data: entity } = await admin
+  // NOTE: clients.billing_ap_email is the actual column name (not
+  // billing_email — using the wrong name returns NULL for the whole
+  // query and surfaces a misleading "Entity not found" 404).
+  const { data: entity, error: entityErr } = await admin
     .from('request_entities')
-    .select('id, request_id, entity_name, signer_email, requests(client_id, clients(name, billing_email))')
+    .select('id, request_id, entity_name, signer_email, requests(client_id, clients(name, billing_ap_email))')
     .eq('id', entity_id)
-    .single() as { data: { id: string; request_id: string; entity_name: string | null; signer_email: string | null; requests: any } | null };
-  if (!entity) return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+    .single() as { data: { id: string; request_id: string; entity_name: string | null; signer_email: string | null; requests: any } | null; error: any };
+  if (entityErr || !entity) {
+    console.error('[check-reissue] entity lookup failed:', entity_id, entityErr);
+    return NextResponse.json({ error: entityErr?.message || 'Entity not found', details: entityErr }, { status: 404 });
+  }
   const client_id = entity.requests?.client_id;
   if (!client_id) return NextResponse.json({ error: 'Entity has no client linkage' }, { status: 500 });
 
@@ -147,7 +153,7 @@ export async function POST(request: NextRequest) {
   // Best-effort: a SendGrid failure must NOT block the request creation
   // (the row + audit log are the source of truth).
   const clientRow = entity.requests?.clients;
-  const customerEmail = clientRow?.billing_email || entity.signer_email || user.email || '';
+  const customerEmail = clientRow?.billing_ap_email || entity.signer_email || user.email || '';
   if (customerEmail) {
     await sendCheckReissueRequestNotification({
       source: 'admin_portal',
