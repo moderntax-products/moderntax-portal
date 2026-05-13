@@ -29,6 +29,7 @@ for (const line of envText.split('\n')) {
 }
 
 import { fireScheduledCall } from '../lib/fire-call';
+import { extractPpsSignals } from '../lib/irs-pps-signal-extractor';
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
   auth: { persistSession: false },
@@ -184,6 +185,57 @@ async function main() {
   if (!finalStatus) {
     finalStatus = 'timeout';
     console.log(`\n⏱ Timeout after ${POLL_TIMEOUT_MS / 60000} min — call still in progress or stuck.`);
+  }
+
+  // -------------------------------------------------------------------
+  // POST-CALL ANALYTICS — every IRS PPS call is a real-time poll of
+  // IRS queue health. Extract structured signals from the transcript
+  // (wait time announced, callback offered, agent reached, badge etc.)
+  // and persist to the session row so the admin stats page can show
+  // observed wait-time trends and inform customer SLA estimates.
+  // -------------------------------------------------------------------
+  console.log(`\nExtracting IRS PPS signals from call transcript…`);
+  try {
+    const r = await fetch(`https://api.retellai.com/v2/get-call/${fireResult.call_id}`, {
+      headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}` },
+    });
+    if (r.ok) {
+      const call = await r.json();
+      const signals = extractPpsSignals(call.transcript || '', call.duration_ms || 0, call.disconnection_reason || null);
+      const tags = [
+        signals.announcedWaitMinutes !== null ? `wait_${signals.announcedWaitMinutes}min` : null,
+        signals.callbackOffered ? 'callback_offered' : 'no_callback_offered',
+        signals.overflowRejected ? 'overflow_rejected' : null,
+        signals.agentAnswered ? 'agent_answered' : null,
+      ].filter(Boolean) as string[];
+      const classifiedOutcome = signals.agentAnswered ? 'agent_answered'
+        : signals.callbackOffered ? 'callback_offered_but_not_taken'
+        : signals.overflowRejected ? 'overflow_rejected'
+        : signals.announcedWaitMinutes && signals.announcedWaitMinutes > 15 ? 'wait_too_long_no_callback'
+        : 'short_call_no_signal';
+      await sb.from('irs_call_sessions' as any)
+        .update({
+          call_summary: signals.summary,
+          irs_agent_name: signals.agentName,
+          irs_agent_badge: signals.agentBadge,
+          hold_duration_seconds: signals.holdSeconds,
+          coaching_tags: tags,
+          classified_outcome: classifiedOutcome,
+        })
+        .eq('id', session.id);
+      console.log(`✓ Signals persisted:`);
+      console.log(`    announced_wait: ${signals.announcedWaitMinutes !== null ? signals.announcedWaitMinutes + ' min' : 'not announced'}`);
+      console.log(`    callback_offered: ${signals.callbackOffered}`);
+      console.log(`    overflow_rejected: ${signals.overflowRejected}`);
+      console.log(`    agent_answered: ${signals.agentAnswered}`);
+      console.log(`    agent_name: ${signals.agentName || '—'}`);
+      console.log(`    agent_badge: ${signals.agentBadge || '—'}`);
+      console.log(`    hold_seconds: ${signals.holdSeconds || '—'}`);
+      console.log(`    classified_outcome: ${classifiedOutcome}`);
+      console.log(`    tags: ${tags.join(', ')}`);
+    }
+  } catch (extractErr: any) {
+    console.warn(`signal extraction failed (non-blocking): ${extractErr.message}`);
   }
 
   console.log(`\n=== ATTEMPT ${attemptId} COMPLETE ===`);
