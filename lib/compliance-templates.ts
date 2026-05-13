@@ -115,7 +115,7 @@ The ModernTax team`,
     id: 'lien_levy',
     flag_types: ['LIEN', 'LEVY', 'COLLECTION'],
     display_name: 'Federal tax lien or levy on file',
-    short_description: 'IRS has filed a lien, executed a levy, or has active collection action. Often requires release before SBA closing.',
+    short_description: 'IRS has filed a lien, executed a levy, or has active collection action. Often requires release before underwriting approval or funding.',
     subject: 'Action needed: Federal tax lien/levy on your IRS account',
     body_markdown: `Hi {{borrower_name}},
 

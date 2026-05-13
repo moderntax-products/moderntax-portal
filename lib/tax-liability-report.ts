@@ -551,5 +551,9 @@ function buildHeadline(
   else if (plan.hasOfferInCompromise) parts.push('pending Offer in Compromise');
   else if (plan.hasCurrentlyNotCollectible) parts.push('currently-not-collectible status');
   if (parts.length === 0) parts.push('flagged transaction codes — see findings below');
-  return `Findings: ${parts.join('; ')}. Review the per-period detail below before SBA closing.`;
+  // Generic closing phrase — works for lender, payments, factoring, and
+  // any other downstream use case. Previously read "before SBA closing"
+  // which was Vine/lender-specific and tripped on non-lender consumers
+  // (e.g., Builds Collective payments underwriting).
+  return `Findings: ${parts.join('; ')}. Review the per-period detail below before approval.`;
 }
