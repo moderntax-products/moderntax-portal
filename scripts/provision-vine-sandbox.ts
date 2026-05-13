@@ -58,7 +58,8 @@ interface DemoEntity {
   entity_name: string;
   tid: string;
   tid_kind: 'EIN' | 'SSN';
-  form_type: '1120-S' | '1120' | '1065' | '1040';
+  // DB check constraint allows '1040' | '1065' | '1120' | '1120S' (no dash)
+  form_type: '1120S' | '1120' | '1065' | '1040';
   years: string[];
   signer_name: string;
   signer_email: string;
@@ -72,11 +73,11 @@ const DEMOS: DemoEntity[] = [
     entity_name: 'Apex Coffee Roasters LLC',
     tid: '87-0000101',
     tid_kind: 'EIN',
-    form_type: '1120-S',
+    form_type: '1120S',
     years: ['2023'],
     signer_name: 'Demo Owner One',
     signer_email: 'demo-signer-1@vine-sandbox.invalid',
-    address: { line1: '101 Demo Way', city: 'Austin', state: 'TX', zip: '78701' },
+    address: { line1: 'Demo Way Suite A', city: 'Austin', state: 'TX', zip: '78701' },
     transcripts: [
       {
         period_ending: '12-31-2023',
@@ -103,11 +104,11 @@ const DEMOS: DemoEntity[] = [
     entity_name: 'Sunrise Plumbing Co',
     tid: '87-0000202',
     tid_kind: 'EIN',
-    form_type: '1120-S',
+    form_type: '1120S',
     years: ['2023'],
     signer_name: 'Demo Owner Two',
     signer_email: 'demo-signer-2@vine-sandbox.invalid',
-    address: { line1: '202 Demo Blvd', city: 'Denver', state: 'CO', zip: '80201' },
+    address: { line1: 'Demo Blvd Suite B', city: 'Denver', state: 'CO', zip: '80201' },
     transcripts: [
       {
         period_ending: '12-31-2023',
@@ -138,7 +139,7 @@ const DEMOS: DemoEntity[] = [
     years: ['2022', '2023'],
     signer_name: 'Demo Owner Three',
     signer_email: 'demo-signer-3@vine-sandbox.invalid',
-    address: { line1: '303 Demo St', city: 'Philadelphia', state: 'PA', zip: '19103' },
+    address: { line1: 'Demo St Suite C', city: 'Philadelphia', state: 'PA', zip: '19103' },
     transcripts: [
       {
         period_ending: '12-31-2022',
@@ -270,8 +271,12 @@ async function main() {
       api_key: apiKey,
       api_key_hash: apiKeyHash,
       free_trial: true,
-      billing_model: 'payg',
-      billing_payment_method: 'none',
+      // Check constraint allows 'per_tin' | 'subscription'. Sandbox never
+      // bills, but per_tin is the safer default for a real-feel test client.
+      billing_model: 'per_tin',
+      // billing_payment_method check constraint: NULL | 'ach' | 'wire'.
+      // Sandbox doesn't pay — leave NULL.
+      billing_payment_method: null,
       monitoring_default_enabled: false,
       intake_methods: ['api'],
     } as any).select('id').single() as { data: { id: string } | null; error: any };
@@ -292,9 +297,34 @@ async function main() {
   }
   console.log(`✓ Cleared ${priorReqs?.length || 0} prior sandbox request(s)`);
 
+  // requests.requested_by is NOT NULL with a profiles(id) FK. Find Matt's
+  // profile to attribute the sandbox to a real owner (sandbox is internal,
+  // so this is fine). Fall back to any profile if Matt's isn't found.
+  let requestedBy: string | null = null;
+  const { data: matt } = await sb
+    .from('profiles')
+    .select('id')
+    .eq('email', 'matt@moderntax.io')
+    .maybeSingle() as { data: { id: string } | null };
+  if (matt) {
+    requestedBy = matt.id;
+  } else {
+    const { data: anyProfile } = await sb
+      .from('profiles')
+      .select('id')
+      .limit(1)
+      .maybeSingle() as { data: { id: string } | null };
+    if (anyProfile) requestedBy = anyProfile.id;
+  }
+  if (!requestedBy) {
+    console.error(`✗ No profiles found to use as requested_by. Sign into the portal at least once first.`);
+    process.exit(1);
+  }
+
   // 3. Create a single sandbox request with all 3 demo entities under it
   const { data: req, error: reqErr } = await sb.from('requests').insert({
     client_id: clientId,
+    requested_by: requestedBy,
     loan_number: 'VINE-SANDBOX-001',
     status: 'completed',
     completed_at: new Date().toISOString(),

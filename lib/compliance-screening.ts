@@ -122,10 +122,30 @@ export function screenTranscriptHtml(htmlString: string): ComplianceResult {
   result.financials.accruedPenalty = extractDollar(fullText, /ACCRUED PENALTY:\s*\$([\d,.]+)/);
   result.financials.accountBalancePlusAccruals = extractDollar(fullText, /ACCOUNT BALANCE PLUS ACCRUALS:\s*\$([\d,.]+)/);
 
-  // Extract transaction codes
+  // Extract transaction codes.
+  //
+  // The original TC regex `(\d{3})\s+(.+?)\s+(\d{2}-\d{2}-\d{4})...` runs on
+  // flat text — without scoping, it false-matches metadata like form numbers
+  // (1065 → "065"), zip codes ("303 ..."), and tracking IDs followed somewhere
+  // downstream by a MM-DD-YYYY date. Real IRS transcripts have a
+  // "TRANSACTIONS" / "CODE EXPLANATION OF TRANSACTION" header that separates
+  // the account-summary block from the actual TC list; scope the regex to the
+  // substring after that header so noise from metadata can't false-match. If
+  // no header is found, fall back to the whole document (current behavior)
+  // for any transcript variants that omit it.
+  // Prefer the column-header phrase (most specific). Real IRS transcripts
+  // emit it just before the TC list. Fall back to a plural "TRANSACTIONS"
+  // word boundary, but skip the singular form since metadata can legitimately
+  // contain the word "transaction" (e.g., "Tax Transaction Code" in a label).
+  let txStartMatch = fullText.match(/CODE\s+EXPLANATION\s+OF\s+TRANSACTION/i);
+  if (!txStartMatch) txStartMatch = fullText.match(/\bTRANSACTIONS\b/i);
+  const txScope = txStartMatch
+    ? fullText.slice(txStartMatch.index! + txStartMatch[0].length)
+    : fullText;
+
   const tcRegex = /(\d{3})\s+(.+?)\s+(\d{2}-\d{2}-\d{4})\s+(\$[\d,.]+|-?\$[\d,.]+)?/g;
   let tcMatch;
-  while ((tcMatch = tcRegex.exec(fullText)) !== null) {
+  while ((tcMatch = tcRegex.exec(txScope)) !== null) {
     const code = parseInt(tcMatch[1]);
     result.transactionCodes.push({
       code: tcMatch[1],
