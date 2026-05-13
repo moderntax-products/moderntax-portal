@@ -163,7 +163,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
                   Unfiled / blank ({report.filingCompliance.unfiled.length}) {report.filingCompliance.unfiled.length > 0 ? '⚠' : ''}
                 </p>
                 {report.filingCompliance.unfiled.length === 0 ? (
-                  <p className="text-xs text-gray-600 italic">No "no record of return filed" results in pulled transcripts.</p>
+                  <p className="text-xs text-gray-600 italic">No &ldquo;no record of return filed&rdquo; results in pulled transcripts.</p>
                 ) : (
                   <ul className="space-y-2 text-amber-900">
                     {report.filingCompliance.unfiled.map((f, i) => (
@@ -183,7 +183,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
             </div>
           )}
           <p className="text-xs text-gray-500 mt-3 italic">
-            Sourced from IRS Account Transcript TC 150 entries (filed) and any "No record of return filed" responses (unfiled).
+            Sourced from IRS Account Transcript TC 150 entries (filed) and any &ldquo;No record of return filed&rdquo; responses (unfiled).
           </p>
         </section>
 
