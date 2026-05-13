@@ -18,7 +18,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { readFileSync } from 'node:fs';
-import { buildTaxLiabilityReport } from '../lib/tax-liability-report.js';
+import sgMail from '@sendgrid/mail';
+import { buildTaxLiabilityReport } from '../lib/tax-liability-report';
 
 const DRY = process.argv.includes('--dry-run');
 const envText = readFileSync(new URL('../.env.local', import.meta.url), 'utf8');
@@ -32,6 +33,9 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 });
 const APP_URL = 'https://portal.moderntax.io';
 
+main().catch(err => { console.error('Fatal:', err); process.exit(1); });
+
+async function main() {
 // 1) Find every entity with at least one HTML transcript on file.
 const { data: entities, error } = await sb
   .from('request_entities')
@@ -81,7 +85,6 @@ console.log(`\n✓ Built reports for ${i} entities across ${perClient.size} clie
 
 // 3) Group by client → identify the recipients (managers + processors of that client)
 //    Send one summary email per recipient with their client's portfolio rollup.
-import sgMail from '@sendgrid/mail';
 if (env.SENDGRID_API_KEY) sgMail.setApiKey(env.SENDGRID_API_KEY);
 const FROM = env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io';
 
@@ -193,7 +196,8 @@ ${findingsTable}
 }
 
 console.log(`\n${DRY ? 'DRY RUN — ' : ''}${sent} emails sent.`);
+}  // end async main
 
-function escapeHtml(s) {
+function escapeHtml(s: unknown): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
