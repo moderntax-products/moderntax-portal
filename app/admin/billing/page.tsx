@@ -79,16 +79,26 @@ export default async function AdminBillingPage({ searchParams }: PageProps) {
 
   if (!adminProfile || adminProfile.role !== 'admin') redirect('/');
 
-  // Fetch all clients with billing info
+  // Fetch all clients with billing info.
+  //
+  // Sandbox clients (Vine, Builds Collective, etc. — slugs ending in
+  // `-sandbox`) are internal-test accounts seeded for prospects to curl
+  // synthetic data end-to-end. They contain fabricated EINs/SSNs and
+  // should NEVER appear in revenue reports — including them was
+  // contaminating the monthly totals (e.g. Builds Collective Sandbox
+  // showing $119.96 in May 2026). Filter them out at the query level
+  // so they don't enter any downstream aggregation.
   const { data: clients } = await supabase
     .from('clients')
     .select('id, name, slug, free_trial, billing_payment_method, billing_ap_email, billing_rate_pdf, billing_rate_csv, api_key')
+    .not('slug', 'ilike', '%-sandbox')
     .order('name') as { data: any[] | null; error: any };
 
-  // Fetch all invoices
+  // Fetch all invoices — also exclude any tied to sandbox clients
   const { data: invoices } = await supabase
     .from('invoices')
-    .select('*, clients(name, slug)')
+    .select('*, clients!inner(name, slug)')
+    .not('clients.slug', 'ilike', '%-sandbox')
     .order('billing_period_start', { ascending: false }) as { data: any[] | null; error: any };
 
   // Fetch all requests with completed entities for current month revenue calc
