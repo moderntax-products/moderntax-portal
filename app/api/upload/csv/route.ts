@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendSignatureRequest } from '@/lib/dropbox-sign';
+import { send8821WithFallback } from '@/lib/send-8821-with-fallback';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
@@ -639,15 +639,16 @@ export async function POST(request: NextRequest) {
             // Must have signer email
             if (!entity.signer_email) continue;
 
-            try {
-              const { signatureRequestId } = await sendSignatureRequest(entity, entity.signer_email);
-              await admin
-                .from('request_entities')
-                .update({ signature_id: signatureRequestId, status: '8821_sent' })
-                .eq('id', entity.id);
-              console.log(`[csv-upload] 8821 sent for ${entity.entity_name} → ${entity.signer_email}`);
-            } catch (sendErr) {
-              console.error(`[csv-upload] Failed to send 8821 for ${entity.entity_name}:`, sendErr);
+            // Uses the shared helper that falls back to a manual-PDF
+            // email if Dropbox Sign returns 402 (free-tier blocked). The
+            // helper updates the row's status + signature_id itself.
+            const result = await send8821WithFallback(entity, admin);
+            if (result.outcome === 'sent_hellosign') {
+              console.log(`[csv-upload] 8821 sent via HelloSign for ${entity.entity_name} → ${entity.signer_email}`);
+            } else if (result.outcome === 'sent_manual') {
+              console.log(`[csv-upload] 8821 sent via MANUAL email for ${entity.entity_name} → ${entity.signer_email}`);
+            } else {
+              console.error(`[csv-upload] Failed to send 8821 for ${entity.entity_name}: ${result.error}`);
             }
           }
 

@@ -13,6 +13,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendReminder } from '@/lib/dropbox-sign';
+import { send8821ManualSignatureEmail } from '@/lib/sendgrid';
+import { generate8821PDF, DESIGNEES } from '@/lib/8821-pdf';
+import { isManualSignatureId } from '@/lib/send-8821-with-fallback';
 import sgMail from '@sendgrid/mail';
 import { requireBearer } from '@/lib/auth-util';
 
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
     const REMINDER_LIMIT = 100;
     const { data: pendingEntities, error } = await supabase
       .from('request_entities')
-      .select('id, entity_name, signature_id, signer_email, created_at')
+      .select('id, entity_name, signature_id, signer_email, signer_first_name, signer_last_name, form_type, tid, address, city, state, zip_code, created_at')
       .eq('status', '8821_sent')
       .not('signature_id', 'is', null)
       .not('signer_email', 'is', null)
@@ -90,18 +93,59 @@ export async function GET(request: NextRequest) {
 
     let remindedDropbox = 0;
     let remindedFallback = 0;
+    let remindedManualPdf = 0;
     let failed = 0;
     const failures: { entityName: string; error: string }[] = [];
 
+    // Helper: send a fresh PDF email (used for MANUAL signature_ids where
+    // the signer never went through Dropbox Sign in the first place, OR
+    // for HelloSign signers when both API + fallback have failed).
+    const sendFreshPdf = async (entity: any) => {
+      const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
+      const designee = Object.values(DESIGNEES)[0];
+      const address = [entity.address, entity.city, entity.state, entity.zip_code]
+        .filter(Boolean).join(', ');
+      const pdfBytes = await generate8821PDF({
+        taxpayer: { name: entity.entity_name || '', tin: entity.tid || '', address },
+        designee,
+        formType,
+      });
+      const signerName = [entity.signer_first_name, entity.signer_last_name]
+        .filter(Boolean).join(' ') || entity.entity_name;
+      await send8821ManualSignatureEmail({
+        signerEmail: entity.signer_email,
+        signerName,
+        entityName: entity.entity_name,
+        formType: entity.form_type || '',
+        pdfBytes,
+        entityId: entity.id,
+      });
+    };
+
     for (const entity of pendingEntities) {
+      // MANUAL signature ids — no Dropbox Sign session to reminder-API
+      // against. Send a fresh PDF email (re-engagement) directly.
+      if (isManualSignatureId(entity.signature_id)) {
+        try {
+          await sendFreshPdf(entity);
+          remindedManualPdf++;
+          console.log(`[8821-reminder] MANUAL fresh-PDF sent for ${entity.entity_name} → ${entity.signer_email}`);
+        } catch (err) {
+          failed++;
+          const msg = err instanceof Error ? err.message : 'unknown';
+          failures.push({ entityName: entity.entity_name, error: `manual-pdf: ${msg}` });
+          console.error(`[8821-reminder] MANUAL fresh-PDF failed for ${entity.entity_name}:`, msg);
+        }
+        continue;
+      }
+
+      // HelloSign path: try the Dropbox Sign reminder API first, then
+      // SendGrid text fallback, then fresh-PDF as last resort.
       try {
         await sendReminder(entity.signature_id!, entity.signer_email!);
         remindedDropbox++;
         console.log(`[8821-reminder] Dropbox reminder sent for ${entity.entity_name} → ${entity.signer_email}`);
       } catch (err) {
-        // Dropbox Sign API failed (commonly 402 payment_required when on
-        // the free tier, or rate-limit errors). Fall back to a SendGrid
-        // email so the signer still gets a nudge.
         const dropboxMsg = err instanceof Error ? err.message : 'unknown';
         try {
           await sendSendgridFallback({
@@ -110,21 +154,29 @@ export async function GET(request: NextRequest) {
             signatureRequestId: entity.signature_id!,
           });
           remindedFallback++;
-          console.log(`[8821-reminder] Fallback (SendGrid) reminder sent for ${entity.entity_name} → ${entity.signer_email} (Dropbox: ${dropboxMsg})`);
+          console.log(`[8821-reminder] SendGrid text reminder for ${entity.entity_name} → ${entity.signer_email} (Dropbox: ${dropboxMsg})`);
         } catch (fallbackErr) {
-          failed++;
-          const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : 'unknown';
-          failures.push({ entityName: entity.entity_name, error: `dropbox: ${dropboxMsg}; fallback: ${fbMsg}` });
-          console.error(`[8821-reminder] Both paths failed for ${entity.entity_name}:`, fbMsg);
+          // Both API and text-fallback failed — try the manual PDF path
+          try {
+            await sendFreshPdf(entity);
+            remindedManualPdf++;
+            console.log(`[8821-reminder] Fresh-PDF rescue for ${entity.entity_name} → ${entity.signer_email}`);
+          } catch (pdfErr) {
+            failed++;
+            const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : 'unknown';
+            const pdfMsg = pdfErr instanceof Error ? pdfErr.message : 'unknown';
+            failures.push({ entityName: entity.entity_name, error: `dropbox: ${dropboxMsg}; text-fallback: ${fbMsg}; pdf: ${pdfMsg}` });
+            console.error(`[8821-reminder] All three paths failed for ${entity.entity_name}`);
+          }
         }
       }
     }
 
-    const reminded = remindedDropbox + remindedFallback;
-    console.log(`[8821-reminder] Done: ${reminded} reminded (${remindedDropbox} via Dropbox, ${remindedFallback} via SendGrid fallback), ${failed} failed`);
+    const reminded = remindedDropbox + remindedFallback + remindedManualPdf;
+    console.log(`[8821-reminder] Done: ${reminded} reminded (${remindedDropbox} Dropbox, ${remindedFallback} text-fallback, ${remindedManualPdf} fresh-PDF), ${failed} failed`);
     return NextResponse.json({
       reminded, failed, total: pendingEntities.length,
-      via: { dropboxSign: remindedDropbox, sendgridFallback: remindedFallback },
+      via: { dropboxSign: remindedDropbox, sendgridFallback: remindedFallback, freshPdf: remindedManualPdf },
       failures: failures.length > 0 ? failures : undefined,
     });
   } catch (error) {
