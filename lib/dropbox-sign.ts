@@ -12,11 +12,20 @@ import { Readable } from 'stream';
 import { generate8821PDF, DESIGNEES } from '@/lib/8821-pdf';
 import type { DesigneeInfo } from '@/lib/8821-pdf';
 
-const API_KEY = process.env.DROPBOX_SIGN_API_KEY || '';
-
+// Read env at call-time, not at module-load-time. Reading at load time was
+// fragile: if any caller imports this module before its own .env loading
+// code runs (e.g. one-off scripts that load .env.local *after* imports),
+// the key resolves to '' and every Dropbox Sign call returns 401 with the
+// misleading "HTTP request failed" message. Server-side this typically
+// doesn't bite (Vercel sets env before module load) but the local one-off
+// failure mode wasted real ops time on 2026-05-13 chasing a phantom bug.
 function getApi(): DropboxSign.SignatureRequestApi {
+  const apiKey = process.env.DROPBOX_SIGN_API_KEY || '';
+  if (!apiKey) {
+    throw new Error('DROPBOX_SIGN_API_KEY is not set. Check .env or Vercel env config.');
+  }
   const api = new DropboxSign.SignatureRequestApi();
-  api.username = API_KEY;
+  api.username = apiKey;
   return api;
 }
 
@@ -162,7 +171,8 @@ export async function sendReminder(signatureRequestId: string, signerEmail: stri
  */
 export function validateEventHash(eventType: string, eventTime: string, eventHash: string): boolean {
   const crypto = require('crypto');
-  const hmac = crypto.createHmac('sha256', API_KEY);
+  const apiKey = process.env.DROPBOX_SIGN_API_KEY || '';
+  const hmac = crypto.createHmac('sha256', apiKey);
   hmac.update(eventTime + eventType);
   const expectedHash = hmac.digest('hex');
   return expectedHash === eventHash;

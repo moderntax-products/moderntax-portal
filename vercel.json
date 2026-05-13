@@ -17,6 +17,10 @@
       "schedule": "0 14 * * 1"
     },
     {
+      "path": "/api/cron/8821-auto-send-pending",
+      "schedule": "0 12 * * 1-5"
+    },
+    {
       "path": "/api/cron/8821-reminder",
       "schedule": "0 14 * * *"
     },

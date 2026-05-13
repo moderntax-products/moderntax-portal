@@ -2541,6 +2541,98 @@ ${internalBlock}
 }
 
 /**
+ * Manual-signature 8821 fallback — used when Dropbox Sign returns 402
+ * payment_required (free tier blocked from production signatures).
+ *
+ * Generates the 8821 PDF server-side via lib/8821-pdf, attaches it to
+ * a SendGrid email, and instructs the signer to print/sign/fax-back
+ * OR email-back the signed copy. The portal team picks up the signed
+ * copy via existing inbound channels (the +1 415-900-4436 fax already
+ * routes to ModernTax's inbox).
+ *
+ * Why this exists: Centerstone had 7 entities stuck in `pending` on
+ * 2026-05-13 because the inline sendSignatureRequest() call returns
+ * 402 from Dropbox Sign on the free tier. We need to keep moving until
+ * the Dropbox Sign paid plan is funded — this email-only flow does
+ * exactly that.
+ */
+export async function send8821ManualSignatureEmail(opts: {
+  signerEmail: string;
+  signerName: string;
+  entityName: string;
+  formType: string;
+  /** Pre-generated 8821 PDF as a Buffer or Uint8Array. */
+  pdfBytes: Uint8Array | Buffer;
+  /** Reference id (entity id) included in the email + filename. */
+  entityId: string;
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    throw new Error('SENDGRID_API_KEY not set — cannot send manual signature email');
+  }
+
+  const faxNumber = '+1 (415) 900-4436';
+  const subject = `Action required: sign Form 8821 for ${opts.entityName}`;
+  const fileSafe = opts.entityName.replace(/[^a-zA-Z0-9]+/g, '_');
+  const pdfFilename = `Form-8821-${fileSafe}.pdf`;
+  const pdfBase64 = Buffer.from(opts.pdfBytes).toString('base64');
+
+  const content = `
+<p>Hi ${escapeHtml(opts.signerName)},</p>
+
+<p>We need your signature on a Form 8821 (Tax Information Authorization) so we can pull
+IRS tax transcripts for <strong>${escapeHtml(opts.entityName)}</strong> on your behalf —
+this is the standard authorization SBA lenders require to verify tax history before
+funding a loan.</p>
+
+<p><strong>Attached</strong> is the pre-filled Form 8821. We need it signed and returned
+within 5 business days. Two ways to return it (pick whichever is easier):</p>
+
+<div style="background-color:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:20px;margin:24px 0;">
+  <p style="font-weight:700;font-size:16px;margin:0 0 12px 0;color:#0369a1;">Option A — Email back (easiest)</p>
+  <ol style="margin:0 0 0 0;padding-left:20px;">
+    <li style="margin-bottom:6px;">Print the attached <code>${escapeHtml(pdfFilename)}</code></li>
+    <li style="margin-bottom:6px;">Sign on the &ldquo;Signature&rdquo; line in Section 7 (wet ink — pen on paper)</li>
+    <li style="margin-bottom:6px;">Scan or take a photo of the signed form</li>
+    <li>Reply to <strong>this email</strong> with the signed copy attached</li>
+  </ol>
+</div>
+
+<div style="background-color:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:20px;margin:24px 0;">
+  <p style="font-weight:700;font-size:16px;margin:0 0 12px 0;color:#92400e;">Option B — Fax back</p>
+  <p style="margin:0 0 8px 0;">Sign the printed form, then fax to:</p>
+  <div style="background:#fff;border:2px solid #92400e;border-radius:6px;padding:14px;text-align:center;">
+    <p style="font-size:22px;font-weight:700;color:#92400e;margin:0;">${faxNumber}</p>
+    <p style="font-size:13px;color:#92400e;margin:4px 0 0 0;">ATTN: ModernTax 8821 — ${escapeHtml(opts.entityName)}</p>
+  </div>
+  <p style="font-size:12px;color:#78350f;margin:8px 0 0 0;">No fax machine? Use a free service like <a href="https://faxzero.com" style="color:#92400e;">FaxZero</a> or a mobile scanning app (CamScanner, Adobe Scan).</p>
+</div>
+
+<p style="font-size:14px;color:#333;"><strong>What we&apos;ll do once we receive it:</strong> we&apos;ll
+submit the signed 8821 to the IRS Practitioner Priority Service and pull your transcripts.
+Typical turnaround once signed: <strong>24 to 48 hours</strong>.</p>
+
+<p style="font-size:13px;color:#666;margin-top:24px;">Reference: <code>${escapeHtml(opts.entityId)}</code>${opts.formType ? ' · Form ' + escapeHtml(opts.formType) : ''}<br>
+Questions? Reply to this email or contact <a href="mailto:support@moderntax.io" style="color:#00C48C;">support@moderntax.io</a>.</p>
+`.trim();
+
+  const html = createEmailTemplate('Sign Form 8821', content);
+
+  await sgMail.send({
+    to: opts.signerEmail,
+    from: { email: fromEmail, name: 'ModernTax' },
+    subject,
+    html,
+    replyTo: 'support@moderntax.io',
+    attachments: [{
+      content: pdfBase64,
+      filename: pdfFilename,
+      type: 'application/pdf',
+      disposition: 'attachment',
+    }],
+  });
+}
+
+/**
  * Notify client managers when a monitoring re-pull surfaces a MATERIAL
  * variance in income figures vs. the loan-approval baseline.
  *
