@@ -57,26 +57,41 @@ export function extractPpsSignals(
   };
 
   // ---- 1. Announced wait time ----
-  // IRS phrases: "wait time to be greater than sixty minutes",
-  //              "wait time is approximately fifteen minutes", etc.
-  const waitPatterns = [
-    /wait time (?:to be |is )?(?:approximately |about )?greater than (\w+(?:[-\s]\w+)?) minutes?/i,
-    /wait time (?:to be |is )?(?:approximately |about )?(\w+(?:[-\s]\w+)?) minutes?/i,
-    /estimate(?:d)? (?:your )?wait (?:time )?(?:to be |is )?(\w+) minutes?/i,
-  ];
-  for (const p of waitPatterns) {
-    const m = text.match(p);
-    if (m) {
-      const n = parseWordOrDigitToMinutes(m[1]);
-      if (n !== null) {
-        // "greater than" → record the lower bound + flag
-        result.announcedWaitMinutes = n;
-        if (/greater than/i.test(m[0])) {
-          result.summary = `IRS announced wait > ${n} min`;
-        } else {
-          result.summary = `IRS announced wait ~${n} min`;
+  // IRS phrases observed in production:
+  //   "wait time to be greater than sixty minutes"
+  //   "wait time to be between thirty and sixty minutes"  ← upper bound
+  //   "wait time is approximately fifteen minutes"
+  //   "estimated wait time is X minutes"
+  // For "between X and Y" we record Y (upper bound) — it's the conservative
+  // SLA estimate to surface to customers.
+  const betweenMatch = text.match(/wait time (?:to be |is )?between (\w+(?:[-\s]\w+)?) and (\w+(?:[-\s]\w+)?) minutes?/i);
+  if (betweenMatch) {
+    const upper = parseWordOrDigitToMinutes(betweenMatch[2]);
+    if (upper !== null) {
+      result.announcedWaitMinutes = upper;
+      const lower = parseWordOrDigitToMinutes(betweenMatch[1]);
+      result.summary = `IRS announced wait ${lower !== null ? lower + '–' : ''}${upper} min`;
+    }
+  }
+  if (result.announcedWaitMinutes === null) {
+    const waitPatterns = [
+      /wait time (?:to be |is )?(?:approximately |about )?greater than (\w+(?:[-\s]\w+)?) minutes?/i,
+      /wait time (?:to be |is )?(?:approximately |about )?(\w+(?:[-\s]\w+)?) minutes?/i,
+      /estimate(?:d)? (?:your )?wait (?:time )?(?:to be |is )?(\w+) minutes?/i,
+    ];
+    for (const p of waitPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const n = parseWordOrDigitToMinutes(m[1]);
+        if (n !== null) {
+          result.announcedWaitMinutes = n;
+          if (/greater than/i.test(m[0])) {
+            result.summary = `IRS announced wait > ${n} min`;
+          } else {
+            result.summary = `IRS announced wait ~${n} min`;
+          }
+          break;
         }
-        break;
       }
     }
   }
