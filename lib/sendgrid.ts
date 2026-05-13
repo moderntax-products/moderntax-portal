@@ -2540,6 +2540,103 @@ ${internalBlock}
   }
 }
 
+/**
+ * Notify client managers when a monitoring re-pull surfaces a MATERIAL
+ * variance in income figures vs. the loan-approval baseline.
+ *
+ * Fired by lib/income-monitoring-hook.captureEntityIncome() — only when
+ * any of gross_receipts / total_income / total_tax / AGI moves >15% vs.
+ * the baseline captured at first pull (or, for funded loans, at loan
+ * approval time). Smaller variances stay in-app on the compliance
+ * status page and don't trigger an email.
+ *
+ * Driver: Enterprise Bank (Derek Le, 2026-05-11) ask — "income monitoring
+ * for when the bank follows up on the filing of business/personal tax
+ * return post loan funding to reconcile to the information provided
+ * for loan approval."
+ */
+export async function sendIncomeVarianceAlert(opts: {
+  recipients: string[];
+  entityName: string;
+  clientName: string;
+  entityId: string;
+  variance: any; // ReconciliationResult — typed loosely to avoid cyclical import with lib/income-reconciliation
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('[sendIncomeVarianceAlert] SENDGRID_API_KEY not set — skipping');
+    return;
+  }
+
+  const v = opts.variance;
+  const fmtMoney = (n: number | null) =>
+    typeof n === 'number'
+      ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '—';
+  const fmtPct = (p: number | null) =>
+    typeof p === 'number'
+      ? `${p > 0 ? '+' : ''}${(p * 100).toFixed(1)}%`
+      : '—';
+  const sevColor = (s: string) =>
+    s === 'MATERIAL' ? '#dc2626' : s === 'WARNING' ? '#d97706' : '#6b7280';
+  const fieldLabel = (f: string) =>
+    f === 'grossReceipts' ? 'Gross receipts' :
+    f === 'totalIncome' ? 'Total income' :
+    f === 'totalTax' ? 'Total tax' :
+    f === 'agi' ? 'AGI' : f;
+
+  const rows = v.fields
+    .filter((f: any) => f.severity !== 'INFO')
+    .map((f: any) => `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;">${fieldLabel(f.field)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;font-family:monospace;">${fmtMoney(f.baseline)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;font-family:monospace;">${fmtMoney(f.current)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;font-family:monospace;color:${sevColor(f.severity)};font-weight:600;">${fmtPct(f.deltaPct)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #eee;"><span style="background:${sevColor(f.severity)}15;color:${sevColor(f.severity)};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">${f.severity}</span></td>
+    </tr>`).join('\n');
+
+  const content = `
+<p>A monitoring re-pull on <strong>${escapeHtml(opts.entityName)}</strong> (${escapeHtml(opts.clientName)}) surfaced a <strong style="color:#dc2626;">MATERIAL variance</strong> in income figures vs. the baseline captured at loan approval.</p>
+
+<p style="font-size:14px;color:#1a1a1a;">${escapeHtml(v.summary)}</p>
+
+<table style="width:100%;border-collapse:collapse;font-size:13px;margin:16px 0;border:1px solid #eee;border-radius:6px;overflow:hidden;">
+  <thead>
+    <tr style="background:#f9f9f9;">
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #00C48C;">Field</th>
+      <th style="padding:8px 12px;text-align:right;border-bottom:2px solid #00C48C;">Baseline (${escapeHtml(v.baseline.taxYear || '?')})</th>
+      <th style="padding:8px 12px;text-align:right;border-bottom:2px solid #00C48C;">Current (${escapeHtml(v.current.taxYear || '?')})</th>
+      <th style="padding:8px 12px;text-align:right;border-bottom:2px solid #00C48C;">Δ</th>
+      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #00C48C;">Severity</th>
+    </tr>
+  </thead>
+  <tbody>${rows}</tbody>
+</table>
+
+<p><strong>Why this matters:</strong> Material variance between the loan-approval income figures and the most-recent IRS-filed return is a reconciliation flag. Common causes: amended return, missed reporting, business performance change. SBA loan servicing typically requires a written explanation from the borrower for variance &gt;15%.</p>
+
+<p><strong>Open the full report:</strong> <a href="${appUrl}/admin/compliance-status/${escapeAttr(opts.entityId)}" style="color:#00C48C;font-weight:600;">View compliance status for ${escapeHtml(opts.entityName)}</a></p>
+
+<p style="font-size:13px;color:#666;margin-top:24px;">Baseline source: ${escapeHtml(v.baseline.source || 'first pull')}, captured ${escapeHtml(v.baseline.capturedAt?.slice(0, 10) || 'unknown')}.<br>Current source: ${escapeHtml(v.current.source || 'this pull')}, captured ${escapeHtml(v.current.capturedAt?.slice(0, 10) || 'unknown')}.</p>
+`.trim();
+
+  const html = createEmailTemplate(`Income variance alert — ${opts.entityName}`, content, {
+    text: 'View compliance status report',
+    url: `${appUrl}/admin/compliance-status/${opts.entityId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: opts.recipients,
+      from: { email: fromEmail, name: 'ModernTax Notifications' },
+      subject: `[Income Variance — MATERIAL] ${opts.entityName} (${opts.clientName})`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('[sendIncomeVarianceAlert] SendGrid error:', error);
+  }
+}
+
 /** "2026-04-01" + "2026-04-30" → "April 2026". Falls back to range form. */
 function formatPeriodMonth(start: string, end: string): string {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];

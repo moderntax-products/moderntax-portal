@@ -4,6 +4,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertCompletionNotification, sendCompletionNotification } from '@/lib/sendgrid';
 import { triggerWebhookForRequest, triggerIncrementalWebhook } from '@/lib/webhook';
+import { autoEnrollMonitoring } from '@/lib/repeat-entity';
 
 /**
  * Expert transcript upload route.
@@ -85,10 +86,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get existing entity data
+    // Get existing entity data. gross_receipts is read for the post-completion
+    // add-on hooks: cash_flow_pack_pre_ordered → auto-generate the SBA pack;
+    // skip_auto_monitoring → bypass monitoring auto-enroll for this entity.
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, transcript_urls, request_id, form_type, years, signed_8821_url, requests(loan_number, client_id, clients(slug))')
+      .select('id, entity_name, transcript_urls, request_id, form_type, years, signed_8821_url, gross_receipts, tid, requests(loan_number, client_id, clients(slug, name))')
       .eq('id', entityId)
       .single() as { data: any; error: any };
 
@@ -193,6 +196,7 @@ export async function POST(request: NextRequest) {
 
     // If this is the completion call, finalize the assignment
     let slaMet: boolean | null = null;
+    let monitoringAutoEnrolled = false;
     if (shouldComplete) {
       // Update entity status to completed
       await adminSupabase
@@ -202,6 +206,157 @@ export async function POST(request: NextRequest) {
           completed_at: new Date().toISOString(),
         })
         .eq('id', entityId);
+
+      // Income-monitoring capture (Enterprise Bank / Derek Le ask 2026-05-11):
+      // baseline the entity's income on first pull, compare on each subsequent
+      // pull. Best-effort — a failure here MUST NOT abort completion since the
+      // transcripts are already on file and the entity is rightfully "done".
+      // Material variance (>15% on any income field) triggers an email alert.
+      try {
+        const { captureEntityIncome } = await import('@/lib/income-monitoring-hook');
+        const incomeResult = await captureEntityIncome(entityId, adminSupabase);
+        if (incomeResult.baselineEstablished) {
+          console.log(`[income-monitoring] baseline established for entity ${entityId}`);
+        } else if (incomeResult.variance) {
+          console.log(`[income-monitoring] variance ${incomeResult.variance.overallSeverity} for entity ${entityId}; alert sent=${incomeResult.alertSent}`);
+        } else if (incomeResult.skipReason) {
+          console.log(`[income-monitoring] skipped entity ${entityId}: ${incomeResult.skipReason}`);
+        }
+      } catch (incomeErr) {
+        console.error('[income-monitoring] hook failed (non-blocking):', incomeErr);
+      }
+
+      // Auto-enroll completed entities in continuous monitoring (default-on at
+      // funding). Lender opts out at the client level via
+      // clients.monitoring_default_enabled = false. The whole point: every
+      // funded loan converts to recurring quarterly transcript pulls
+      // ($19.99 enrollment + $39.99 per pull) so we own loan-servicing for
+      // the full SBA loan life (~25 years).
+      //
+      // Skipped for:
+      //   • W2_INCOME entities (transient W&I docs, not borrower-level monitoring)
+      //   • Clients that opted out (monitoring_default_enabled = false)
+      //   • Repeat-entity flow already enrolled (autoEnrollMonitoring is idempotent)
+      try {
+        const clientId: string | null = entity.requests?.client_id || null;
+        const isW2 = entity.form_type === 'W2_INCOME';
+
+        // Three-way precedence on monitoring auto-enroll:
+        //   1. Per-entity opt-out at CSV upload (gross_receipts.skip_auto_monitoring)
+        //      — explicit processor decision, highest priority.
+        //   2. Per-client default (clients.monitoring_default_enabled).
+        //   3. Hard skip for W2_INCOME (always — they're transient W&I docs).
+        const perEntityOptOut = entity.gross_receipts?.skip_auto_monitoring?.requested === true;
+
+        let monitoringEnabled = true;
+        if (clientId) {
+          const { data: client } = (await adminSupabase
+            .from('clients')
+            .select('monitoring_default_enabled')
+            .eq('id', clientId)
+            .single()) as { data: { monitoring_default_enabled: boolean | null } | null; error: any };
+          if (client?.monitoring_default_enabled === false) monitoringEnabled = false;
+        }
+
+        if (clientId && monitoringEnabled && !isW2 && !perEntityOptOut) {
+          monitoringAutoEnrolled = await autoEnrollMonitoring(
+            adminSupabase as any,
+            entityId,
+            entity.request_id,
+            clientId,
+            user.id,
+          );
+          if (monitoringAutoEnrolled) {
+            console.log(`[upload-transcript] Auto-enrolled ${entityId} in monitoring (post-completion)`);
+          }
+        } else if (perEntityOptOut) {
+          console.log(`[upload-transcript] Skipped monitoring for ${entityId} — processor opted out at CSV upload`);
+        }
+      } catch (enrollErr) {
+        // Best-effort — completion shouldn't fail because monitoring enroll did.
+        console.error('[upload-transcript] Auto-enroll monitoring failed:', enrollErr);
+      }
+
+      // Cash-Flow Pack auto-generation. Two trigger paths:
+      //   1. Per-entity pre-order from CSV upload (gross_receipts.cash_flow_pack_pre_ordered)
+      //   2. Per-client auto-attach toggle (clients.cash_flow_auto_attach = true)
+      // The /api/cash-flow/generate endpoint handles idempotency for manual
+      // re-runs; this hook short-circuits if a pack already exists on the entity.
+      try {
+        const preOrdered = entity.gross_receipts?.cash_flow_pack_pre_ordered?.requested === true;
+        const alreadyGenerated = !!entity.gross_receipts?.cash_flow_pack;
+        const clientId: string | null = entity.requests?.client_id || null;
+        let autoAttach = false;
+        if (!preOrdered && clientId) {
+          const { data: client } = (await adminSupabase
+            .from('clients')
+            .select('cash_flow_auto_attach')
+            .eq('id', clientId)
+            .single()) as { data: { cash_flow_auto_attach: boolean | null } | null; error: any };
+          if (client?.cash_flow_auto_attach === true) autoAttach = true;
+        }
+
+        if ((preOrdered || autoAttach) && !alreadyGenerated) {
+          const { generateCashFlowPdf, aggregateCashFlowByYear } = await import('@/lib/cash-flow-pdf');
+          // Re-fetch the entity row so we get the latest gross_receipts (the
+          // expert may have just uploaded transcripts with screening data
+          // that updated the financials JSON).
+          const { data: freshEntity } = await adminSupabase
+            .from('request_entities')
+            .select('gross_receipts')
+            .eq('id', entity.id)
+            .single() as { data: { gross_receipts: any } | null };
+          const gr = freshEntity?.gross_receipts || entity.gross_receipts;
+          const yearRows = aggregateCashFlowByYear(gr || null);
+          if (yearRows.length > 0) {
+            const pdfBytes = await generateCashFlowPdf({
+              entityName: entity.entity_name,
+              tin: entity.tid || '',
+              formType: entity.form_type || '',
+              loanNumber: entity.requests?.loan_number || null,
+              lenderName: entity.requests?.clients?.name || 'Lender',
+              grossReceipts: gr || null,
+              generatedAt: new Date(),
+              generatedBy: profile.full_name || user.email || 'ModernTax',
+            });
+            const filePath = `cash-flow-packs/${entity.id}/${Date.now()}-cash-flow-pack.pdf`;
+            const { error: upErr } = await adminSupabase.storage
+              .from('uploads')
+              .upload(filePath, Buffer.from(pdfBytes), {
+                contentType: 'application/pdf',
+                upsert: false,
+              });
+            if (!upErr) {
+              const pack = {
+                generated_at: new Date().toISOString(),
+                generated_by: user.id,
+                generated_by_name: profile.full_name || 'expert',
+                pdf_url: filePath,
+                price: 49.99,
+                years_covered: yearRows.length,
+                year_range: yearRows.map((r: any) => r.year).join(', '),
+                billed: false,
+                trigger: preOrdered ? 'csv_pre_order' : 'client_auto_attach',
+              };
+              await adminSupabase
+                .from('request_entities')
+                .update({
+                  gross_receipts: { ...(gr || {}), cash_flow_pack: pack },
+                })
+                .eq('id', entity.id);
+              console.log(`[upload-transcript] Generated cash-flow pack for ${entity.id} (trigger: ${pack.trigger})`);
+            } else {
+              console.error('[upload-transcript] Cash-flow PDF upload failed:', upErr);
+            }
+          } else {
+            console.log(`[upload-transcript] Cash-flow pack skipped for ${entity.id} — no financials extracted yet`);
+          }
+        }
+      } catch (cfErr) {
+        // Best-effort — completion succeeds even if pack generation fails. The
+        // pack can be generated manually later from the entity card.
+        console.error('[upload-transcript] Cash-flow pack auto-gen failed:', cfErr);
+      }
 
       // Update assignment as completed and compute SLA
       const completedAt = new Date();

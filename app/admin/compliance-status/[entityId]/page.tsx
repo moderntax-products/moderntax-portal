@@ -21,6 +21,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import { buildTaxLiabilityReport } from '@/lib/tax-liability-report';
+import { compareIncomeSnapshots, type IncomeSnapshot } from '@/lib/income-reconciliation';
 
 interface PageProps {
   params: Promise<{ entityId: string }>;
@@ -46,6 +47,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
     .select(`
       id, entity_name, tid, tid_kind, form_type, years, status,
       transcript_urls, transcript_html_urls, completed_at, request_id,
+      income_baseline, income_snapshot,
       requests(loan_number, client_id, clients(name))
     `)
     .eq('id', entityId)
@@ -247,6 +249,9 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
           </p>
         </section>
 
+        {/* Section 2.5: Income Reconciliation (Enterprise Bank / Derek Le 2026-05-11) */}
+        {renderIncomeReconciliation(entity.income_baseline, entity.income_snapshot)}
+
         {/* Section 3: Repayment Plan */}
         <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
           <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
@@ -312,6 +317,140 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Income Reconciliation section renderer
+// ---------------------------------------------------------------------------
+
+function renderIncomeReconciliation(
+  baseline: IncomeSnapshot | null,
+  current: IncomeSnapshot | null,
+) {
+  const fmtUsd = (n: number | null) =>
+    typeof n === 'number'
+      ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '—';
+  const fmtPct = (p: number | null) =>
+    typeof p === 'number'
+      ? `${p > 0 ? '+' : ''}${(p * 100).toFixed(1)}%`
+      : '—';
+  const fieldLabel = (f: string) =>
+    f === 'grossReceipts' ? 'Gross receipts' :
+    f === 'totalIncome' ? 'Total income' :
+    f === 'totalTax' ? 'Total tax' :
+    f === 'agi' ? 'AGI' : f;
+
+  // Case A: no snapshot — entity hasn't been processed by the income hook yet.
+  if (!current) {
+    return (
+      <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+        <h2 className="text-lg font-bold text-mt-dark mb-2 pb-2 border-b border-gray-200">
+          Income Reconciliation
+        </h2>
+        <p className="text-sm text-gray-500 italic">
+          Income figures haven&apos;t been captured for this entity yet. Will populate
+          automatically on the next transcript completion.
+        </p>
+      </section>
+    );
+  }
+
+  // Case B: first pull — baseline just established.
+  const isFirstPull = baseline && JSON.stringify(baseline) === JSON.stringify(current);
+  if (!baseline || isFirstPull) {
+    return (
+      <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+        <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
+          Income Reconciliation
+        </h2>
+        <div className="bg-emerald-50 border-l-4 border-emerald-500 rounded-r p-4 mb-4">
+          <p className="text-base font-bold text-emerald-900">✓ Baseline established</p>
+          <p className="text-sm text-emerald-800 mt-1">
+            Income figures from this entity&apos;s {current.taxYear} return are now the reconciliation baseline.
+            Subsequent monitoring pulls will be compared against these numbers.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <BaselineCell label="Gross receipts" value={fmtUsd(current.grossReceipts)} />
+          <BaselineCell label="Total income" value={fmtUsd(current.totalIncome)} />
+          <BaselineCell label="Total tax" value={fmtUsd(current.totalTax)} />
+          <BaselineCell label="AGI" value={fmtUsd(current.agi)} />
+        </div>
+        <p className="text-xs text-gray-500 mt-3 italic">
+          Source: {current.source}, captured {current.capturedAt.slice(0, 10)}.
+        </p>
+      </section>
+    );
+  }
+
+  // Case C: variance available — compare and surface.
+  const variance = compareIncomeSnapshots(baseline, current);
+  const sevColor = (s: string) =>
+    s === 'MATERIAL' ? 'bg-red-50 border-red-300 text-red-800' :
+    s === 'WARNING' ? 'bg-amber-50 border-amber-300 text-amber-900' :
+    'bg-gray-50 border-gray-200 text-gray-700';
+  const headerColor =
+    variance.overallSeverity === 'MATERIAL' ? 'bg-red-50 border-red-500 text-red-900' :
+    variance.overallSeverity === 'WARNING' ? 'bg-amber-50 border-amber-500 text-amber-900' :
+    'bg-emerald-50 border-emerald-500 text-emerald-900';
+
+  return (
+    <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+      <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
+        Income Reconciliation
+      </h2>
+      <div className={`border-l-4 rounded-r p-4 mb-4 ${headerColor}`}>
+        <p className="text-base font-bold">
+          {variance.overallSeverity === 'MATERIAL' ? '⚠ Material variance vs. loan-approval baseline' :
+           variance.overallSeverity === 'WARNING' ? '◐ Notable variance vs. baseline' :
+           '✓ Within tolerance of baseline'}
+        </p>
+        <p className="text-sm mt-1">{variance.summary}</p>
+      </div>
+      <div className="overflow-x-auto border border-gray-200 rounded-lg">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+            <tr>
+              <th className="px-4 py-2 text-left">Field</th>
+              <th className="px-4 py-2 text-right">Baseline ({baseline.taxYear})</th>
+              <th className="px-4 py-2 text-right">Current ({current.taxYear})</th>
+              <th className="px-4 py-2 text-right">Δ Absolute</th>
+              <th className="px-4 py-2 text-right">Δ %</th>
+              <th className="px-4 py-2 text-left">Severity</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {variance.fields.map((f, i) => (
+              <tr key={i}>
+                <td className="px-4 py-2.5 font-semibold">{fieldLabel(f.field)}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs">{fmtUsd(f.baseline)}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs">{fmtUsd(f.current)}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs">{f.deltaAbsolute !== null ? fmtUsd(f.deltaAbsolute) : '—'}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs">{fmtPct(f.deltaPct)}</td>
+                <td className="px-4 py-2.5">
+                  <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold border ${sevColor(f.severity)}`}>{f.severity}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-gray-500 mt-3 italic">
+        Baseline: {baseline.source}, captured {baseline.capturedAt.slice(0, 10)}. Current: {current.source}, captured {current.capturedAt.slice(0, 10)}.
+        Severity bands: INFO ≤ 5%, WARNING 5–15%, MATERIAL &gt; 15%.
+      </p>
+    </section>
+  );
+}
+
+function BaselineCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg p-3 border bg-gray-50 border-gray-200">
+      <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">{label}</p>
+      <p className="text-base font-bold mt-1 text-mt-dark font-mono">{value}</p>
     </div>
   );
 }

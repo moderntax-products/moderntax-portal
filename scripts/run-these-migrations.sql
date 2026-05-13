@@ -33,6 +33,24 @@ CREATE INDEX IF NOT EXISTS request_entities_erc_full_sweep_session_idx
 
 
 -- ---------------------------------------------------------------------------
+-- #1b: Income baseline + snapshot columns (Enterprise Bank / Derek Le ask)
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.request_entities
+  ADD COLUMN IF NOT EXISTS income_baseline JSONB,
+  ADD COLUMN IF NOT EXISTS income_snapshot JSONB;
+
+COMMENT ON COLUMN public.request_entities.income_baseline IS
+  'IncomeSnapshot captured at LOAN APPROVAL TIME. Set on the first pull for this (client, TID). Inherited by subsequent pulls. Reconciliation reference for post-funding income monitoring.';
+COMMENT ON COLUMN public.request_entities.income_snapshot IS
+  'IncomeSnapshot from THIS entity''s pull. For first pull, equals income_baseline. For subsequent pulls, compared against income_baseline to surface variance.';
+
+CREATE INDEX IF NOT EXISTS request_entities_tid_client_completed_idx
+  ON public.request_entities (tid)
+  INCLUDE (request_id)
+  WHERE income_snapshot IS NOT NULL;
+
+
+-- ---------------------------------------------------------------------------
 -- #2: check_reissue_requests table
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.check_reissue_requests (
