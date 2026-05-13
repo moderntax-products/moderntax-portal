@@ -22,6 +22,7 @@ import Link from 'next/link';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import { buildTaxLiabilityReport } from '@/lib/tax-liability-report';
 import { compareIncomeSnapshots, type IncomeSnapshot } from '@/lib/income-reconciliation';
+import { MonitoringEnrollCTA } from '@/components/MonitoringEnrollCTA';
 
 interface PageProps {
   params: Promise<{ entityId: string }>;
@@ -112,6 +113,17 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
   const clientName = entity.requests?.clients?.name || 'Unknown';
   const loanNumber = entity.requests?.loan_number || '';
 
+  // Lookup any existing monitoring subscription for this entity so the
+  // upsell CTA below knows whether to show "Enroll" or "Active · next pull".
+  const { data: monitoringRow } = await admin
+    .from('entity_monitoring' as any)
+    .select('id, status, frequency, next_pull_date, last_pull_date, total_pulls_completed')
+    .eq('entity_id', entityId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle() as { data: any };
+  const showMonitoringCTA = profile.role === 'admin' || ['manager', 'processor', 'team_member'].includes(profile.role);
+
   const fmtUsd = (n: number) =>
     `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -197,6 +209,17 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
           <p className="text-xs text-gray-500 mt-3 italic">
             Sourced from IRS Account Transcript TC 150 entries (filed) and any &ldquo;No record of return filed&rdquo; responses (unfiled).
           </p>
+          {/* Monitoring upsell — fires when ANY unfiled-return result is detected.
+              Pitch: re-pull on cadence until the missing return appears. The
+              no-record-found pulls are free; only fresh-data pulls bill. */}
+          {showMonitoringCTA && report.filingCompliance.unfiled.length > 0 && (
+            <MonitoringEnrollCTA
+              entityId={entity.id}
+              requestId={entity.request_id}
+              unfiledCount={report.filingCompliance.unfiled.length}
+              existing={monitoringRow}
+            />
+          )}
         </section>
 
         {/* Section 2: Tax Liabilities */}
