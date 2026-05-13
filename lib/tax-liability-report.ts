@@ -74,6 +74,37 @@ export interface RepaymentPlanStatus {
   recommendation: string;
 }
 
+export interface EstimatedPaymentRow {
+  /** Tax year the payment was credited to. */
+  taxYear: string;
+  /** Quarter — 1/2/3/4 for federal estimated tax. */
+  quarter: 1 | 2 | 3 | 4 | null;
+  /** Date the payment posted. */
+  postedOn: string;
+  /** Amount of the payment in dollars. */
+  amount: number;
+  /** Transaction code that recorded it (typically TC 670). */
+  transactionCode: string;
+  source: string;
+}
+
+export interface ExtensionAmendmentEvent {
+  /** Kind of event: extension granted, amendment received, audit assessment, etc. */
+  kind: 'extension_granted' | 'amendment_received' | 'amendment_processed' | 'audit_assessment' | 'audit_examination_started';
+  /** Date the event posted. */
+  date: string;
+  /** Transaction code (TC 460, 977, 976, 290, 420, etc.). */
+  transactionCode: string;
+  /** Form + tax year context. */
+  form: string;
+  period: string;
+  /** Dollar amount if applicable (e.g. audit assessment). */
+  amount: number | null;
+  source: string;
+  /** Plain-English description for the UI. */
+  description: string;
+}
+
 export interface TaxLiabilityReport {
   /** Entity context for the header / receipts. */
   entityName: string;
@@ -102,6 +133,14 @@ export interface TaxLiabilityReport {
 
   // ── Section 3 ──
   repaymentPlan: RepaymentPlanStatus;
+
+  // ── Section 4 (NEW — Builds Collective ask) ──
+  /** Federal estimated tax payments parsed from TC 670 entries. */
+  estimatedPayments: EstimatedPaymentRow[];
+
+  // ── Section 5 (NEW — Builds Collective ask) ──
+  /** Extension grants (TC 460), amendments (TC 977/976), audit assessments (TC 290/420). */
+  extensionsAndAmendments: ExtensionAmendmentEvent[];
 
   // ── Overall ──
   /** Worst severity across all flags found. */
@@ -235,6 +274,90 @@ export function buildTaxLiabilityReport(
     totalAccrued += accrued;
   }
 
+  // ── Section 4: Federal estimated tax payments (TC 670) ────────────────
+  // Builds Collective ask: quarterly payment confirmation. TC 670 is the
+  // IRS code for "subsequent payment" — used for both quarterly estimated
+  // tax (1040-ES, 1120-W) and balance-due payments. We surface all of them
+  // here so the lender can see the rhythm of estimated-tax remittance.
+  const estimatedPayments: EstimatedPaymentRow[] = [];
+  for (const p of parsed) {
+    if (p.screen.isBlank) continue;
+    const taxYear = p.periodEnding?.split('-')[2] || '';
+    const txs = p.screen.transactionCodes.filter(tc => tc.code === '670' || tc.code === '660' /* tax payment */);
+    for (const tc of txs) {
+      const amt = parseAmount(tc.amount);
+      if (amt === null) continue;
+      estimatedPayments.push({
+        taxYear,
+        quarter: inferQuarterFromDate(tc.date),
+        postedOn: normalizeDate(tc.date) || tc.date,
+        amount: Math.abs(amt),  // TC 670 amounts can be negative (credit); we want positive
+        transactionCode: tc.code,
+        source: p.source,
+      });
+    }
+  }
+  estimatedPayments.sort((a, b) => b.postedOn.localeCompare(a.postedOn));
+
+  // ── Section 5: Extension grants + amendments + audits ─────────────────
+  // Builds Collective ask: extension/amendment tracking. Common codes:
+  //   TC 460 — Extension of time to file granted
+  //   TC 976 — Amended return filed (duplicate from taxpayer)
+  //   TC 977 — Amended return forwarded for processing
+  //   TC 290 — Additional tax assessed (audit, math error, etc.)
+  //   TC 420 — Examination indicator (audit selected)
+  //   TC 421 — Closed examination (audit closed)
+  const extensionsAndAmendments: ExtensionAmendmentEvent[] = [];
+  for (const p of parsed) {
+    if (p.screen.isBlank) continue;
+    const periodLabel = formatPeriodLabel(p.periodEnding, p.meta);
+    const formLabel = normalizeFormLabel(p.meta.formType, p.periodEnding) || 'Unknown';
+    for (const tc of p.screen.transactionCodes) {
+      const amt = parseAmount(tc.amount);
+      const date = normalizeDate(tc.date) || tc.date;
+      switch (tc.code) {
+        case '460':
+          extensionsAndAmendments.push({
+            kind: 'extension_granted', date, transactionCode: '460',
+            form: formLabel, period: periodLabel, amount: null, source: p.source,
+            description: `IRS granted an extension of time to file ${formLabel} for ${periodLabel}.`,
+          });
+          break;
+        case '977':
+          extensionsAndAmendments.push({
+            kind: 'amendment_received', date, transactionCode: '977',
+            form: formLabel, period: periodLabel, amount: null, source: p.source,
+            description: `Amended return for ${formLabel} ${periodLabel} received by IRS, forwarded for processing.`,
+          });
+          break;
+        case '976':
+          extensionsAndAmendments.push({
+            kind: 'amendment_processed', date, transactionCode: '976',
+            form: formLabel, period: periodLabel, amount: null, source: p.source,
+            description: `Amended return for ${formLabel} ${periodLabel} processed (duplicate from taxpayer).`,
+          });
+          break;
+        case '290':
+          if (amt && amt > 0) {
+            extensionsAndAmendments.push({
+              kind: 'audit_assessment', date, transactionCode: '290',
+              form: formLabel, period: periodLabel, amount: amt, source: p.source,
+              description: `IRS assessed additional tax of $${amt.toLocaleString('en-US', { minimumFractionDigits: 2 })} on ${formLabel} ${periodLabel} (audit, math error, or amendment outcome).`,
+            });
+          }
+          break;
+        case '420':
+          extensionsAndAmendments.push({
+            kind: 'audit_examination_started', date, transactionCode: '420',
+            form: formLabel, period: periodLabel, amount: null, source: p.source,
+            description: `IRS opened examination on ${formLabel} ${periodLabel}. Audit in progress.`,
+          });
+          break;
+      }
+    }
+  }
+  extensionsAndAmendments.sort((a, b) => b.date.localeCompare(a.date));
+
   // ── Section 3: Repayment Plan Status ────────────────────────────────────
   const allFlags: ComplianceFlag[] = parsed.flatMap(p => p.screen.flags);
   const installmentFlags = allFlags.filter(f => f.type === 'INSTALLMENT');
@@ -291,9 +414,32 @@ export function buildTaxLiabilityReport(
       totalAccrued,
     },
     repaymentPlan,
+    estimatedPayments,
+    extensionsAndAmendments,
     overallSeverity,
     headlineSummary,
   };
+}
+
+/** "$1,234.56" or "$-1,234.56" → 1234.56 / -1234.56. null if unparseable. */
+function parseAmount(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const cleaned = s.replace(/[\$,\s]/g, '');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+/** "MM-DD-YYYY" → infer quarter (1/2/3/4) from month. null if unparseable. */
+function inferQuarterFromDate(date: string | null | undefined): 1 | 2 | 3 | 4 | null {
+  if (!date) return null;
+  const m = date.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return null;
+  const month = parseInt(m[1], 10);
+  if (month >= 1 && month <= 3) return 1;
+  if (month >= 4 && month <= 6) return 2;
+  if (month >= 7 && month <= 9) return 3;
+  if (month >= 10 && month <= 12) return 4;
+  return null;
 }
 
 // ---------------------------------------------------------------------------

@@ -287,6 +287,85 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
         {/* Section 2.5: Income Reconciliation (Enterprise Bank / Derek Le 2026-05-11) */}
         {renderIncomeReconciliation(entity.income_baseline, entity.income_snapshot)}
 
+        {/* Section 4: Federal estimated tax payments (Builds Collective ask) */}
+        {report.estimatedPayments.length > 0 && (
+          <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+            <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
+              Federal Tax Payments
+            </h2>
+            <p className="text-xs text-gray-500 mb-3">
+              Quarterly estimated tax + balance-due payments parsed from TC 670 entries. Useful for
+              confirming the borrower has been remitting taxes on a regular cadence.
+            </p>
+            <div className="overflow-x-auto border border-gray-200 rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Posted on</th>
+                    <th className="px-4 py-2 text-left">Tax Year</th>
+                    <th className="px-4 py-2 text-left">Quarter</th>
+                    <th className="px-4 py-2 text-right">Amount</th>
+                    <th className="px-4 py-2 text-left">TC</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {report.estimatedPayments.slice(0, 20).map((p, i) => (
+                    <tr key={i}>
+                      <td className="px-4 py-2.5 font-mono text-xs">{p.postedOn}</td>
+                      <td className="px-4 py-2.5">{p.taxYear || '—'}</td>
+                      <td className="px-4 py-2.5">{p.quarter ? `Q${p.quarter}` : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs font-bold text-emerald-700">{fmtUsd(p.amount)}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-500">TC {p.transactionCode}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {report.estimatedPayments.length > 20 && (
+                <p className="text-xs text-gray-500 italic px-4 py-2">Showing latest 20 of {report.estimatedPayments.length} payments.</p>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Section 5: Extensions, amendments, audits (Builds Collective ask) */}
+        {report.extensionsAndAmendments.length > 0 && (
+          <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
+            <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
+              Extensions, Amendments &amp; Audits
+            </h2>
+            <p className="text-xs text-gray-500 mb-3">
+              Filing modifications and IRS actions parsed from transcript transaction codes
+              (TC 460 = extension granted, TC 976/977 = amendment, TC 290 = additional assessment,
+              TC 420 = examination opened).
+            </p>
+            <ul className="space-y-3">
+              {report.extensionsAndAmendments.slice(0, 15).map((e, i) => {
+                const kindStyle =
+                  e.kind === 'extension_granted' ? 'bg-blue-50 border-blue-300 text-blue-900' :
+                  e.kind === 'amendment_received' || e.kind === 'amendment_processed' ? 'bg-indigo-50 border-indigo-300 text-indigo-900' :
+                  e.kind === 'audit_assessment' ? 'bg-red-50 border-red-300 text-red-900' :
+                  e.kind === 'audit_examination_started' ? 'bg-amber-50 border-amber-300 text-amber-900' :
+                  'bg-gray-50 border-gray-200 text-gray-700';
+                return (
+                  <li key={i} className={`border-l-4 px-4 py-3 rounded-r ${kindStyle}`}>
+                    <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                      <p className="text-sm font-semibold">
+                        {e.form} {e.period} · {e.kind.replace(/_/g, ' ')}{' '}
+                        <span className="text-xs opacity-70">(TC {e.transactionCode})</span>
+                      </p>
+                      <p className="text-xs font-mono opacity-80">{e.date}</p>
+                    </div>
+                    <p className="text-sm mt-1 opacity-90">{e.description}</p>
+                    {e.amount !== null && (
+                      <p className="text-xs font-mono mt-1">Amount: {fmtUsd(e.amount)}</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
         {/* Section 3: Repayment Plan */}
         <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
           <h2 className="text-lg font-bold text-mt-dark mb-4 pb-2 border-b border-gray-200">
