@@ -142,11 +142,66 @@ export interface TaxLiabilityReport {
   /** Extension grants (TC 460), amendments (TC 977/976), audit assessments (TC 290/420). */
   extensionsAndAmendments: ExtensionAmendmentEvent[];
 
+  // ── Section 6 (NEW — ERC Refund Recovery upsell engine) ──
+  /**
+   * ERC refund delivery analysis. For any entity with 941 transcripts in
+   * the eligible Q2 2020 → Q4 2021 ERC window, this reconciles every
+   * TC 846 ("Refund issued") with same-day TC 740 ("Undelivered refund
+   * returned to IRS") events. When `total_undelivered > 0`, the entity
+   * has money sitting at the IRS that's recoverable via Form 3911 —
+   * which is the natural upsell to the $1,000 ERC Recovery service.
+   *
+   * Surfaces in both the admin compliance-status page (banner + table)
+   * and the v1 transcripts API response (machine-readable). Used by
+   * Mento's discovery (found $68,098.13 undelivered, two refunds).
+   */
+  ercRefundStatus: ErcRefundStatus;
+
   // ── Overall ──
   /** Worst severity across all flags found. */
   overallSeverity: 'CRITICAL' | 'WARNING' | 'CLEAN';
   /** Pre-baked banner text the UI can drop in. */
   headlineSummary: string;
+}
+
+/**
+ * Snapshot of an entity's ERC refund delivery state. When `totalUndelivered`
+ * is positive, the operator UI should prominently surface the recovery
+ * opportunity and link to the Form 3911 / PPS reissue service.
+ */
+export interface ErcRefundStatus {
+  /** True if any 941 ERC-window transcripts were analyzed for this entity. */
+  hasErcActivity: boolean;
+  /** Sum of every TC 846 refund issued (across all 941 quarters analyzed). */
+  totalIssued: number;
+  /** Sum of refunds successfully delivered (TC 846 with no matching TC 740). */
+  totalDelivered: number;
+  /** Sum of refunds returned undelivered by USPS (TC 740 events). */
+  totalUndelivered: number;
+  /** Per-refund event log — each row is one TC 846 with its delivery state. */
+  events: ErcRefundEvent[];
+  /** Stale address-of-record candidate, parsed from the most recent transcript header. */
+  addressOfRecord: string | null;
+  /**
+   * One-line operator-facing summary. Empty when totalUndelivered === 0.
+   * E.g. "$68,098.13 in 2 refunds sitting at IRS — recoverable via Form 3911."
+   */
+  recoveryHeadline: string;
+}
+
+export interface ErcRefundEvent {
+  /** Quarter ending date (e.g. "09-30-2021") parsed from the transcript. */
+  period: string;
+  /** TC 846 issue date. */
+  issuedOn: string;
+  /** Refund amount. */
+  amount: number;
+  /** Status: 'delivered' if no matching TC 740, 'undelivered' if returned to IRS. */
+  status: 'delivered' | 'undelivered';
+  /** If undelivered, the TC 740 return date (same day as issue in most cases). */
+  returnedOn: string | null;
+  /** Transcript file the event was extracted from. */
+  source: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +231,9 @@ export function buildTaxLiabilityReport(
   tin: string,
   transcripts: TranscriptInput[],
 ): TaxLiabilityReport {
-  const parsed = transcripts.map(t => ({
+  const parsed: ParsedTranscript[] = transcripts.map(t => ({
     source: t.source,
+    html: t.html,
     meta: parseTranscriptMetadata(t.html),
     screen: screenTranscriptHtml(t.html),
     /** Parsed tax-period-ending date from the modern IRS HTML (MM-DD-YYYY). */
@@ -384,6 +440,19 @@ export function buildTaxLiabilityReport(
     ),
   };
 
+  // ── Section 6: ERC Refund Delivery Status ──────────────────────────────
+  //
+  // For every 941 transcript whose tax period falls in the ERC window
+  // (Q2 2020 → Q4 2021, RSB-eligible), reconcile TC 846 refund-issued
+  // events with same-day TC 740 undelivered-return events. When a TC 740
+  // matches a TC 846 by date AND amount, that refund money is sitting in
+  // the entity's IRS account — recoverable via Form 3911.
+  //
+  // This is the upsell engine. Surfacing $50K-$100K of "we'll go get this
+  // for you" money is what justifies the $1,000 recovery service.
+  // Productized from Mento Technologies' discovery (commit 9993b6b+ era).
+  const ercRefundStatus = buildErcRefundStatus(parsed);
+
   // ── Overall severity + headline ─────────────────────────────────────────
   let overallSeverity: 'CRITICAL' | 'WARNING' | 'CLEAN' = 'CLEAN';
   if (allFlags.some(f => f.severity === 'CRITICAL') || totalBalance > 0 || unfiled.length > 0) {
@@ -391,12 +460,16 @@ export function buildTaxLiabilityReport(
   } else if (allFlags.some(f => f.severity === 'WARNING')) {
     overallSeverity = 'WARNING';
   }
+  // Undelivered refunds are CRITICAL — there's money waiting at the IRS
+  // for the entity, and they need to act (Form 3911) to claim it.
+  if (ercRefundStatus.totalUndelivered > 0) overallSeverity = 'CRITICAL';
 
   const headlineSummary = buildHeadline(
     overallSeverity,
     unfiled.length,
     totalBalance,
     repaymentPlan,
+    ercRefundStatus,
   );
 
   return {
@@ -416,8 +489,125 @@ export function buildTaxLiabilityReport(
     repaymentPlan,
     estimatedPayments,
     extensionsAndAmendments,
+    ercRefundStatus,
     overallSeverity,
     headlineSummary,
+  };
+}
+
+/**
+ * Internal shape of one transcript after the main builder pre-parses it.
+ * Exported only so helper functions can share the type signature.
+ */
+interface ParsedTranscript {
+  source: string;
+  html: string;
+  meta: ReturnType<typeof parseTranscriptMetadata>;
+  screen: ReturnType<typeof screenTranscriptHtml>;
+  periodEnding: string | null;
+}
+
+/**
+ * Build the ERC refund delivery snapshot. For each parsed transcript whose
+ * tax period falls in the ERC-eligible window (Q2 2020 → Q4 2021), pair
+ * every TC 846 refund-issued event with a same-date TC 740 undelivered-
+ * return event if one exists. Refunds with no matching TC 740 are
+ * `delivered`; those with one are `undelivered` (recoverable via 3911).
+ */
+function buildErcRefundStatus(parsed: ParsedTranscript[]): ErcRefundStatus {
+  // ERC eligibility window: Q2 2020 (period ending 06-30-2020) through
+  // Q4 2021 (period ending 12-31-2021), inclusive on both ends. Q4 2021
+  // is RSB-only but we include it for completeness — non-RSB entities
+  // will have no TC 766/846 activity in that quarter anyway.
+  const isErcPeriod = (periodEnding: string | null): boolean => {
+    if (!periodEnding) return false;
+    const m = periodEnding.match(/^(\d{2})-\d{2}-(\d{4})$/);
+    if (!m) return false;
+    const month = parseInt(m[1], 10);
+    const year = parseInt(m[2], 10);
+    if (year === 2020 && month >= 6) return true;
+    if (year === 2021) return true;
+    return false;
+  };
+
+  const events: ErcRefundEvent[] = [];
+  let addressOfRecord: string | null = null;
+  let mostRecentTranscript: ParsedTranscript | null = null;
+  let hasErcActivity = false;
+
+  for (const p of parsed) {
+    if (p.screen.isBlank) continue;
+    if (!isErcPeriod(p.periodEnding)) continue;
+    // Only 941 transcripts carry ERC refund events. Skip 1120/1040 here.
+    const form = (p.meta.formType || '').toUpperCase();
+    if (form !== '941' && !form.includes('941')) continue;
+
+    hasErcActivity = true;
+    if (!mostRecentTranscript) mostRecentTranscript = p;
+
+    // Find every TC 846 (refund issued) — these are positive amounts
+    // representing money the IRS sent out.
+    const issued = p.screen.transactionCodes.filter(tc => tc.code === '846');
+    // Find every TC 740 (undelivered refund returned to IRS) — these
+    // are negative amounts representing money that came back.
+    const undelivered = p.screen.transactionCodes.filter(tc => tc.code === '740');
+
+    for (const t846 of issued) {
+      const amt = parseAmount(t846.amount);
+      if (amt === null || amt <= 0) continue;
+      // Match a same-date TC 740 with the same absolute amount.
+      const matched = undelivered.find(t740 => {
+        const u = parseAmount(t740.amount);
+        return u !== null && Math.abs(u) === amt && t740.date === t846.date;
+      });
+      events.push({
+        period: p.periodEnding || 'unknown',
+        issuedOn: t846.date,
+        amount: amt,
+        status: matched ? 'undelivered' : 'delivered',
+        returnedOn: matched ? matched.date : null,
+        source: p.source,
+      });
+    }
+  }
+
+  // Try to surface the address-of-record from the most recent transcript
+  // header. Stale c/o addresses are the #1 cause of undelivered refunds.
+  if (mostRecentTranscript) {
+    const headerMatch = mostRecentTranscript.html.match(/<section class="HEADER">([\s\S]{0,800})<\/section>/i);
+    if (headerMatch) {
+      const lines = headerMatch[1]
+        .replace(/<[^>]+>/g, '\n')
+        .split('\n')
+        .map(s => s.trim())
+        .filter(s => s.length > 0 && s.length < 80)
+        .slice(0, 5);
+      if (lines.length > 0) addressOfRecord = lines.join(', ');
+    }
+  }
+
+  const totalIssued = events.reduce((s, e) => s + e.amount, 0);
+  const totalUndelivered = events
+    .filter(e => e.status === 'undelivered')
+    .reduce((s, e) => s + e.amount, 0);
+  const totalDelivered = totalIssued - totalUndelivered;
+
+  let recoveryHeadline = '';
+  if (totalUndelivered > 0) {
+    const undeliveredCount = events.filter(e => e.status === 'undelivered').length;
+    recoveryHeadline = `$${totalUndelivered.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in ${undeliveredCount} refund${undeliveredCount === 1 ? '' : 's'} sitting at the IRS — recoverable via Form 3911 reissue.`;
+  }
+
+  events.sort((a, b) => b.issuedOn.localeCompare(a.issuedOn));
+
+  return {
+    hasErcActivity,
+    totalIssued,
+    totalDelivered,
+    totalUndelivered,
+    events,
+    addressOfRecord,
+    recoveryHeadline,
   };
 }
 
@@ -536,11 +726,19 @@ function buildHeadline(
   unfiledCount: number,
   totalBalance: number,
   plan: RepaymentPlanStatus,
+  ercRefundStatus?: ErcRefundStatus,
 ): string {
   if (severity === 'CLEAN') {
     return 'No outstanding tax liabilities, no unfiled returns, no active collection action. Clean compliance profile.';
   }
   const parts: string[] = [];
+  // Lead with the undelivered ERC refund if present — it's a positive
+  // finding (money waiting for the borrower) and the headline upsell for
+  // the Form 3911 recovery service.
+  if (ercRefundStatus && ercRefundStatus.totalUndelivered > 0) {
+    const undeliveredCount = ercRefundStatus.events.filter(e => e.status === 'undelivered').length;
+    parts.push(`$${ercRefundStatus.totalUndelivered.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in ${undeliveredCount} undelivered ERC refund${undeliveredCount === 1 ? '' : 's'} recoverable from IRS`);
+  }
   if (totalBalance > 0) {
     parts.push(`outstanding balance of $${totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
   }

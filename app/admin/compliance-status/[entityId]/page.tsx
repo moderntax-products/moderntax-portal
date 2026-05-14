@@ -287,6 +287,111 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
         {/* Section 2.5: Income Reconciliation (Enterprise Bank / Derek Le 2026-05-11) */}
         {renderIncomeReconciliation(entity.income_baseline, entity.income_snapshot)}
 
+        {/* Section 2.75: ERC Refund Delivery Status (Mento upsell engine).
+            Auto-detects ERC refunds issued by IRS that came back as undelivered
+            (TC 846 paired with same-date TC 740). Surfaces a recovery CTA for
+            the $1,000 Form 3911 service when any unclaimed refund is found. */}
+        {report.ercRefundStatus.hasErcActivity && (
+          <section className={`rounded-lg shadow border p-6 mb-6 ${
+            report.ercRefundStatus.totalUndelivered > 0
+              ? 'bg-amber-50 border-amber-300'
+              : 'bg-white border-gray-200'
+          }`}>
+            <h2 className="text-lg font-bold text-mt-dark mb-2 pb-2 border-b border-gray-200 flex items-center justify-between">
+              <span>ERC Refund Delivery Status</span>
+              {report.ercRefundStatus.totalUndelivered > 0 && (
+                <span className="text-xs font-normal px-2 py-1 rounded bg-amber-200 text-amber-900">
+                  RECOVERABLE
+                </span>
+              )}
+            </h2>
+            {report.ercRefundStatus.totalUndelivered > 0 ? (
+              <p className="text-sm text-amber-900 font-medium mb-3">
+                🚨 {report.ercRefundStatus.recoveryHeadline}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500 mb-3">
+                All ERC refunds issued by IRS were successfully delivered to the borrower. No recovery action needed.
+              </p>
+            )}
+            <div className="grid grid-cols-3 gap-3 mb-4 text-sm">
+              <div className="bg-white rounded border border-gray-200 p-3">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Total ERC issued</div>
+                <div className="text-base font-bold text-mt-dark mt-1">
+                  ${report.ercRefundStatus.totalIssued.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+              <div className="bg-white rounded border border-gray-200 p-3">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Successfully delivered</div>
+                <div className="text-base font-bold text-green-700 mt-1">
+                  ${report.ercRefundStatus.totalDelivered.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+              <div className={`rounded border p-3 ${
+                report.ercRefundStatus.totalUndelivered > 0
+                  ? 'bg-amber-100 border-amber-300'
+                  : 'bg-white border-gray-200'
+              }`}>
+                <div className="text-xs uppercase tracking-wide text-gray-500">Undelivered, at IRS</div>
+                <div className={`text-base font-bold mt-1 ${
+                  report.ercRefundStatus.totalUndelivered > 0 ? 'text-amber-900' : 'text-mt-dark'
+                }`}>
+                  ${report.ercRefundStatus.totalUndelivered.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-600">
+                <tr>
+                  <th className="text-left px-4 py-2">Period</th>
+                  <th className="text-left px-4 py-2">Refund issued</th>
+                  <th className="text-right px-4 py-2">Amount</th>
+                  <th className="text-left px-4 py-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.ercRefundStatus.events.map((e, i) => (
+                  <tr key={i} className="border-b border-gray-100">
+                    <td className="px-4 py-2 font-mono text-xs">{e.period}</td>
+                    <td className="px-4 py-2 font-mono text-xs">{e.issuedOn}</td>
+                    <td className="px-4 py-2 text-right font-medium">
+                      ${e.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-4 py-2">
+                      {e.status === 'undelivered' ? (
+                        <span className="inline-flex items-center gap-1 text-amber-900 font-medium">
+                          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                          Returned to IRS {e.returnedOn ? `(${e.returnedOn})` : ''}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-green-700">
+                          <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                          Delivered
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {report.ercRefundStatus.totalUndelivered > 0 && (
+              <div className="mt-4 bg-white rounded border border-amber-300 p-4">
+                <p className="text-sm font-semibold text-mt-dark mb-1">Recovery path</p>
+                <p className="text-xs text-gray-600 mb-2">
+                  Undelivered refunds remain credited to the entity's IRS account. Recovery requires Form 3911
+                  (Taxpayer Statement Regarding Refund) filed with the corrected mailing address, OR a
+                  POA-authorized PPS reissue call. Typical timeline: 6-8 weeks from 3911 receipt to reissued check.
+                </p>
+                {report.ercRefundStatus.addressOfRecord && (
+                  <p className="text-xs text-amber-900">
+                    <strong>Address-of-record on file (stale):</strong> <span className="font-mono">{report.ercRefundStatus.addressOfRecord}</span>
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Section 4: Federal estimated tax payments (Builds Collective ask) */}
         {report.estimatedPayments.length > 0 && (
           <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
