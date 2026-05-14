@@ -44,7 +44,10 @@ export async function GET(request: NextRequest) {
     const periodStartDate = new Date(periodStart);
     const periodEndDate = new Date(periodEnd + 'T23:59:59.999Z');
 
-    // Get all clients (including Mercury + Stripe integration fields)
+    // Get all clients (including Mercury + Stripe integration fields).
+    // CRITICAL: exclude sandbox clients here — otherwise the monthly
+    // auto-invoice cron will generate real Stripe/Mercury invoices for
+    // synthetic prospect demo accounts (Vine, Builds Collective, Moxie).
     const { data: clients, error: clientsError } = await supabase
       .from('clients')
       .select(
@@ -58,7 +61,8 @@ export async function GET(request: NextRequest) {
         // skips the Mercury invoice block.
         'stripe_customer_id, stripe_payment_method_id, payment_method_status, ' +
         'address_line1, address_line2, address_city, address_state, address_postal_code, address_country'
-      ) as {
+      )
+      .not('slug', 'ilike', '%-sandbox') as {
         data: {
           id: string;
           name: string;

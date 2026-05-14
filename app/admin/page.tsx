@@ -73,10 +73,19 @@ export default async function AdminPage({ searchParams }: PageProps) {
     redirect('/');
   }
 
-  // Fetch all clients
+  // Sandbox clients (slug ending in `-sandbox`) are seeded with synthetic
+  // EINs/SSNs for prospect curl demos (Vine, Builds Collective, Moxie).
+  // They must be excluded from EVERY admin aggregate view — billing, the
+  // "All Requests" table, stuck-entity alerts, the bottleneck analysis,
+  // and the recent-invoices panel. Filtering at the query level here
+  // means every downstream stats/dashboard derivation is sandbox-clean
+  // without each consumer having to remember to filter.
+
+  // Fetch all clients (excludes sandboxes)
   const { data: clients, error: clientsError } = await supabase
     .from('clients')
     .select('*')
+    .not('slug', 'ilike', '%-sandbox')
     .order('name', { ascending: true }) as { data: { id: string; name: string; slug: string; domain: string | null; free_trial: boolean | null; api_key: string | null; api_request_limit: number | null; billing_payment_method: string | null; billing_ap_email: string | null; billing_ap_phone: string | null; billing_rate_pdf: number; billing_rate_csv: number }[] | null; error: any };
 
   // Fetch all requests with entities (include completed_at for revenue calc) and client info.
@@ -84,13 +93,15 @@ export default async function AdminPage({ searchParams }: PageProps) {
   //       for accurate counts. The admin's "All Requests" UI below paginates via `visibleRequests`.
   const { data: allRequests, error: requestsError } = await supabase
     .from('requests')
-    .select('*, request_entities(id, entity_name, status, completed_at), clients(name, slug)')
+    .select('*, request_entities(id, entity_name, status, completed_at), clients!inner(name, slug)')
+    .not('clients.slug', 'ilike', '%-sandbox')
     .order('updated_at', { ascending: false }) as { data: any[] | null; error: any };
 
   // Fetch invoices for billing overview
   const { data: allInvoices } = await supabase
     .from('invoices')
-    .select('*, clients(name, slug)')
+    .select('*, clients!inner(name, slug)')
+    .not('clients.slug', 'ilike', '%-sandbox')
     .order('billing_period_start', { ascending: false })
     .limit(10) as { data: any[] | null; error: any };
 
@@ -110,20 +121,23 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
   const { data: stuckSentEntities } = await supabase
     .from('request_entities')
-    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(name, slug))')
     .eq('status', '8821_sent')
+    .not('requests.clients.slug', 'ilike', '%-sandbox')
     .lt('updated_at', fiveDaysAgo) as { data: any[] | null; error: any };
 
   const { data: stuckQueueEntities } = await supabase
     .from('request_entities')
-    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(name, slug))')
     .eq('status', 'irs_queue')
+    .not('requests.clients.slug', 'ilike', '%-sandbox')
     .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
   const { data: stuckProcessingEntities } = await supabase
     .from('request_entities')
-    .select('id, entity_name, status, updated_at, request_id, requests(loan_number, clients(name))')
+    .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(name, slug))')
     .eq('status', 'processing')
+    .not('requests.clients.slug', 'ilike', '%-sandbox')
     .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
   // stuckEntities replaced by bottleneck analysis below
@@ -135,10 +149,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
     .from('requests')
     .select(`
       id, loan_number, status, created_at, client_id, requested_by,
-      clients(name),
+      clients!inner(name, slug),
       profiles!requests_requested_by_fkey(full_name, email, role)
     `)
     .not('status', 'in', '("completed","failed","cancelled")')
+    .not('clients.slug', 'ilike', '%-sandbox')
     .order('created_at', { ascending: true }) as { data: any[] | null; error: any };
 
   const incompleteIds = (incompleteRequests || []).map((r: any) => r.id);

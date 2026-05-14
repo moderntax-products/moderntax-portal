@@ -52,24 +52,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Get unique client IDs from managers
-    const clientIds = [...new Set(managers.map((m) => m.client_id))];
+    const allClientIds = [...new Set(managers.map((m) => m.client_id))];
 
-    // Get client names
+    // Get client names — exclude sandboxes so we never email a digest
+    // for synthetic prospect demo accounts even if someone accidentally
+    // attaches a manager profile to one in the future.
     const { data: clients } = await supabase
       .from('clients')
-      .select('id, name')
-      .in('id', clientIds) as { data: { id: string; name: string }[] | null; error: any };
+      .select('id, name, slug')
+      .in('id', allClientIds)
+      .not('slug', 'ilike', '%-sandbox') as { data: { id: string; name: string; slug: string }[] | null; error: any };
 
     const clientMap: Record<string, string> = {};
+    const realClientIds = new Set<string>();
     if (clients) {
-      clients.forEach((c) => { clientMap[c.id] = c.name; });
+      clients.forEach((c) => { clientMap[c.id] = c.name; realClientIds.add(c.id); });
     }
 
     let emailsSent = 0;
     const errors: { email: string; error: string }[] = [];
 
-    // Process each manager
+    // Process each manager (skip any whose client was filtered out as sandbox)
     for (const manager of managers) {
+      if (!realClientIds.has(manager.client_id)) continue;
       try {
         const clientId = manager.client_id;
         const clientName = clientMap[clientId] || 'Your Organization';

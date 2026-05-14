@@ -39,11 +39,18 @@ export async function GET(request: NextRequest) {
     const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString();
 
+    // Exclude sandbox clients from alerting — sandbox entities are
+    // intentionally seeded in non-terminal states (e.g. Moxie's Twilight
+    // Industries is permanently `irs_queue` to demo the expired-8821
+    // workflow). Filtering at the query level keeps the alert digest
+    // signal:noise high.
+
     // Query unsigned 8821s (status = '8821_sent', updated_at < 5 days ago)
     const { data: unsigned8821s, error: err1 } = await supabase
       .from('request_entities')
-      .select('id, entity_name, status, updated_at, request_id, requests(loan_number)')
+      .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', '8821_sent')
+      .not('requests.clients.slug', 'ilike', '%-sandbox')
       .lt('updated_at', fiveDaysAgo) as { data: any[] | null; error: any };
 
     if (err1) console.error('Error querying unsigned 8821s:', err1.message);
@@ -51,8 +58,9 @@ export async function GET(request: NextRequest) {
     // Query waiting for expert (status = 'irs_queue', updated_at < 48 hours ago)
     const { data: waitingForExpert, error: err2 } = await supabase
       .from('request_entities')
-      .select('id, entity_name, status, updated_at, request_id, requests(loan_number)')
+      .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', 'irs_queue')
+      .not('requests.clients.slug', 'ilike', '%-sandbox')
       .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
     if (err2) console.error('Error querying irs_queue entities:', err2.message);
@@ -60,8 +68,9 @@ export async function GET(request: NextRequest) {
     // Query processing stalled (status = 'processing', updated_at < 48 hours ago)
     const { data: processingStalled, error: err3 } = await supabase
       .from('request_entities')
-      .select('id, entity_name, status, updated_at, request_id, requests(loan_number)')
+      .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', 'processing')
+      .not('requests.clients.slug', 'ilike', '%-sandbox')
       .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
     if (err3) console.error('Error querying processing entities:', err3.message);

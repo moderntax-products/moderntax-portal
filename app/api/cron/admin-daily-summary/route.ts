@@ -58,34 +58,57 @@ export async function GET(request: NextRequest) {
     const todayISO = todayStart.toISOString();
     const dateLabel = pacificDateLabel(now);
 
+    // Pre-compute the set of request IDs that belong to sandbox clients
+    // (slug ending in `-sandbox`). Every entity/request count below uses
+    // `.not('request_id', 'in', sandboxRequestIdsSql)` so the daily email
+    // doesn't surface counts that include synthetic prospect demo data.
+    // Without this, today's email would include the 6 Moxie sandbox
+    // entity completions + the cumulative 14 sandbox entities sitting in
+    // various states.
+    const { data: sandboxClients } = await supabase
+      .from('clients').select('id').ilike('slug', '%-sandbox') as { data: { id: string }[] | null };
+    const sandboxClientIds = (sandboxClients || []).map(c => c.id);
+    const { data: sandboxRequests } = sandboxClientIds.length
+      ? await supabase.from('requests').select('id').in('client_id', sandboxClientIds) as { data: { id: string }[] | null }
+      : { data: [] };
+    const sandboxRequestIds = (sandboxRequests || []).map(r => r.id);
+    // Postgrest .not('in', ...) takes the values as a parenthesized SQL list string.
+    const sandboxIdList = sandboxRequestIds.length
+      ? `(${sandboxRequestIds.map(id => `"${id}"`).join(',')})`
+      : `("__none__")`;
+
     // New entities today (from requests created today)
     const { data: newRequestsData } = await supabase
       .from('requests')
       .select('request_entities(id)')
-      .gte('created_at', todayISO) as { data: any[] | null; error: any };
+      .gte('created_at', todayISO)
+      .not('client_id', 'in', sandboxClientIds.length ? `(${sandboxClientIds.map(id => `"${id}"`).join(',')})` : `("__none__")`) as { data: any[] | null; error: any };
     const newRequestsToday = (newRequestsData || []).reduce(
       (sum: number, r: any) => sum + (r.request_entities?.length || 0), 0
     );
 
-    // Entities completed today
+    // Entities completed today (excluding sandbox requests)
     const { count: completionsToday } = await supabase
       .from('request_entities')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'completed')
-      .gte('completed_at', todayISO);
+      .gte('completed_at', todayISO)
+      .not('request_id', 'in', sandboxIdList);
 
-    // Entities failed today
+    // Entities failed today (excluding sandbox requests)
     const { count: failuresToday } = await supabase
       .from('request_entities')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'failed')
-      .gte('updated_at', todayISO);
+      .gte('updated_at', todayISO)
+      .not('request_id', 'in', sandboxIdList);
 
-    // Active entities (not completed or failed)
+    // Active entities (not completed or failed) — excluding sandbox requests
     const { count: activeRequests } = await supabase
       .from('request_entities')
       .select('*', { count: 'exact', head: true })
-      .not('status', 'in', '("completed","failed")');
+      .not('status', 'in', '("completed","failed")')
+      .not('request_id', 'in', sandboxIdList);
 
     // Expert completions today
     const { count: expertCompletionsToday } = await supabase
@@ -107,18 +130,20 @@ export async function GET(request: NextRequest) {
       slaCompliance = Math.round((slaMet / slaData.length) * 100);
     }
 
-    // Entities completed today
+    // Entities completed today (excluding sandbox requests)
     const { count: entitiesCompletedToday } = await supabase
       .from('request_entities')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'completed')
-      .gte('completed_at', todayISO);
+      .gte('completed_at', todayISO)
+      .not('request_id', 'in', sandboxIdList);
 
-    // Entities pending
+    // Entities pending (excluding sandbox requests)
     const { count: entitiesPending } = await supabase
       .from('request_entities')
       .select('*', { count: 'exact', head: true })
-      .not('status', 'in', '("completed","failed")');
+      .not('status', 'in', '("completed","failed")')
+      .not('request_id', 'in', sandboxIdList);
 
     // -----------------------------------------------------------------
     // Real-time revenue
@@ -138,11 +163,12 @@ export async function GET(request: NextRequest) {
       .select(
         'id, completed_at, request_id, ' +
         'requests!inner(id, client_id, intake_method, ' +
-        'clients(id, name, free_trial, billing_rate_pdf, billing_rate_csv, ' +
+        'clients!inner(id, name, slug, free_trial, billing_rate_pdf, billing_rate_csv, ' +
         'billing_model, subscription_monthly_amount, subscription_included_entities, subscription_overage_rate))'
       )
       .eq('status', 'completed')
-      .gte('completed_at', todayISO) as { data: any[] | null };
+      .gte('completed_at', todayISO)
+      .not('requests.clients.slug', 'ilike', '%-sandbox') as { data: any[] | null };
 
     // Group today's completions by client so we can apply per-client billing logic.
     type ClientBucket = {
