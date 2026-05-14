@@ -10,7 +10,33 @@ interface Entity {
   ein: string;
   formType: FormType;
   years: string[];
+  /**
+   * Month (1-12) of the entity's fiscal year end. null = calendar year
+   * (Dec). Only meaningful for income-tax forms (1040/1065/1120/1120S);
+   * Form 941 always uses calendar quarters.
+   *
+   * Driver: Katie Lent / Growth Corp had a vendor pull transcripts on a
+   * 12/31 calendar year for an entity that files on a 2/28 fiscal year,
+   * producing unusable results. Capturing FYE at intake time prevents the
+   * same mistake here.
+   */
+  fiscalYearEndMonth: number | null;
 }
+
+const FISCAL_MONTHS: { value: number; label: string }[] = [
+  { value: 1, label: 'January (FYE 1/31)' },
+  { value: 2, label: 'February (FYE 2/28-29)' },
+  { value: 3, label: 'March (FYE 3/31)' },
+  { value: 4, label: 'April (FYE 4/30)' },
+  { value: 5, label: 'May (FYE 5/31)' },
+  { value: 6, label: 'June (FYE 6/30)' },
+  { value: 7, label: 'July (FYE 7/31)' },
+  { value: 8, label: 'August (FYE 8/31)' },
+  { value: 9, label: 'September (FYE 9/30)' },
+  { value: 10, label: 'October (FYE 10/31)' },
+  { value: 11, label: 'November (FYE 11/30)' },
+  { value: 12, label: 'December (calendar year)' },
+];
 
 interface RequestFormProps {
   onSubmit: (data: {
@@ -37,6 +63,7 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
       ein: '',
       formType: FormType.FORM_1040,
       years: [],
+      fiscalYearEndMonth: null,
     },
   ]);
 
@@ -50,6 +77,7 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
         ein: '',
         formType: FormType.FORM_1040,
         years: [],
+        fiscalYearEndMonth: null,
       },
     ]);
   }, [entities]);
@@ -220,23 +248,51 @@ export function RequestForm({ onSubmit, isLoading = false }: RequestFormProps) {
               </div>
             </div>
 
-            {/* Form Type */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Form Type *
-              </label>
-              <select
-                value={entity.formType}
-                onChange={(e) => handleEntityChange(entity.id, 'formType', e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                disabled={isLoading}
-              >
-                {FORM_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    Form {type}
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Form Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Form Type *
+                </label>
+                <select
+                  value={entity.formType}
+                  onChange={(e) => handleEntityChange(entity.id, 'formType', e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                  disabled={isLoading}
+                >
+                  {FORM_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      Form {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Fiscal Year End — only meaningful for income-tax forms.
+                  Form 941 always uses calendar quarters regardless of FYE. */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Fiscal Year End
+                </label>
+                <select
+                  value={entity.fiscalYearEndMonth ?? ''}
+                  onChange={(e) => handleEntityChange(
+                    entity.id,
+                    'fiscalYearEndMonth',
+                    e.target.value === '' ? null : parseInt(e.target.value, 10),
+                  )}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                  disabled={isLoading}
+                >
+                  <option value="">Calendar year (12/31) — default</option>
+                  {FISCAL_MONTHS.filter(m => m.value !== 12).map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Only override if the entity files on a non-calendar fiscal year. Otherwise leave as calendar.
+                </p>
+              </div>
             </div>
 
             {/* Years */}

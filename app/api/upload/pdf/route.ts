@@ -31,6 +31,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No client associated' }, { status: 400 });
     }
 
+    // Order gate — same trial+payment-method enforcement as CSV intake. 402
+    // when blocked so the client gets a clear "add payment method" CTA.
+    const { checkOrderGate, buildOrderGateErrorBody } = await import('@/lib/order-gate');
+    const adminForGate = createAdminClient();
+    const gate = await checkOrderGate(adminForGate, profile.client_id);
+    if (!gate.allowed) {
+      return NextResponse.json(buildOrderGateErrorBody(gate), { status: gate.status || 402 });
+    }
+
     // Get client name for notifications
     const { data: clientRecord } = await supabase
       .from('clients')
@@ -49,6 +58,12 @@ export async function POST(request: NextRequest) {
     const years = formData.get('years') as string | null;
     const notes = formData.get('notes') as string | null;
     const entityTranscriptRequested = formData.get('entity_transcript') === 'true';
+    // Fiscal year end month (1-11). NULL = calendar year. Accepts "2",
+    // "Feb", "February", "2/28", or "02-28". See parseFyeMonthFromFormData.
+    const rawFye = formData.get('fiscal_year_end_month') as string | null
+      || formData.get('fye_month') as string | null
+      || formData.get('fye') as string | null;
+    const fiscalYearEndMonth = parseFyeMonthFromFormData(rawFye);
 
     // Resolve form_type against tid_kind — rejects EIN→1040 and SSN→1120 mismatches.
     const resolved = resolveFormType(rawFormType, tidKind);
@@ -157,6 +172,7 @@ export async function POST(request: NextRequest) {
         tid_kind: ['SSN', 'ITIN'].includes(tidKind.toUpperCase()) ? 'SSN' : 'EIN',
         form_type: formType,
         years: parsedYears,
+        fiscal_year_end_month: fiscalYearEndMonth,
         signed_8821_url: filePath,
         status: '8821_signed',
       };
@@ -262,4 +278,36 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Normalize a fiscal-year-end form-data value into a 1-11 month integer.
+ * Returns null for empty / "12" / "Dec" / "12/31" / "December" (calendar
+ * year is the default and stored as NULL in the DB).
+ *
+ * Mirrors the CSV intake's parseFyeMonth() — same accepted formats so a
+ * lender can paste whatever shape they have ("2", "Feb", "2/28", "February").
+ */
+function parseFyeMonthFromFormData(raw: string | null): number | null {
+  if (!raw) return null;
+  const cleaned = String(raw).trim().toLowerCase();
+  if (!cleaned) return null;
+  if (/^(12|december|dec|12\/31|12-31)$/.test(cleaned)) return null;
+  const intMatch = cleaned.match(/^(\d{1,2})$/);
+  if (intMatch) {
+    const m = parseInt(intMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  const dateMatch = cleaned.match(/^(\d{1,2})[/-]\d{1,2}$/);
+  if (dateMatch) {
+    const m = parseInt(dateMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  const months: Record<string, number> = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+    apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+    aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10, nov: 11, november: 11,
+  };
+  return months[cleaned] ?? null;
 }

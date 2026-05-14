@@ -47,6 +47,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
     .from('request_entities')
     .select(`
       id, entity_name, tid, tid_kind, form_type, years, status,
+      fiscal_year_end_month,
       transcript_urls, transcript_html_urls, completed_at, request_id,
       income_baseline, income_snapshot,
       requests(loan_number, client_id, clients(name))
@@ -148,6 +149,22 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
             {clientName} · {entity.tid_kind || 'TIN'} {entity.tid} ·{' '}
             generated from {report.transcriptsParsed} transcript{report.transcriptsParsed === 1 ? '' : 's'} on file
           </p>
+          {entity.fiscal_year_end_month && entity.fiscal_year_end_month !== 12 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 inline-block">
+              <strong>⚠ Non-calendar fiscal year</strong> — entity files on FYE{' '}
+              {(() => {
+                const months = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November'];
+                const lastDay: Record<number, number> = { 1:31, 2:28, 3:31, 4:30, 5:31, 6:30, 7:31, 8:31, 9:30, 10:31, 11:30 };
+                return `${months[entity.fiscal_year_end_month]} ${lastDay[entity.fiscal_year_end_month]}`;
+              })()}.
+              {' '}For tax year YYYY pull period ending {String(entity.fiscal_year_end_month).padStart(2, '0')}-
+              {(() => {
+                const lastDay: Record<number, number> = { 1:31, 2:28, 3:31, 4:30, 5:31, 6:30, 7:31, 8:31, 9:30, 10:31, 11:30 };
+                return String(lastDay[entity.fiscal_year_end_month]).padStart(2, '0');
+              })()}-(YYYY+1).
+            </p>
+          )}
         </div>
 
         {/* Headline / overall assessment */}

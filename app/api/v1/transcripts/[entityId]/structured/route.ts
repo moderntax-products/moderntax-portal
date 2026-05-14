@@ -87,6 +87,7 @@ export async function GET(request: NextRequest, { params }: PageProps) {
     .from('request_entities')
     .select(`
       id, entity_name, tid, tid_kind, form_type, years, status,
+      fiscal_year_end_month,
       transcript_urls, transcript_html_urls, completed_at, request_id,
       income_baseline, income_snapshot,
       requests!inner(client_id, loan_number)
@@ -165,6 +166,12 @@ export async function GET(request: NextRequest, { params }: PageProps) {
       tid_kind: entity.tid_kind,
       form_type: entity.form_type,
       years: entity.years,
+      // Non-calendar fiscal year end (1-11). null = calendar (12/31).
+      // Consumers should use this to derive expected period_ending:
+      //   fye_month=2, year=2024 → period_ending = 02-28-2025
+      // Only meaningful for income-tax forms (1040/1065/1120/1120S);
+      // Form 941 always uses calendar quarters.
+      fiscal_year_end_month: entity.fiscal_year_end_month ?? null,
       status: entity.status,
       completed_at: entity.completed_at,
       loan_number: entity.requests?.loan_number || null,

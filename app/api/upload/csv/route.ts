@@ -29,6 +29,7 @@ interface CsvRow {
   credit_application_id: string;
   years: string;
   form: string;
+  fye_month: string; // raw value — could be "2", "Feb", "2/28", "February"
 }
 
 // Normalize column headers to handle case/spacing variations
@@ -80,7 +81,54 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
     // Empty string falls through `normalizeFormType()` returning null, and the
     // entity-build code infers from tid_kind instead of blindly stamping 1040.
     form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '',
+    // Fiscal year end — column may be "fye", "fye_month", "fiscal_year_end",
+    // "fiscal_year_end_month", or "fiscal_year_end_date" (the last surfaces
+    // from lender exports as "2/28" or "02-28"). All variants accepted;
+    // parseFyeMonth() normalizes to 1-12.
+    fye_month:
+      normalized['fye_month'] || normalized['fyemonth'] ||
+      normalized['fiscal_year_end_month'] || normalized['fiscalyearendmonth'] ||
+      normalized['fye'] || normalized['fiscal_year_end'] || normalized['fiscalyearend'] ||
+      normalized['fiscal_year_end_date'] || normalized['fiscalyearenddate'] || '',
   };
+}
+
+/**
+ * Parse a fiscal-year-end value (could be "2", "Feb", "February", "2/28",
+ * "02-28") into a 1-12 month number. Returns null when the value indicates
+ * calendar year (empty, "12", "Dec", "12/31") or is unparseable.
+ *
+ * Driver: Katie Lent at Growth Corp got burned by a vendor pulling 12/31
+ * transcripts for a 2/28 fiscal-year entity. This is the normalizer that
+ * makes sure the field gets captured regardless of how the lender CSV
+ * formats it.
+ */
+function parseFyeMonth(raw: string): number | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned) return null;
+  // "12", "12/31", "December", "Dec" → calendar year, store as null.
+  if (/^(12|december|dec|12\/31|12-31)$/.test(cleaned)) return null;
+  // Pure integer 1-11
+  const intMatch = cleaned.match(/^(\d{1,2})$/);
+  if (intMatch) {
+    const m = parseInt(intMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  // "M/DD" or "MM/DD" or "MM-DD" — take the month component
+  const dateMatch = cleaned.match(/^(\d{1,2})[/-]\d{1,2}$/);
+  if (dateMatch) {
+    const m = parseInt(dateMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  // Month name (full or abbreviated)
+  const months: Record<string, number> = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+    apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+    aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10, nov: 11, november: 11,
+  };
+  return months[cleaned] ?? null;
 }
 
 // Find email in unlabeled columns (e.g., __EMPTY, __EMPTY_1)
@@ -520,6 +568,10 @@ export async function POST(request: NextRequest) {
         zip_code: row.zip_code || null,
         form_type: resolvedForm,
         years: parseYears(row.years),
+        // Non-calendar fiscal year end (1-11). NULL = calendar year (Dec).
+        // Accepts CSV columns: fye, fye_month, fiscal_year_end, etc.
+        // Driver: Growth Corp / Katie Lent vendor-swap case.
+        fiscal_year_end_month: parseFyeMonth(row.fye_month),
         signer_first_name: row['first name'] || null,
         signer_last_name: row['last name'] || null,
         signer_email: row.email || null,

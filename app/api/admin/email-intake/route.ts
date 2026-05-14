@@ -36,6 +36,8 @@ interface CsvRow {
   signature_created_at: string;
   years: string;
   form: string;
+  /** Fiscal year end month — accepts "2", "Feb", "2/28" etc. Empty = calendar. */
+  fye_month: string;
   /** Signer email as provided on the row (if any) — may be blank, in which
    * case the email-body parser fills it in after entity creation. */
   email: string;
@@ -65,8 +67,38 @@ function mapRow(raw: Record<string, unknown>): CsvRow {
     signature_created_at: normalized['signature_created_at'] || normalized['signaturecreatedat'] || '',
     years: normalized['years'] || normalized['year'] || '',
     form: normalized['form'] || normalized['form_type'] || normalized['formtype'] || '1040',
+    fye_month:
+      normalized['fye_month'] || normalized['fyemonth'] ||
+      normalized['fiscal_year_end_month'] || normalized['fiscalyearendmonth'] ||
+      normalized['fye'] || normalized['fiscal_year_end'] || normalized['fiscalyearend'] ||
+      normalized['fiscal_year_end_date'] || normalized['fiscalyearenddate'] || '',
     email: normalized['email'] || normalized['signer_email'] || normalized['signeremail'] || '',
   };
+}
+
+/** See CSV intake's parseFyeMonth — same accepted formats. */
+function parseFyeMonth(raw: string): number | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned) return null;
+  if (/^(12|december|dec|12\/31|12-31)$/.test(cleaned)) return null;
+  const intMatch = cleaned.match(/^(\d{1,2})$/);
+  if (intMatch) {
+    const m = parseInt(intMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  const dateMatch = cleaned.match(/^(\d{1,2})[/-]\d{1,2}$/);
+  if (dateMatch) {
+    const m = parseInt(dateMatch[1], 10);
+    return m >= 1 && m <= 11 ? m : null;
+  }
+  const months: Record<string, number> = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+    apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+    aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10, nov: 11, november: 11,
+  };
+  return months[cleaned] ?? null;
 }
 
 function validateFormType(form: string): string {
@@ -301,6 +333,7 @@ export async function POST(request: NextRequest) {
         zip_code: row.zip_code || null,
         form_type: validateFormType(row.form),
         years: parseYears(row.years),
+        fiscal_year_end_month: parseFyeMonth(row.fye_month),
         signer_first_name: row['first name'] || signer?.firstName || null,
         signer_last_name: row['last name'] || signer?.lastName || null,
         signer_email: signer?.email || null,

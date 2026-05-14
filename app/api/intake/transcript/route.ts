@@ -31,6 +31,17 @@ interface EntityPayload {
   city?: string;
   state?: string;
   zip_code?: string;
+  /**
+   * Month (1-12) of the entity's fiscal year end. Omit or set to 12 for
+   * calendar year. Only consulted for income-tax forms (1040/1065/1120/1120S);
+   * Form 941 always uses calendar quarters regardless of FYE.
+   *
+   * Example for an entity with a Feb 28 FYE filing tax year 2024:
+   *   { years: ["2024"], fiscal_year_end_month: 2 }
+   * → expert pulls period ending 02-28-2025 (the FY ends the year AFTER
+   *   the fiscal-year label in IRS convention).
+   */
+  fiscal_year_end_month?: number;
 }
 
 interface TranscriptIntakeBody {
@@ -226,6 +237,12 @@ export async function POST(request: NextRequest) {
       const ftInferred = ent.form_type
         ? normalizeFormType(ent.form_type)
         : inferFormTypeFromTidKind(tidKind);
+      // Coerce fiscal_year_end_month: null when calendar (12) or out of range.
+      const fye = typeof ent.fiscal_year_end_month === 'number'
+        && ent.fiscal_year_end_month >= 1
+        && ent.fiscal_year_end_month <= 11
+          ? ent.fiscal_year_end_month
+          : null;
       return {
         request_id: req.id,
         entity_name: ent.entity_name.trim(),
@@ -233,6 +250,7 @@ export async function POST(request: NextRequest) {
         tid_kind: tidKind,
         form_type: ftInferred,
         years: ent.years,
+        fiscal_year_end_month: fye,
         address: ent.address || null,
         city: ent.city || null,
         state: ent.state || null,
