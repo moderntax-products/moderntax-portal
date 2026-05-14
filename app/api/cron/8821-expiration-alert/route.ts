@@ -49,11 +49,16 @@ interface AlertWindow {
   urgency: 'info' | 'warning' | 'critical' | 'expired';
 }
 
+// Order matters: the cron uses `.find()` to pick the first matching window
+// for an entity's `daysUntilExpiry`. Sort ASCENDING by daysOut so the most
+// urgent applicable bucket wins. Previous order (90 → 0) bucketed every
+// entity within 90 days into the "info" 90-day window — including ones
+// 5 days from expiry — and silenced the critical/warning alerts entirely.
 const ALERT_WINDOWS: AlertWindow[] = [
-  { daysOut: 90, label: '90-day', urgency: 'info' },
-  { daysOut: 30, label: '30-day', urgency: 'warning' },
-  { daysOut: 7, label: '7-day', urgency: 'critical' },
   { daysOut: 0, label: 'expired', urgency: 'expired' },
+  { daysOut: 7, label: '7-day', urgency: 'critical' },
+  { daysOut: 30, label: '30-day', urgency: 'warning' },
+  { daysOut: 90, label: '90-day', urgency: 'info' },
 ];
 
 export async function GET(request: NextRequest) {
