@@ -649,8 +649,13 @@ A. If the IVR offers a callback. Callback offers from the IRS sound like
    5. Call end_call.
 
 B. If NO callback option is offered (the IVR proceeds straight to hold music after the wait estimate, or you hear "please continue to hold"):
-   - If X is greater than 15 minutes: the wait is too long without a callback. Call notify_status(event="wait_too_long_no_callback", estimated_wait_minutes=X). Then call end_call. DO THIS IMMEDIATELY — do not hold even briefly. The system will automatically retry later from a different from-number.
-   - If X is 15 minutes or less (or no wait estimate was given before hold music): call notify_status(event="holding", estimated_wait_minutes=X). Stay COMPLETELY SILENT. Do not narrate. Do not say "I am continuing to hold." Do not repeat recorded announcements. Just listen for a live human voice.
+   - If X is 15 minutes or less (or no wait estimate was given before hold music): the wait is short enough to hand off to the practitioner — they'll pick up the live call from their phone and take the IRS agent themselves.
+     1. Call notify_status(event="short_wait_transferring", estimated_wait_minutes=X, callback_phone="{{callback_phone}}").
+     2. Stay silent for about 5 seconds so the practitioner's phone can ring in.
+     3. Call transfer_call (bridge-transfer to {{callback_phone}}). The practitioner picks up the live hold and the call continues from their phone.
+     4. Do NOT call end_call — the bridge transfer terminates your side automatically once the practitioner picks up. If the transfer fails after 30 seconds, fall back to silent hold (the rule below).
+   - If X is greater than 15 minutes: the wait is too long. Call notify_status(event="wait_too_long_no_callback", estimated_wait_minutes=X). Then call end_call. DO THIS IMMEDIATELY — do not hold even briefly. The system will automatically retry later from a different from-number.
+   - If you have no wait estimate at all and only hear hold music, stay COMPLETELY SILENT for up to 25 minutes (per the pre-agent max below). Do not narrate. Do not say "I am continuing to hold." Do not repeat recorded announcements. Just listen for a live human voice.
 
 Important: always call notify_status(event="wait_estimate", estimated_wait_minutes=X) the moment you first hear the wait estimate, BEFORE you take the callback / hang up / hold action above.
 

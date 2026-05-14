@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { filterRequestedTranscripts } from '@/lib/transcript-filter';
 import JSZip from 'jszip';
 
 export const maxDuration = 30;
@@ -73,10 +74,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Get all entities with transcript URLs
+    // Get all entities with transcript URLs (need form_type + years to
+    // filter what the processor actually requested vs internal-discovery
+    // bonus pulls).
     const { data: entities } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, transcript_urls, signed_8821_url')
+      .select('id, entity_name, transcript_urls, transcript_html_urls, signed_8821_url, form_type, years')
       .eq('request_id', requestId) as { data: any[] | null; error: any };
 
     if (!entities || entities.length === 0) {
@@ -107,25 +110,36 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // Add transcripts
-      if (entity.transcript_urls && entity.transcript_urls.length > 0) {
-        for (const url of entity.transcript_urls) {
-          try {
-            const { data: fileData } = await adminSupabase.storage
-              .from('uploads')
-              .download(url);
+      // Filter to ONLY the transcripts the processor requested (form + year
+      // match). Internal-discovery bonus pulls (e.g., 941 ERC sweep on a
+      // 1065 entity) stay on the entity row for admin visibility but are
+      // never bundled into the processor's bulk download.
+      const allUrls = [
+        ...(entity.transcript_urls || []),
+        ...(entity.transcript_html_urls || []),
+      ];
+      const filtered = filterRequestedTranscripts(
+        allUrls, entity.form_type, entity.years,
+      );
+      // De-duplicate (a URL can appear in both arrays)
+      const uniqueUrls = Array.from(new Set(filtered.requested));
 
-            if (fileData) {
-              const buffer = Buffer.from(await fileData.arrayBuffer());
-              // Extract clean filename from storage path
-              const rawName = url.split('/').pop() || `transcript-${fileCount}.pdf`;
-              const cleanName = rawName.replace(/^\d+-/, ''); // Remove timestamp prefix
-              entityFolder.file(cleanName, buffer);
-              fileCount++;
-            }
-          } catch {
-            // Skip failed downloads
+      for (const url of uniqueUrls) {
+        try {
+          const { data: fileData } = await adminSupabase.storage
+            .from('uploads')
+            .download(url);
+
+          if (fileData) {
+            const buffer = Buffer.from(await fileData.arrayBuffer());
+            // Extract clean filename from storage path
+            const rawName = url.split('/').pop() || `transcript-${fileCount}.pdf`;
+            const cleanName = rawName.replace(/^\d+-/, ''); // Remove timestamp prefix
+            entityFolder.file(cleanName, buffer);
+            fileCount++;
           }
+        } catch {
+          // Skip failed downloads
         }
       }
     }

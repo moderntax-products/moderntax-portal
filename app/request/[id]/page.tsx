@@ -10,6 +10,7 @@ import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
+import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -185,8 +186,22 @@ export default async function RequestDetailPage({ params }: Props) {
                 requestId={request.id}
                 loanNumber={request.loan_number}
                 totalFiles={
-                  (request.request_entities || []).reduce((sum: number, e: any) =>
-                    sum + (e.transcript_urls?.length || 0) + (e.signed_8821_url ? 1 : 0), 0)
+                  // Count only the transcripts the processor actually
+                  // requested (filtered by form + years), not internal-
+                  // discovery bonus pulls. Keeps the header count matching
+                  // what shows in the per-entity Downloads list below.
+                  (request.request_entities || []).reduce((sum: number, e: any) => {
+                    const allUrls = [
+                      ...(e.transcript_urls || []),
+                      ...(e.transcript_html_urls || []),
+                    ];
+                    const filtered = filterRequestedTranscripts(
+                      allUrls, e.form_type, e.years,
+                    );
+                    // De-duplicate (same URL may appear in both arrays)
+                    const unique = new Set(filtered.requested);
+                    return sum + unique.size + (e.signed_8821_url ? 1 : 0);
+                  }, 0)
                 }
               />
             </div>
@@ -340,50 +355,63 @@ export default async function RequestDetailPage({ params }: Props) {
                       </div>
                     )}
 
-                    {/* Transcripts */}
-                    {entity.transcript_urls && entity.transcript_urls.length > 0 && (
-                      <div className="border-t border-gray-200 pt-6">
-                        <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Transcript Downloads</h4>
-                        <div className="space-y-2">
-                          {entity.transcript_urls.map((url: string, idx: number) => {
-                            const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
-                            return (
-                              <div key={idx} className="flex items-center gap-2">
-                                <TranscriptDownloadLink
-                                  storagePath={url}
-                                  label={`Transcript ${idx + 1}`}
-                                />
-                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                                  {ext}
-                                </span>
-                              </div>
-                            );
-                          })}
+                    {/* Transcripts — processor view filters to ONLY what was
+                        requested (form_type + years on the entity row). Bonus
+                        pulls (e.g., 941 ERC discovery sweep on a 1065 entity)
+                        stay on the entity record but live in the admin view
+                        only. The small note below tells the processor the
+                        team did extra work without revealing the files. */}
+                    {(() => {
+                      const allUrls = [
+                        ...(entity.transcript_urls || []),
+                        ...(entity.transcript_html_urls || []),
+                      ];
+                      const filtered = filterRequestedTranscripts(
+                        allUrls,
+                        entity.form_type as string | null,
+                        entity.years as string[] | null,
+                      );
+                      const internalNote = formatInternalPullsNote(filtered.internalSummary);
+                      if (filtered.requested.length === 0 && !internalNote) return null;
+                      // De-duplicate while preserving order (a URL may appear in both arrays).
+                      const dedup: string[] = [];
+                      const seen = new Set<string>();
+                      for (const u of filtered.requested) {
+                        if (!seen.has(u)) { seen.add(u); dedup.push(u); }
+                      }
+                      return (
+                        <div className="border-t border-gray-200 pt-6">
+                          <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
+                            Transcript Downloads
+                            <span className="ml-2 text-xs font-normal text-gray-500 normal-case tracking-normal">
+                              {dedup.length} file{dedup.length === 1 ? '' : 's'} matching your request
+                              ({entity.form_type} for {(entity.years || []).join(', ')})
+                            </span>
+                          </h4>
+                          <div className="space-y-2">
+                            {dedup.map((url: string, idx: number) => {
+                              const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
+                              return (
+                                <div key={idx} className="flex items-center gap-2">
+                                  <TranscriptDownloadLink
+                                    storagePath={url}
+                                    label={`Transcript ${idx + 1}`}
+                                  />
+                                  <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                                    {ext}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {internalNote && (
+                            <p className="mt-4 text-xs text-gray-500 italic border-t border-gray-100 pt-3">
+                              {internalNote}
+                            </p>
+                          )}
                         </div>
-                      </div>
-                    )}
-                    {/* Secondary format transcripts */}
-                    {entity.transcript_html_urls && entity.transcript_html_urls.length > 0 && (
-                      <div className="border-t border-gray-200 pt-4">
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Alternate Format</h4>
-                        <div className="space-y-2">
-                          {entity.transcript_html_urls.map((url: string, idx: number) => {
-                            const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
-                            return (
-                              <div key={idx} className="flex items-center gap-2">
-                                <TranscriptDownloadLink
-                                  storagePath={url}
-                                  label={`Transcript ${idx + 1}`}
-                                />
-                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                                  {ext}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
