@@ -17,12 +17,19 @@
  *   3. MERCURY ENROLLED: clients.mercury_customer_id IS NOT NULL allowed.
  *      Set by the user via /invoicing → Payment Settings → Enroll Mercury
  *      button (which POSTs to /api/billing/setup-mercury).
- *   4. OTHERWISE: blocked with 402 Payment Required pointing to /invoicing.
+ *   4. PER-CLIENT TRIAL ALLOWANCE: clients.trial_entities_allowed > 0 AND
+ *      lifetime completed_count < trial_entities_allowed. Lets Matt
+ *      negotiate case-by-case trial scope per client (e.g., Banc of
+ *      California gets 2 entities, Enterprise Financial gets 3, etc.).
+ *      No decrementer needed — completed_count counts against the cap
+ *      automatically at gate-check time.
+ *   5. OTHERWISE: blocked with 402 Payment Required pointing to /invoicing.
  *
- * Note: free trial (3 free entities) is no longer a bypass — clients must
- * complete Mercury enrollment to submit ANY new request. This is intentional;
- * Mercury enrollment is a 2-min self-serve flow on /invoicing and the
- * one-time friction is preferable to invoicing chase down the line.
+ * The old global TRIAL_FREE_ENTITIES = 3 constant is gone. Trial allowance
+ * is now strictly opt-in per client via the trial_entities_allowed column
+ * (see migration-trial-entities-allowed.sql). All other free_trial=true
+ * clients default to 0 trial entities — they must enroll Mercury via
+ * /invoicing to submit. Self-serve flow takes ~2 minutes.
  *
  * Used by:
  *   - app/api/upload/csv/route.ts  (intake)
@@ -34,6 +41,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/**
+ * @deprecated since 2026-05-14 — trial allowance is now per-client via
+ * `clients.trial_entities_allowed`. Kept exported as a fallback only;
+ * new code should not reference it.
+ */
 export const TRIAL_FREE_ENTITIES = 3;
 
 export interface OrderGateResult {
@@ -76,6 +88,8 @@ interface GateClient {
   free_trial?: boolean | null;
   mercury_customer_id?: string | null;
   bypass_payment_paywall?: boolean | null;
+  /** Per-client trial cap — see migration-trial-entities-allowed.sql */
+  trial_entities_allowed?: number | null;
 }
 
 /**
@@ -105,30 +119,52 @@ export async function checkOrderGate(
     };
   }
 
-  // Two-phase select on bypass_payment_paywall — the column is added by
-  // supabase/migration-mercury-paywall.sql and may not be applied yet in
-  // every environment. Falling back keeps the gate working pre-migration
-  // (sandbox + mercury rules still fire correctly).
+  // Three-phase select to handle environments where either the
+  // bypass_payment_paywall column (migration-mercury-paywall.sql) or the
+  // trial_entities_allowed column (migration-trial-entities-allowed.sql)
+  // hasn't been applied yet. Tries the full select first, falls back to
+  // dropping each missing column individually so the gate still works
+  // during a partial-migration window.
   const baseSelect = 'name, slug, stripe_payment_method_id, payment_method_status, free_trial, mercury_customer_id';
   const ninetyDaysAgo = new Date();
   ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
   let client: GateClient | null = null;
   {
-    const r = await adminSupabase
+    // Phase 1: try with both new columns
+    const r1 = await adminSupabase
       .from('clients')
-      .select(`${baseSelect}, bypass_payment_paywall`)
+      .select(`${baseSelect}, bypass_payment_paywall, trial_entities_allowed`)
       .eq('id', clientId)
       .single();
-    if (r.error && /bypass_payment_paywall|column .* does not exist|42703/i.test(r.error.message || '')) {
+    if (!r1.error) {
+      client = (r1.data as any) ?? null;
+    } else if (/trial_entities_allowed|column .* does not exist|42703/i.test(r1.error.message || '')) {
+      // Phase 2: trial_entities_allowed missing — try without it
       const r2 = await adminSupabase
         .from('clients')
-        .select(baseSelect)
+        .select(`${baseSelect}, bypass_payment_paywall`)
+        .eq('id', clientId)
+        .single();
+      if (!r2.error) {
+        client = r2.data ? { ...(r2.data as any), trial_entities_allowed: 0 } : null;
+      } else if (/bypass_payment_paywall|column .* does not exist|42703/i.test(r2.error.message || '')) {
+        // Phase 3: both missing — minimal select
+        const r3 = await adminSupabase
+          .from('clients')
+          .select(baseSelect)
+          .eq('id', clientId)
+          .single();
+        client = r3.data ? { ...(r3.data as any), bypass_payment_paywall: false, trial_entities_allowed: 0 } : null;
+      }
+    } else if (/bypass_payment_paywall|column .* does not exist|42703/i.test(r1.error.message || '')) {
+      // bypass_payment_paywall missing but trial_entities_allowed might exist
+      const r2 = await adminSupabase
+        .from('clients')
+        .select(`${baseSelect}, trial_entities_allowed`)
         .eq('id', clientId)
         .single();
       client = r2.data ? { ...(r2.data as any), bypass_payment_paywall: false } : null;
-    } else {
-      client = (r.data as any) ?? null;
     }
   }
 
@@ -153,7 +189,8 @@ export async function checkOrderGate(
   const completed = completedCount ?? 0;
   const hasPaymentMethod =
     !!client?.stripe_payment_method_id && client?.payment_method_status === 'active';
-  const trialRemaining = Math.max(0, TRIAL_FREE_ENTITIES - completed);
+  const trialAllowed = client?.trial_entities_allowed ?? 0;
+  const trialRemaining = Math.max(0, trialAllowed - completed);
   const hasRecentPaidInvoice = (recentPaidCount ?? 0) > 0;
   const hasMercuryEnrolled = !!client?.mercury_customer_id;
   const hasBypass = !!client?.bypass_payment_paywall;
@@ -171,8 +208,8 @@ export async function checkOrderGate(
     clientName: client?.name ?? null,
   };
 
-  // Allow: sandbox OR explicit bypass OR Mercury enrolled.
-  if (isSandbox || hasBypass || hasMercuryEnrolled) {
+  // Allow: sandbox OR explicit bypass OR Mercury enrolled OR trial allowance remaining.
+  if (isSandbox || hasBypass || hasMercuryEnrolled || trialRemaining > 0) {
     return { allowed: true, ...baseResult };
   }
 
