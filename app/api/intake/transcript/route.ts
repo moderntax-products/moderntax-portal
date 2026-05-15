@@ -20,6 +20,7 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
+import { checkPaymentPaywall } from '@/lib/payment-paywall';
 
 interface EntityPayload {
   entity_name: string;
@@ -201,6 +202,12 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    // Mercury payment-method paywall — applies to partner API intake too.
+    // Sandbox clients (slug ending in -sandbox) and bypass-flagged clients
+    // are exempt; everyone else needs a Mercury account on file.
+    const paywallBlock = await checkPaymentPaywall(supabase, client.id);
+    if (paywallBlock) return paywallBlock;
 
     // --- Create request ---
     const loanNumber = body.loan_number?.trim() || body.request_token.trim();

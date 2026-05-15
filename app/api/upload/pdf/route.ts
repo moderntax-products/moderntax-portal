@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { checkPaymentPaywall } from '@/lib/payment-paywall';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { resolveFormType } from '@/lib/form-type-validation';
@@ -95,6 +96,12 @@ export async function POST(request: NextRequest) {
     if (!tid?.trim()) {
       return NextResponse.json({ error: 'Tax ID is required' }, { status: 400 });
     }
+
+    // Mercury payment-method paywall — block new requests for clients
+    // without a Mercury account on file (or explicit bypass). Centerstone,
+    // Cal Statewide, and Clearfirm have bypass set via the migration.
+    const paywallBlock = await checkPaymentPaywall(supabase, profile.client_id);
+    if (paywallBlock) return paywallBlock;
 
     const admin = createAdminClient();
 

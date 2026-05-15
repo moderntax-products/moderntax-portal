@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { checkPaymentPaywall } from '@/lib/payment-paywall';
 import { send8821WithFallback } from '@/lib/send-8821-with-fallback';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
@@ -442,6 +443,11 @@ export async function POST(request: NextRequest) {
       });
 
     const sourceFileUrl = uploadError ? null : filePath;
+
+    // Mercury payment-method paywall — block new requests for clients
+    // without a Mercury account on file (or explicit bypass).
+    const paywallBlock = await checkPaymentPaywall(supabase, profile.client_id);
+    if (paywallBlock) return paywallBlock;
 
     // Use the loan number from the form — all entities go under one request
     const effectiveLoanNumber = loanNumber!.trim();

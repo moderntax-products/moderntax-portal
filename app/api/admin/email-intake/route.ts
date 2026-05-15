@@ -20,6 +20,7 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sendSignatureRequest } from '@/lib/dropbox-sign';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
 import { parseSignersFromEmailBody, pickPrincipalSigner, type ParsedSigner } from '@/lib/parse-email-signers';
+import { checkPaymentPaywall } from '@/lib/payment-paywall';
 import * as XLSX from 'xlsx';
 
 interface CsvRow {
@@ -262,6 +263,11 @@ export async function POST(request: NextRequest) {
       console.error('Batch creation error:', batchError);
       return NextResponse.json({ error: 'Failed to create batch' }, { status: 500 });
     }
+
+    // Mercury payment-method paywall — admin-driven email intake still
+    // creates a billable request, so it must respect the same paywall.
+    const paywallBlock = await checkPaymentPaywall(adminSupabase, senderProfile.client_id);
+    if (paywallBlock) return paywallBlock;
 
     // Create request attributed to the sender
     const { data: req, error: reqError } = await adminSupabase
