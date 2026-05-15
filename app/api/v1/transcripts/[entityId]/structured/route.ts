@@ -83,17 +83,42 @@ export async function GET(request: NextRequest, { params }: PageProps) {
   }
 
   // ---- Load entity + verify client ownership ----
-  const { data: entity, error: lookupErr } = await sb
-    .from('request_entities')
-    .select(`
-      id, entity_name, tid, tid_kind, form_type, years, status,
-      fiscal_year_end_month,
-      transcript_urls, transcript_html_urls, completed_at, request_id,
-      income_baseline, income_snapshot,
-      requests!inner(client_id, loan_number)
-    `)
-    .eq('id', entityId)
-    .single() as { data: any; error: any };
+  // The fiscal_year_end_month column is requested via a separate two-step
+  // attempt because the migration that adds it (migration-fiscal-year-end.sql)
+  // may not have been applied yet in production. Including it in the main
+  // SELECT when the column is missing causes Supabase to return an error,
+  // which the route was treating as "entity not found" (404) — taking
+  // every sandbox API client offline. Try with the column first; if that
+  // fails with 42703 (undefined_column), fall back to the legacy SELECT
+  // and treat fiscal_year_end_month as null.
+  const baseSelect = `
+    id, entity_name, tid, tid_kind, form_type, years, status,
+    transcript_urls, transcript_html_urls, completed_at, request_id,
+    income_baseline, income_snapshot,
+    requests!inner(client_id, loan_number)
+  `;
+  let entity: any = null;
+  let lookupErr: any = null;
+  {
+    const r = await sb
+      .from('request_entities')
+      .select(baseSelect.replace('id, entity_name', 'id, entity_name, fiscal_year_end_month,').replace('fiscal_year_end_month,', 'fiscal_year_end_month,'))
+      .eq('id', entityId)
+      .single() as { data: any; error: any };
+    if (r.error && /fiscal_year_end_month|column .* does not exist|42703/i.test(r.error.message || '')) {
+      // Migration not applied — fall back without the column.
+      const r2 = await sb
+        .from('request_entities')
+        .select(baseSelect)
+        .eq('id', entityId)
+        .single() as { data: any; error: any };
+      entity = r2.data ? { ...r2.data, fiscal_year_end_month: null } : null;
+      lookupErr = r2.error;
+    } else {
+      entity = r.data;
+      lookupErr = r.error;
+    }
+  }
 
   if (lookupErr || !entity) {
     return NextResponse.json({ error: 'Entity not found', details: lookupErr?.message }, { status: 404 });

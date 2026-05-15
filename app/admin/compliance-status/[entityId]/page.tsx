@@ -43,17 +43,37 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
 
   const admin = createAdminClient();
 
-  const { data: entity, error: lookupErr } = await admin
-    .from('request_entities')
-    .select(`
-      id, entity_name, tid, tid_kind, form_type, years, status,
-      fiscal_year_end_month,
-      transcript_urls, transcript_html_urls, completed_at, request_id,
-      income_baseline, income_snapshot,
-      requests(loan_number, client_id, clients(name))
-    `)
-    .eq('id', entityId)
-    .single() as { data: any; error: any };
+  // Two-phase select: try with fiscal_year_end_month first; fall back
+  // without it if the column doesn't exist yet (migration-fiscal-year-end.sql
+  // not yet applied in this env). Same hot-fix pattern as the v1 structured
+  // route — see commit notes there.
+  const baseSelectCS = `
+    id, entity_name, tid, tid_kind, form_type, years, status,
+    transcript_urls, transcript_html_urls, completed_at, request_id,
+    income_baseline, income_snapshot,
+    requests(loan_number, client_id, clients(name))
+  `;
+  let entity: any = null;
+  let lookupErr: any = null;
+  {
+    const r = await admin
+      .from('request_entities')
+      .select(`fiscal_year_end_month, ${baseSelectCS}`)
+      .eq('id', entityId)
+      .single() as { data: any; error: any };
+    if (r.error && /fiscal_year_end_month|column .* does not exist|42703/i.test(r.error.message || '')) {
+      const r2 = await admin
+        .from('request_entities')
+        .select(baseSelectCS)
+        .eq('id', entityId)
+        .single() as { data: any; error: any };
+      entity = r2.data ? { ...r2.data, fiscal_year_end_month: null } : null;
+      lookupErr = r2.error;
+    } else {
+      entity = r.data;
+      lookupErr = r.error;
+    }
+  }
 
   if (lookupErr || !entity) {
     // Log the actual error so we don't silently swallow it again
