@@ -395,7 +395,7 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
               <div className="mt-4 bg-white rounded border border-amber-300 p-4">
                 <p className="text-sm font-semibold text-mt-dark mb-1">Recovery path</p>
                 <p className="text-xs text-gray-600 mb-2">
-                  Undelivered refunds remain credited to the entity's IRS account. Recovery requires Form 3911
+                  Undelivered refunds remain credited to the entity&apos;s IRS account. Recovery requires Form 3911
                   (Taxpayer Statement Regarding Refund) filed with the corrected mailing address, OR a
                   POA-authorized PPS reissue call. Typical timeline: 6-8 weeks from 3911 receipt to reissued check.
                 </p>
