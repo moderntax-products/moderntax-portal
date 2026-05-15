@@ -114,9 +114,31 @@ export function extractPpsSignals(
   }
 
   // ---- 3. Overflow rejection ----
-  // IRS phrase: "We are unable to handle your call at this time"
-  if (/unable to handle your call at this time|please try again later/i.test(text)) {
-    result.overflowRejected = true;
+  //
+  // STRICT match only. Per MOD-226 root-cause investigation: the prior
+  // permissive regex (which matched "please try again later" alone) was
+  // tagging routine disclaimers and Retell's hallucinated post-call
+  // summaries as overflow_rejected, masking the real bug — the agent was
+  // hanging up prematurely without ever hearing an actual rejection.
+  //
+  // Only these specific IRS phrasings count as a true overflow rejection:
+  //   - "we are unable to handle your call at this time" (canonical)
+  //   - "due to extremely high call volume" + a hangup directive nearby
+  //   - "we cannot complete your call" + try-again-later framing
+  //
+  // "Please try again later" alone is NOT enough — it appears in benign
+  // disclaimers about online tools, fax processing, etc.
+  const strictOverflowPhrases = [
+    /\bwe are unable to (?:handle|take|process) your call (?:at this time|right now)\b/i,
+    /\bdue to (?:extremely |unusually )?high call volume[\s\S]{0,80}(?:try (?:again |back )?later|hang up|disconnect)/i,
+    /\bwe (?:cannot|can(?:'|’)t) (?:complete|connect|process) your call[\s\S]{0,80}(?:try (?:again|back) later|please call back)/i,
+    /\bcall back (?:during normal business hours|tomorrow|on the next business day)\b/i,
+  ];
+  for (const p of strictOverflowPhrases) {
+    if (p.test(text)) {
+      result.overflowRejected = true;
+      break;
+    }
   }
 
   // ---- 4. Agent answered? ----

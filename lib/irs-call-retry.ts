@@ -51,6 +51,7 @@ const KNOWN_OUTCOMES: ReadonlySet<IrsCallOutcome> = new Set([
   'callback_scheduled',
   'agent_reached',
   'connection_failed',
+  'agent_premature_hangup',  // MOD-226
   'other',
 ]);
 
@@ -112,10 +113,11 @@ export async function handleCompletedCall(sessionId: string): Promise<{
 }> {
   const admin = createAdminClient();
 
-  // Load the just-finished session
+  // Load the just-finished session — also pull disconnection_reason +
+  // hold_seconds for MOD-226 (agent_premature_hangup) detection.
   const { data: session, error: loadErr } = await (admin
     .from('irs_call_sessions' as any) as any)
-    .select('id, expert_id, parent_session_id, retry_count, max_retries, auto_retry_enabled, retry_terminal_state, from_number, status, concatenated_transcript, classified_outcome, caf_number, expert_name, expert_fax, expert_sor_id')
+    .select('id, expert_id, parent_session_id, retry_count, max_retries, auto_retry_enabled, retry_terminal_state, from_number, status, concatenated_transcript, classified_outcome, caf_number, expert_name, expert_fax, expert_sor_id, disconnection_reason, hold_seconds')
     .eq('id', sessionId)
     .maybeSingle();
   if (loadErr || !session) {
@@ -127,13 +129,34 @@ export async function handleCompletedCall(sessionId: string): Promise<{
   // status-update endpoint) over a transcript heuristic. The AI knows
   // exactly which decision branch it took (e.g. wait_too_long_no_callback)
   // and the transcript may not preserve enough phrasing to re-classify.
+  //
+  // EXCEPTION (MOD-226): if the AI preset is `high_volume_rejected` BUT
+  // we now have evidence the call wasn't actually rejected (no canonical
+  // IRS phrase in transcript + our side ended the call + < 10 min
+  // duration), re-classify as agent_premature_hangup. This is the
+  // self-correcting bridge between the old buggy classifier behavior
+  // and the new strict-match logic.
   const preset = s.classified_outcome as IrsCallOutcome | null;
-  const outcome: IrsCallOutcome = preset && KNOWN_OUTCOMES.has(preset)
+  let outcome: IrsCallOutcome = preset && KNOWN_OUTCOMES.has(preset)
     ? preset
     : classifyCallOutcome({
         transcript: s.concatenated_transcript,
         status: s.status,
+        disconnectionReason: (s as any).disconnection_reason,
+        durationSeconds: (s as any).hold_seconds,
       });
+  if (outcome === 'high_volume_rejected') {
+    const reclassified = classifyCallOutcome({
+      transcript: s.concatenated_transcript,
+      status: s.status,
+      disconnectionReason: (s as any).disconnection_reason,
+      durationSeconds: (s as any).hold_seconds,
+    });
+    if (reclassified === 'agent_premature_hangup') {
+      console.warn(`[MOD-226] session ${sessionId} preset was high_volume_rejected but no canonical IRS phrase in transcript + our side ended call → re-classifying as agent_premature_hangup`);
+      outcome = 'agent_premature_hangup';
+    }
+  }
   await (admin.from('irs_call_sessions' as any) as any)
     .update({ classified_outcome: outcome })
     .eq('id', sessionId);

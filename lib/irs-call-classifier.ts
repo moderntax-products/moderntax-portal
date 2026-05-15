@@ -26,11 +26,27 @@ export type IrsCallOutcome =
   | 'callback_scheduled'
   | 'agent_reached'
   | 'connection_failed'
+  | 'agent_premature_hangup'  // MOD-226: our Retell agent gave up without IRS rejection
   | 'other';
 
 interface ClassifierInput {
   transcript: string | null | undefined;
   status: string | null | undefined; // session.status from voice provider (completed | failed | etc.)
+  /**
+   * Retell's `disconnection_reason` from the call object. Critical for
+   * MOD-226: when this is `user_hangup` (= our agent ended the call) AND
+   * the transcript has no rejection phrase AND no agent was reached, the
+   * classification is `agent_premature_hangup` (the bug), not the
+   * misleading `high_volume_rejected` we used to default to.
+   *
+   * Common values: 'user_hangup' (caller side), 'callee_hangup' (IRS),
+   * 'agent_hangup' (Retell agent), 'call_transfer', 'inactivity',
+   * 'machine_detected'. Treat 'user_hangup' and 'agent_hangup' as
+   * "our side ended it" for purposes of detecting MOD-226.
+   */
+  disconnectionReason?: string | null;
+  /** Total duration in seconds — used for the premature-hangup heuristic. */
+  durationSeconds?: number | null;
 }
 
 /**
@@ -65,12 +81,17 @@ export function classifyCallOutcome(input: ClassifierInput): IrsCallOutcome {
     return 'agent_reached';
   }
 
-  // High-volume rejection — the canonical IRS phrasing
-  if (
-    /extremely high call volume/i.test(transcript) ||
-    /unable to handle your call at this time/i.test(transcript) ||
-    /please try again later.*next business day/i.test(transcript)
-  ) {
+  // High-volume rejection — STRICT match on canonical IRS phrasing.
+  // MOD-226: pre-fix, this clause matched too liberally and was the source
+  // of every fake `high_volume_rejected` tag in the irs_call_sessions
+  // table. The phrases below now require the FULL canonical IRS recording,
+  // not isolated benign fragments.
+  const strictRejectionPatterns = [
+    /\bdue to (?:extremely |unusually )?high call volume[\s\S]{0,80}\bunable to (?:handle|take|process) your call/i,
+    /\bwe are unable to (?:handle|take|process) your call (?:at this time|right now)/i,
+    /\bplease (?:try again|call back).{0,40}(?:next business day|tomorrow|during normal business hours)/i,
+  ];
+  if (strictRejectionPatterns.some(p => p.test(transcript))) {
     return 'high_volume_rejected';
   }
 
@@ -86,6 +107,27 @@ export function classifyCallOutcome(input: ClassifierInput): IrsCallOutcome {
     return 'wait_too_long_no_callback';
   }
 
+  // MOD-226 — agent_premature_hangup detection.
+  //
+  // If our side ended the call (user_hangup or agent_hangup), the call
+  // had IRS audio (transcript >= 50 chars passed earlier guard), no agent
+  // was reached, no callback was scheduled, no canonical rejection phrase
+  // was heard, and duration was short (< 10 minutes), then this is the
+  // MOD-226 signature: our Retell agent gave up on its own without any
+  // IRS rejection. Distinct from `high_volume_rejected` because there
+  // was no actual rejection — the agent hallucinated one or got
+  // impatient with the long disclaimer phase.
+  //
+  // This outcome should NOT auto-retry the same way as a real rejection
+  // — see isRetryableOutcome() — because retrying with the same prompt
+  // produces the same bug. Better to surface for prompt-tuning.
+  const ourSideEndedCall = (input.disconnectionReason || '').toLowerCase() === 'user_hangup'
+    || (input.disconnectionReason || '').toLowerCase() === 'agent_hangup';
+  const callShorterThanTenMinutes = (input.durationSeconds || Infinity) < 600;
+  if (ourSideEndedCall && callShorterThanTenMinutes) {
+    return 'agent_premature_hangup';
+  }
+
   // Telephony / network failure with non-empty transcript means we got
   // partial audio but the call dropped before the IVR completed. Treat
   // as retryable.
@@ -96,6 +138,11 @@ export function classifyCallOutcome(input: ClassifierInput): IrsCallOutcome {
 
 /**
  * Convenience: is this outcome eligible for an auto-retry?
+ *
+ * Notably `agent_premature_hangup` is NOT auto-retryable — repeating the
+ * same call with the same prompt produces the same bug, so the system
+ * surfaces these for prompt-tuning instead of burning more Retell
+ * sessions on a known-broken pattern.
  */
 export function isRetryableOutcome(outcome: IrsCallOutcome): boolean {
   return (
