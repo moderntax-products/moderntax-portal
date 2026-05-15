@@ -175,7 +175,6 @@ export default async function ErcStatusPage({ params }: PageProps) {
             {STAGES.map((stage, idx) => {
               const isPast = idx < currentStageIdx;
               const isCurrent = idx === currentStageIdx;
-              const isFuture = idx > currentStageIdx;
               return (
                 <div
                   key={stage.key}
