@@ -1,25 +1,34 @@
 /**
  * Order gate — central rule for "can this client place a new order?"
  *
- * Rules (any one of these is sufficient — they're OR'd together):
- *   1. Free trial: client has used <3 completed entities lifetime.
- *   2. Stripe payment method on file: clients.stripe_payment_method_id +
- *      payment_method_status='active' (used for in-app card purchases).
- *   3. Recent paid invoice: at least one paid invoice in the last 90 days.
- *   4. ESTABLISHED-CUSTOMER carve-out: free_trial=false AND mercury_customer_id
- *      is set. This grandfathers Mercury ACH customers like Cal Statewide who
- *      have been onboarded as paying accounts but haven't yet generated a
- *      paid invoice (e.g., new month, billing in flight). Without this,
- *      brand-new ACH customers get blocked the day after their trial ends.
+ * 2026-05-14 policy update (Matt's directive — TaxTaker onboarding):
+ * Mercury payment-method enrollment is now REQUIRED for new orders.
+ * Avoiding Stripe until existing Stripe processing balance settles.
+ * Stripe payment method + free-trial + recent-paid-invoice no longer
+ * bypass on their own — they only matter as supporting context.
  *
- * Customers with overdue invoices stay allowed by rule 4 — they're real
- * accounts, just behind on payment. Surface AR aging in the admin dashboard
- * for collection follow-up; don't block ordering.
+ * Rules (in order — first match wins):
+ *   1. SANDBOX EXEMPT: clients.slug ending in `-sandbox` are auto-allowed
+ *      (Vine / Collective / Moxie demo accounts have no Mercury setup
+ *      by design and need to remain curl-able for prospects).
+ *   2. EXPLICIT BYPASS: clients.bypass_payment_paywall=TRUE allowed.
+ *      Currently set for Centerstone, Cal Statewide, Clearfirm via the
+ *      migration-mercury-paywall.sql migration.
+ *   3. MERCURY ENROLLED: clients.mercury_customer_id IS NOT NULL allowed.
+ *      Set by the user via /invoicing → Payment Settings → Enroll Mercury
+ *      button (which POSTs to /api/billing/setup-mercury).
+ *   4. OTHERWISE: blocked with 402 Payment Required pointing to /invoicing.
+ *
+ * Note: free trial (3 free entities) is no longer a bypass — clients must
+ * complete Mercury enrollment to submit ANY new request. This is intentional;
+ * Mercury enrollment is a 2-min self-serve flow on /invoicing and the
+ * one-time friction is preferable to invoicing chase down the line.
  *
  * Used by:
  *   - app/api/upload/csv/route.ts  (intake)
  *   - app/api/upload/pdf/route.ts  (intake)
  *   - app/api/admin/email-intake/route.ts (intake)
+ *   - app/api/intake/transcript/route.ts (partner v1 API)
  *   - app/page.tsx + dashboard banners (UI surfaces)
  */
 
@@ -29,25 +38,44 @@ export const TRIAL_FREE_ENTITIES = 3;
 
 export interface OrderGateResult {
   allowed: boolean;
-  /** Why the order is blocked. Always set when allowed=false. */
-  reason?: 'trial_exhausted_no_payment_method_no_recent_paid_invoice' | 'no_client';
+  /**
+   * Why the order is blocked. Always set when allowed=false.
+   *
+   * - `mercury_required` — primary block, post-2026-05-14 policy
+   * - `no_client` — clientId was null/missing
+   */
+  reason?: 'mercury_required' | 'no_client';
   /** HTTP status to return when allowed=false. */
   status?: number;
-  /** Count of completed entities to date (for trial UI: "X of 3 used"). */
+  /** Count of completed entities to date (for UI display only — no longer a bypass). */
   completedCount: number;
-  /** True if the client has an active saved Stripe payment method. */
+  /** True if the client has an active saved Stripe payment method (display only). */
   hasPaymentMethod: boolean;
-  /** Free entities still remaining under the trial (0 once used up). */
+  /**
+   * Free entities still remaining under the trial (0 once used up).
+   * Display only — no longer bypasses the Mercury gate.
+   */
   trialRemaining: number;
-  /** True if client has at least one invoice paid within the last 90 days. */
+  /** True if client has at least one invoice paid within the last 90 days (display only). */
   hasRecentPaidInvoice: boolean;
+  /** True if Mercury customer record exists (the actual gate condition). */
+  hasMercuryEnrolled: boolean;
+  /** True if the bypass flag is set on this client. */
+  hasBypass: boolean;
+  /** True if the client is a sandbox (slug ends in -sandbox). */
+  isSandbox: boolean;
+  /** Client name for use in error messages / dashboards. */
+  clientName?: string | null;
 }
 
 interface GateClient {
+  name?: string | null;
+  slug?: string | null;
   stripe_payment_method_id?: string | null;
   payment_method_status?: string | null;
   free_trial?: boolean | null;
   mercury_customer_id?: string | null;
+  bypass_payment_paywall?: boolean | null;
 }
 
 /**
@@ -70,29 +98,47 @@ export async function checkOrderGate(
       hasPaymentMethod: false,
       trialRemaining: 0,
       hasRecentPaidInvoice: false,
+      hasMercuryEnrolled: false,
+      hasBypass: false,
+      isSandbox: false,
+      clientName: null,
     };
   }
 
-  // Pull the three facts we need in parallel — all cheap aggregates:
-  //   • payment_method state (Stripe card on file?)
-  //   • count of completed entities (trial counter)
-  //   • count of recent paid invoices (current-paying-customer signal)
+  // Two-phase select on bypass_payment_paywall — the column is added by
+  // supabase/migration-mercury-paywall.sql and may not be applied yet in
+  // every environment. Falling back keeps the gate working pre-migration
+  // (sandbox + mercury rules still fire correctly).
+  const baseSelect = 'name, slug, stripe_payment_method_id, payment_method_status, free_trial, mercury_customer_id';
   const ninetyDaysAgo = new Date();
   ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
-  const clientQ = adminSupabase
-    .from('clients')
-    .select('stripe_payment_method_id, payment_method_status, free_trial, mercury_customer_id')
-    .eq('id', clientId)
-    .single();
+  let client: GateClient | null = null;
+  {
+    const r = await adminSupabase
+      .from('clients')
+      .select(`${baseSelect}, bypass_payment_paywall`)
+      .eq('id', clientId)
+      .single();
+    if (r.error && /bypass_payment_paywall|column .* does not exist|42703/i.test(r.error.message || '')) {
+      const r2 = await adminSupabase
+        .from('clients')
+        .select(baseSelect)
+        .eq('id', clientId)
+        .single();
+      client = r2.data ? { ...(r2.data as any), bypass_payment_paywall: false } : null;
+    } else {
+      client = (r.data as any) ?? null;
+    }
+  }
+
+  // Display-only counts (kept for UI panels — trial counter, AR aging, etc.)
+  // No longer affect the allow/block decision under the 2026-05-14 policy.
   const countQ = adminSupabase
     .from('request_entities')
     .select('id, requests!inner(client_id)', { count: 'exact', head: true })
     .eq('requests.client_id', clientId)
     .eq('status', 'completed');
-  // Recent paid invoices — `paid_at` is the canonical "money received" timestamp
-  // (set by both the Mercury reconcile cron and the Stripe webhook). Falling
-  // back to `paid` status alone catches historical rows that didn't set paid_at.
   const recentPaidQ = adminSupabase
     .from('invoices')
     .select('id', { count: 'exact', head: true })
@@ -100,8 +146,7 @@ export async function checkOrderGate(
     .eq('status', 'paid')
     .gte('paid_at', ninetyDaysAgo.toISOString());
 
-  const [clientRes, countRes, recentPaidRes] = await Promise.all([clientQ, countQ, recentPaidQ]);
-  const client = (clientRes as any).data as GateClient | null;
+  const [countRes, recentPaidRes] = await Promise.all([countQ, recentPaidQ]);
   const completedCount = (countRes as any).count as number | null;
   const recentPaidCount = (recentPaidRes as any).count as number | null;
 
@@ -110,33 +155,33 @@ export async function checkOrderGate(
     !!client?.stripe_payment_method_id && client?.payment_method_status === 'active';
   const trialRemaining = Math.max(0, TRIAL_FREE_ENTITIES - completed);
   const hasRecentPaidInvoice = (recentPaidCount ?? 0) > 0;
-  // 4th condition: established Mercury account. free_trial=false means admin
-  // has flipped them off trial (manual onboarding step), and a Mercury
-  // customer ID means they're set up for ACH billing. Catches the case
-  // where a real customer (e.g., Cal Statewide) has been onboarded but
-  // hasn't generated their first paid invoice yet — without this they'd
-  // get blocked the day their trial ends.
-  const isEstablishedAccount =
-    client?.free_trial === false && !!client?.mercury_customer_id;
+  const hasMercuryEnrolled = !!client?.mercury_customer_id;
+  const hasBypass = !!client?.bypass_payment_paywall;
+  const isSandbox = !!(client?.slug && /-sandbox$/i.test(client.slug));
 
-  if (trialRemaining > 0 || hasPaymentMethod || hasRecentPaidInvoice || isEstablishedAccount) {
-    return {
-      allowed: true,
-      completedCount: completed,
-      hasPaymentMethod,
-      trialRemaining,
-      hasRecentPaidInvoice,
-    };
-  }
-
-  return {
-    allowed: false,
-    reason: 'trial_exhausted_no_payment_method_no_recent_paid_invoice',
-    status: 402, // Payment Required
+  // Common payload shared between allowed + blocked branches.
+  const baseResult = {
     completedCount: completed,
     hasPaymentMethod,
     trialRemaining,
     hasRecentPaidInvoice,
+    hasMercuryEnrolled,
+    hasBypass,
+    isSandbox,
+    clientName: client?.name ?? null,
+  };
+
+  // Allow: sandbox OR explicit bypass OR Mercury enrolled.
+  if (isSandbox || hasBypass || hasMercuryEnrolled) {
+    return { allowed: true, ...baseResult };
+  }
+
+  // Otherwise blocked: Mercury enrollment required.
+  return {
+    allowed: false,
+    reason: 'mercury_required',
+    status: 402,
+    ...baseResult,
   };
 }
 
@@ -145,17 +190,29 @@ export async function checkOrderGate(
  * consistent across CSV/PDF/email intake endpoints.
  */
 export function buildOrderGateErrorBody(gate: OrderGateResult) {
-  const isTrialBlock = gate.reason === 'trial_exhausted_no_payment_method_no_recent_paid_invoice';
+  const isMercuryBlock = gate.reason === 'mercury_required';
   return {
-    error: isTrialBlock
-      ? `Free trial used (${gate.completedCount}/${TRIAL_FREE_ENTITIES}) and no recent paid invoice on file. Ask your manager to add a payment method, OR contact matt@moderntax.io to confirm your account is current — paying customers are not gated by this check.`
+    error: isMercuryBlock
+      ? `Payment method required. Connect your Mercury account to submit new requests — open Payment Settings on the Invoicing page (2-min self-serve flow). Existing in-flight requests are unaffected.`
       : 'Account not configured for orders. Contact support.',
     code: gate.reason,
-    cta: isTrialBlock
-      ? { label: 'Add payment method', href: '/payment-method' }
+    client_name: gate.clientName,
+    cta: isMercuryBlock
+      ? { label: 'Connect Mercury account', href: '/invoicing#payment-settings' }
       : null,
+    enroll_url: isMercuryBlock ? 'https://portal.moderntax.io/invoicing' : null,
+    next_steps: isMercuryBlock ? [
+      'Sign in to portal.moderntax.io and open the Invoicing page.',
+      'In the Payment Settings card, fill in AP email + billing address (one-time), then click Enroll Mercury.',
+      'Mercury auto-creates the customer record + sends future invoices to your AP email — ACH-payable from your bank in one click.',
+      'Existing in-flight requests are unaffected; only NEW requests are gated until enrollment completes.',
+    ] : null,
+    // Display context (no longer affects allow/block decisions but useful for UI)
     completed_count: gate.completedCount,
     trial_remaining: gate.trialRemaining,
     has_recent_paid_invoice: gate.hasRecentPaidInvoice,
+    has_mercury_enrolled: gate.hasMercuryEnrolled,
+    has_bypass: gate.hasBypass,
+    is_sandbox: gate.isSandbox,
   };
 }

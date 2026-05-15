@@ -20,7 +20,7 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
-import { checkPaymentPaywall } from '@/lib/payment-paywall';
+import { checkOrderGate, buildOrderGateErrorBody } from '@/lib/order-gate';
 
 interface EntityPayload {
   entity_name: string;
@@ -203,11 +203,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Mercury payment-method paywall — applies to partner API intake too.
-    // Sandbox clients (slug ending in -sandbox) and bypass-flagged clients
-    // are exempt; everyone else needs a Mercury account on file.
-    const paywallBlock = await checkPaymentPaywall(supabase, client.id);
-    if (paywallBlock) return paywallBlock;
+    // Order gate: Mercury enrollment required (with sandbox + bypass exemptions).
+    // Sandbox keys (Vine / Collective / Moxie) auto-pass via slug suffix;
+    // Centerstone / Cal Statewide / Clearfirm pass via bypass_payment_paywall flag;
+    // everyone else needs a Mercury customer record on file.
+    const gate = await checkOrderGate(supabase, client.id);
+    if (!gate.allowed) {
+      return NextResponse.json(buildOrderGateErrorBody(gate), { status: gate.status ?? 402 });
+    }
 
     // --- Create request ---
     const loanNumber = body.loan_number?.trim() || body.request_token.trim();
