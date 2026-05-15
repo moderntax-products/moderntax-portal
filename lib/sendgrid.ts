@@ -2816,3 +2816,162 @@ export async function sendCalendarInvite(opts: {
   const [response] = await sgMail.send(msg);
   return response.headers?.['x-message-id'] || 'sent';
 }
+
+// =============================================================================
+// ERC Check Reissue — Engagement Emails
+// =============================================================================
+
+interface ErcIntakeKickoffArgs {
+  toEmail: string;
+  toName: string;
+  entityName: string;
+  totalRecoverable: number;
+  intakeUrl: string;
+  trackingUrl: string;
+  quarters: { taxQuarter: string; amount: number; issuedDate: string }[];
+}
+
+/**
+ * Sent to the merchant CEO/authorized officer right after the engagement is
+ * created. Pairs with the Mercury invoice email — invoice handles payment,
+ * this handles the data we need (new address, Form 3911 cert box, sig).
+ */
+export async function sendErcIntakeKickoff(args: ErcIntakeKickoffArgs): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured — cannot send ERC intake kickoff');
+    return;
+  }
+  const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  const quartersRows = args.quarters.map(q =>
+    `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;">${q.taxQuarter}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;">issued ${q.issuedDate}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:right;font-weight:600;">${usd(q.amount)}</td></tr>`,
+  ).join('');
+
+  const content = `
+<p>Hi ${args.toName.split(' ')[0] || 'there'},</p>
+
+<p>Great connecting today. As discussed, here's everything queued up to reclaim <strong>${usd(args.totalRecoverable)}</strong> in returned ERC refund checks for ${args.entityName}:</p>
+
+<table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:8px 12px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#666;">Quarter</th>
+      <th style="padding:8px 12px;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#666;">Status</th>
+      <th style="padding:8px 12px;text-align:right;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#666;">Amount</th>
+    </tr>
+  </thead>
+  <tbody>${quartersRows}</tbody>
+  <tfoot>
+    <tr style="background:#f5f5f5;">
+      <td style="padding:8px 12px;font-weight:600;">Total recoverable</td>
+      <td></td>
+      <td style="padding:8px 12px;text-align:right;font-weight:700;color:#00C48C;">${usd(args.totalRecoverable)}</td>
+    </tr>
+  </tfoot>
+</table>
+
+<p><strong>Two next steps from you:</strong></p>
+<ol>
+  <li>Pay the Mercury invoice (sent separately) — covers the recovery bundle + both check reissues.</li>
+  <li>Fill out the intake form below — takes 2 minutes. We need your new mailing address (the first checks were returned because the IRS address on file is stale) and a quick Form 3911 signature.</li>
+</ol>
+
+<p>Both steps done before Monday morning = our expert calls the IRS Business &amp; Specialty Tax Line at 7 AM ET to initiate the refund trace. Replacement checks typically land in 3–6 weeks for returned checks.</p>
+
+<p><strong>You'll be able to track every step at this link:</strong><br>
+<a href="${args.trackingUrl}" style="color:#00C48C;">${args.trackingUrl}</a></p>
+
+<p>We email you on every status change. Reply to this email anytime — I'm in the inbox daily.</p>
+
+<p style="margin-top:24px;">— Matt</p>
+  `.trim();
+
+  const html = createEmailTemplate(
+    `${args.entityName} — ERC refund recovery is in motion`,
+    content,
+    { text: 'Complete intake form (2 min)', url: args.intakeUrl },
+  );
+
+  try {
+    await sgMail.send({
+      to: args.toEmail,
+      from: { email: fromEmail, name: 'Matt Parker · ModernTax' },
+      subject: `${args.entityName} — ${usd(args.totalRecoverable)} ERC refund recovery: next steps`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send ERC intake kickoff email:', error);
+    throw error;
+  }
+}
+
+interface ErcAdminIntakeReceivedArgs {
+  adminEmail: string;
+  entityName: string;
+  entityId: string;
+  officer: { name: string; title: string; signatureDate: string };
+  newMailingAddress: {
+    address1: string;
+    address2?: string;
+    city: string;
+    state: string;
+    zip: string;
+  };
+  quarters: { taxQuarter: string; certificationBox: number | null }[];
+  additionalNotes: string;
+}
+
+/**
+ * Sent to the admin (Matt) the moment a merchant submits the intake form.
+ * Cue for the expert to schedule the IRS call for the next business morning.
+ */
+export async function sendErcAdminIntakeReceived(args: ErcAdminIntakeReceivedArgs): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured — cannot send ERC admin intake notification');
+    return;
+  }
+  const addr = args.newMailingAddress;
+  const quartersList = args.quarters.map(q =>
+    `<li><strong>${q.taxQuarter}</strong> — Form 3911 Section III Box ${q.certificationBox ?? '?'}</li>`,
+  ).join('');
+  const content = `
+<p><strong>Merchant just completed the intake form.</strong> Time to schedule the IRS Business &amp; Specialty Tax Line call.</p>
+
+<p><strong>Entity:</strong> ${args.entityName}<br>
+<strong>Entity ID:</strong> <code>${args.entityId}</code></p>
+
+<p><strong>New mailing address (use this to update the IRS, not the 8821 address):</strong></p>
+<blockquote style="border-left:3px solid #00C48C;padding-left:12px;margin:8px 0;color:#444;">
+  ${addr.address1}${addr.address2 ? '<br>' + addr.address2 : ''}<br>
+  ${addr.city}, ${addr.state} ${addr.zip}
+</blockquote>
+
+<p><strong>Authorized officer:</strong> ${args.officer.name} (${args.officer.title}), signed ${args.officer.signatureDate}</p>
+
+<p><strong>Quarters to reissue:</strong></p>
+<ul>${quartersList}</ul>
+
+${args.additionalNotes ? `<p><strong>Additional notes from merchant:</strong></p><blockquote style="border-left:3px solid #999;padding-left:12px;margin:8px 0;color:#444;">${args.additionalNotes}</blockquote>` : ''}
+
+<p>Call 1-800-829-4933 at 7 AM ET tomorrow business morning. Have ready: EIN, address (above), exact dollar amounts per quarter, Form 941 filing details, authorized officer info.</p>
+  `.trim();
+
+  const html = createEmailTemplate(
+    `ERC intake received: ${args.entityName}`,
+    content,
+    { text: 'Open admin view', url: `${appUrl}/admin/compliance-status/${args.entityId}` },
+  );
+
+  try {
+    await sgMail.send({
+      to: args.adminEmail,
+      from: fromEmail,
+      subject: `[ERC] Intake received — ${args.entityName} ready for IRS call`,
+      html,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send ERC admin intake notification:', error);
+    // Non-blocking — don't throw
+  }
+}

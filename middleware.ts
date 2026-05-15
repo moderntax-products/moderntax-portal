@@ -127,6 +127,8 @@ export async function middleware(request: NextRequest) {
     '/docs',
     '/status',
     '/welcome',         // post-payment landing for self-serve buyers (no portal account yet)
+    '/erc-status',      // merchant-facing ERC refund recovery status (token-gated in page)
+    '/erc-reissue',     // merchant-facing ERC reissue intake + tracking (token-gated in page)
   ];
   const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
   if (!user && !isPublic) {
