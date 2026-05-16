@@ -113,6 +113,7 @@ export default async function RequestDetailPage({ params }: Props) {
                 requestId={request.id}
                 loanNumber={request.loan_number}
                 status={request.status}
+                isAdmin={profile.role === 'admin'}
               />
               <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium">
                 &larr; Back to Dashboard
