@@ -67,9 +67,14 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!['processor', 'manager', 'expert', 'admin'].includes(role)) {
+    // SOC 2 CC6.3/CC6.8 — `admin` role is intentionally NOT in this allowlist.
+    // Privilege escalation policy: new admins must be created via DB/console
+    // with a two-person-approval audit entry, NOT via the invite flow. This
+    // is consistent with /api/admin/update-role which also rejects elevation
+    // to admin role.
+    if (!['processor', 'manager', 'expert'].includes(role)) {
       return NextResponse.json(
-        { error: 'Role must be processor, manager, expert, or admin' },
+        { error: 'Role must be processor, manager, or expert' },
         { status: 400 }
       );
     }

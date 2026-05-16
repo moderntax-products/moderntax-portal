@@ -239,12 +239,26 @@ export async function POST(request: NextRequest) {
       email_confirm: true,
       user_metadata: { full_name: fullName.trim(), pending_approval: true },
       // app_metadata.banned_until lets admin lift it later via /admin
-      app_metadata: { banned_until: 'none' }, // we set the actual ban via banUser below
+      app_metadata: { banned_until: 'none' },
     });
 
     if (authError || !authData?.user) {
       console.error('[signup] Auth user creation error:', authError);
       return NextResponse.json({ error: 'Failed to create account', details: authError?.message }, { status: 500 });
+    }
+
+    // SOC 2 CC6.2 — ban the user at the auth layer until an admin approves.
+    // Without this, /api/auth/login + direct Supabase JS client calls would
+    // succeed with a valid JWT (email_confirm:true above issues a session).
+    // 100-year ban = effectively indefinite; lifted by /api/admin/approve-signup.
+    const { error: banError } = await admin.auth.admin.updateUserById(authData.user.id, {
+      ban_duration: '876000h', // ~100 years
+    });
+    if (banError) {
+      console.error('[signup] CRITICAL: Failed to ban pending user — they can log in:', banError);
+      // Hard fail rather than leave a usable account behind.
+      await admin.auth.admin.deleteUser(authData.user.id).catch(() => {});
+      return NextResponse.json({ error: 'Failed to create account' }, { status: 500 });
     }
 
     // Persist all qualification + intake data on the profile. NOTE:

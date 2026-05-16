@@ -54,7 +54,12 @@ export const CLIENT_CONFIG: Record<string, Omit<Client, 'id' | 'created_at' | 'u
     logo_url: 'https://cdn.moderntax.io/clients/clearfirm-logo.png',
     intake_methods: ['csv', 'pdf', 'manual', 'api'],
     transcript_format: 'html',
-    api_key: 'mt_live_txn_clearfirm_2026Q1',
+    // SOC 2 CR-1 (MOD-223) — API key removed from source. Auth happens via
+    // SHA-256 hash lookup in clients.api_key_hash (see lib/auth-util.ts).
+    // The prior literal `mt_live_txn_clearfirm_2026Q1` MUST be rotated
+    // out-of-band: generate new key, store hash in DB, communicate new key
+    // to Clearfirm via secure channel. Old key remains valid until rotation.
+    api_key: null,
     api_request_limit: null,
     webhook_url: 'https://clearfirm-api.onrender.com/api/v1/webhook/moderntax',
     webhook_secret: null,
@@ -126,21 +131,7 @@ export function validateUserClientAccess(email: string, clientSlug: string): boo
   return userClientSlug === clientSlug;
 }
 
-/**
- * Infer user role from email domain and domain structure
- * Can be enhanced with additional logic for specific domains
- */
-export function inferUserRole(
-  email: string
-): 'processor' | 'manager' | 'admin' {
-  const domain = email.split('@')[1];
-
-  // Admin emails from moderntax.io
-  if (domain === 'moderntax.io') {
-    return 'admin';
-  }
-
-  // Default to processor role for client domain emails
-  // Managers would need to be manually promoted
-  return 'processor';
-}
+// SOC 2 CC6.2/CC6.3 — `inferUserRole()` was deleted because the
+// `@moderntax.io → admin` default was a silent privilege-escalation
+// landmine for any future signup-flow refactor that imported it. Role
+// assignment is now exclusively explicit at admin-approval time.

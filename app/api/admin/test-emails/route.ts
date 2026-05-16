@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { createServerRouteClient } from '@/lib/supabase-server';
 import {
   sendPasswordResetEmail,
   sendWelcomeEmail,
@@ -34,50 +34,32 @@ const TEST_REQUEST_ID = '00000000-0000-0000-0000-000000000001';
 
 export async function POST(request: NextRequest) {
   try {
-    let testEmail: string;
-    let testName: string;
+    // SOC 2 CC6.1/6.7/6.8 — removed the prior x-api-key bearer path that
+    // accepted SUPABASE_SERVICE_ROLE_KEY as the auth secret with a
+    // non-constant-time `===` compare. The service role key MUST NOT be
+    // presented as a request credential — it grants full RLS bypass to the
+    // entire DB. If CLI/testing access is needed, add a dedicated
+    // ADMIN_TEST_SECRET env var and use `safeEqual` from lib/auth-util.
+    const cookieStore = await cookies();
+    const supabase = createServerRouteClient(cookieStore);
 
-    // Support two auth modes:
-    // 1. x-api-key header with service role key (for CLI/testing)
-    // 2. Cookie-based session auth (from browser)
-    const apiKey = request.headers.get('x-api-key');
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (apiKey && serviceRoleKey && apiKey === serviceRoleKey) {
-      // Service role key auth — find first admin
-      const supabase = createAdminClient();
-      const { data: admin } = await supabase
-        .from('profiles')
-        .select('email, full_name')
-        .eq('role', 'admin')
-        .limit(1)
-        .single() as { data: { email: string; full_name: string | null } | null; error: any };
-
-      testEmail = admin?.email || process.env.ADMIN_EMAIL || 'matt@moderntax.io';
-      testName = admin?.full_name || 'Admin';
-    } else {
-      // Cookie-based auth
-      const cookieStore = await cookies();
-      const supabase = createServerRouteClient(cookieStore);
-
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role, email, full_name')
-        .eq('id', user.id)
-        .single() as { data: { role: string; email: string; full_name: string | null } | null; error: any };
-
-      if (profile?.role !== 'admin') {
-        return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-      }
-
-      testEmail = profile.email || user.email!;
-      testName = profile.full_name || 'Test User';
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, email, full_name')
+      .eq('id', user.id)
+      .single() as { data: { role: string; email: string; full_name: string | null } | null; error: any };
+
+    if (profile?.role !== 'admin') {
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
+    const testEmail = profile.email || user.email!;
+    const testName = profile.full_name || 'Test User';
 
     // Parse optional filter from body
     let filter: string | null = null;
