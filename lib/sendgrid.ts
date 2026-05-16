@@ -187,6 +187,7 @@ export async function sendPasswordResetEmail(
       subject: 'Reset Your ModernTax Password',
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['auth_password_reset'],
     });
   } catch (error) {
     console.error('Failed to send password reset email:', error);
@@ -230,6 +231,7 @@ export async function sendRequestConfirmation(
       subject: 'Your Verification Request Has Been Submitted',
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['transactional_request_confirmation'],
     });
   } catch (error) {
     console.error('Failed to send request confirmation email:', error);
@@ -285,6 +287,7 @@ export async function sendCompletionNotification(
       subject: 'Your IRS Transcripts Are Ready',
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['transactional_transcripts_ready'],
     });
   } catch (error) {
     console.error('Failed to send completion notification email:', error);
@@ -339,6 +342,7 @@ export async function sendDailyNudge(email: string, stats: DailyNudgeStats): Pro
       subject: 'ModernTax Daily Summary',
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['transactional_daily_nudge'],
     });
   } catch (error) {
     console.error('Failed to send daily nudge email:', error);
@@ -442,6 +446,7 @@ export async function sendExpertAssignmentNotification(
       subject: `New Assignment: ${assignmentCount} ${assignmentCount === 1 ? 'Entity' : 'Entities'} Ready`,
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['expert_batch_offered'],
     });
   } catch (error) {
     console.error('Failed to send expert assignment notification:', error);
@@ -646,6 +651,7 @@ export async function sendStatusChangeNotification(
       subject: `Status Update: ${loanNumber} — ${formatStatus(newStatus)}`,
       html,
       replyTo: 'support@moderntax.io',
+      categories: ['transactional_status_change'],
     });
   } catch (error) {
     console.error('Failed to send status change notification:', error);
@@ -723,6 +729,7 @@ export async function sendFirstTranscriptCelebrationEmail(
       subject: `🎉 ${clientName} — your first IRS transcript just landed`,
       html,
       replyTo: 'matt@moderntax.io',
+      categories: ['lifecycle_first_transcript'],
     });
   } catch (error) {
     console.error('Failed to send first-transcript celebration email:', error);
@@ -2898,6 +2905,7 @@ export async function sendErcIntakeKickoff(args: ErcIntakeKickoffArgs): Promise<
       subject: `${args.entityName} — ${usd(args.totalRecoverable)} ERC refund recovery: next steps`,
       html,
       replyTo: 'matt@moderntax.io',
+      categories: ['marketing_erc_kickoff'],
     });
   } catch (error) {
     console.error('Failed to send ERC intake kickoff email:', error);
