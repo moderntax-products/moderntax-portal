@@ -5,6 +5,7 @@ import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import Link from 'next/link';
 import { RequestStatusUpdate, EntityStatusUpdate } from '@/components/AdminRequestActions';
 import { AdminExpertAssign } from '@/components/AdminExpertAssign';
+import { Regenerate8821Button } from '@/components/Regenerate8821Button';
 import { Admin8821Upload } from '@/components/Admin8821Upload';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
@@ -615,25 +616,41 @@ export default async function AdminRequestManagePage({ params }: Props) {
 
                     {/* Require signed 8821 before assigning to expert */}
                     {entity.signed_8821_url ? (
-                      <AdminExpertAssign
-                        entityId={entity.id}
-                        entityName={entity.entity_name}
-                        currentAssignment={(() => {
+                      <>
+                        <AdminExpertAssign
+                          entityId={entity.id}
+                          entityName={entity.entity_name}
+                          currentAssignment={(() => {
+                            const active = assignmentsByEntity[entity.id]?.find((a) =>
+                              ['assigned', 'in_progress'].includes(a.status)
+                            );
+                            if (!active) return undefined;
+                            return {
+                              id: active.id,
+                              expert_id: active.expert_id,
+                              status: active.status,
+                              sla_deadline: active.sla_deadline,
+                              expert_notes: active.expert_notes,
+                              miss_reason: active.miss_reason,
+                              profiles: active.expert_profile || undefined,
+                            };
+                          })()}
+                        />
+                        {(() => {
                           const active = assignmentsByEntity[entity.id]?.find((a) =>
                             ['assigned', 'in_progress'].includes(a.status)
                           );
-                          if (!active) return undefined;
-                          return {
-                            id: active.id,
-                            expert_id: active.expert_id,
-                            status: active.status,
-                            sla_deadline: active.sla_deadline,
-                            expert_notes: active.expert_notes,
-                            miss_reason: active.miss_reason,
-                            profiles: active.expert_profile || undefined,
-                          };
+                          if (!active) return null;
+                          const expertName = active.expert_profile?.full_name || active.expert_profile?.email || null;
+                          return (
+                            <Regenerate8821Button
+                              entityId={entity.id}
+                              entityName={entity.entity_name}
+                              expertName={expertName}
+                            />
+                          );
                         })()}
-                      />
+                      </>
                     ) : (
                       <p className="text-xs text-amber-600">
                         Upload a signed 8821 above before assigning to an expert

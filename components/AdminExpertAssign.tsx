@@ -6,6 +6,10 @@ interface Expert {
   id: string;
   email: string;
   full_name: string | null;
+  /** True when the expert's profile has all IRS designee fields (CAF, PTIN, phone, full_name). */
+  designee_creds_complete?: boolean;
+  /** Names of profile fields missing — used to surface "needs CAF" inline. */
+  missing_designee_fields?: string[];
 }
 
 interface AdminExpertAssignProps {
@@ -172,8 +176,8 @@ export function AdminExpertAssign({
                 >
                   <option value="">Select expert...</option>
                   {experts.map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.full_name || e.email}
+                    <option key={e.id} value={e.id} disabled={!e.designee_creds_complete}>
+                      {e.full_name || e.email}{!e.designee_creds_complete ? ` — ⚠ missing ${(e.missing_designee_fields || []).join('/')} (cannot assign)` : ''}
                     </option>
                   ))}
                 </select>

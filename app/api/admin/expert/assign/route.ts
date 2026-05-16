@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
+import { validateExpertDesigneeCreds } from '@/lib/8821-pdf';
 
 export async function POST(request: Request) {
   try {
@@ -40,15 +41,31 @@ export async function POST(request: Request) {
 
     const adminSupabase = createAdminClient();
 
-    // Verify the expert exists and has expert role
+    // Verify the expert exists and has expert role + complete IRS designee creds.
+    // Caught 2026-05-16: Joel Abernathy was assigned 4 entities with
+    // caf_number=null/ptin=null/phone_number=null on his profile. The 8821s
+    // generated for those assignments listed someone else (LaTonya/Matt) as
+    // the IRS designee — invalid for Joel to use on a PPS call.
     const { data: expertProfile } = await adminSupabase
       .from('profiles')
-      .select('id, role, email, full_name')
+      .select('id, role, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
       .eq('id', expertId)
-      .single();
+      .single() as { data: any };
 
     if (!expertProfile || expertProfile.role !== 'expert') {
       return NextResponse.json({ error: 'Invalid expert' }, { status: 400 });
+    }
+
+    const missingCreds = validateExpertDesigneeCreds(expertProfile);
+    if (missingCreds.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Cannot assign — ${expertProfile.full_name || expertProfile.email}'s profile is missing required IRS designee fields: ${missingCreds.join(', ')}. They must complete /expert/profile before receiving assignments.`,
+          missing_fields: missingCreds,
+          expert_email: expertProfile.email,
+        },
+        { status: 400 },
+      );
     }
 
     // Verify all entities exist and have signed 8821s
