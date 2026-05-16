@@ -582,6 +582,13 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   confirm prevents accidental bulk spend. */}
               <FireAllPending8821sButton />
               <Link
+                href="/admin/batches/new"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors"
+                title="Offer a 3-5 entity batch to an expert (30-min accept window, 24-hr completion)"
+              >
+                Offer Batch
+              </Link>
+              <Link
                 href="/admin/billing"
                 className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
               >

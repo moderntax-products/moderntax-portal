@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase';
 import { ExpertAssignmentCard } from '@/components/ExpertAssignmentCard';
 import { IrsCallLauncher } from '@/components/IrsCallLauncher';
 import { IrsCallStatusPanel } from '@/components/IrsCallStatusPanel';
 import { IrsCallHistory } from '@/components/IrsCallHistory';
 import { LogoutButton } from '@/components/LogoutButton';
+import { PendingBatchOffer } from '@/components/PendingBatchOffer';
 import { useRouter } from 'next/navigation';
 
 interface AssignmentData {
@@ -47,7 +48,13 @@ export default function ExpertDashboard() {
   // which call needs attention.
   const MAX_CONCURRENT_CALLS = 3;
   const [activeCallSessionIds, setActiveCallSessionIds] = useState<string[]>([]);
-  const supabase = createClient();
+  // STABILIZE the supabase client across renders. Was previously called
+  // inline (`const supabase = createClient()`) which created a fresh object
+  // every render → fetchData useCallback's deps changed every render →
+  // useEffect([fetchData]) fired every render → infinite re-fetch loop
+  // that froze the dashboard. useMemo with [] deps gives us a singleton
+  // for this component's lifetime.
+  const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
 
   // Check for active IRS calls on load — pulls ALL running sessions for
@@ -229,6 +236,9 @@ export default function ExpertDashboard() {
         <div className="mb-4 px-3 py-1.5 bg-red-100 border border-red-300 rounded text-xs text-red-800 font-medium text-center">
           RESTRICTED — Contains PII / Tax Data
         </div>
+
+        {/* Supply-demand batch offer / active batch card */}
+        <PendingBatchOffer />
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">

@@ -2,6 +2,10 @@
   "installCommand": "npm ci",
   "crons": [
     {
+      "path": "/api/cron/expire-batches",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/nudge",
       "schedule": "0 16 * * *"
     },
