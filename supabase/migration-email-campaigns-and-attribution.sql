@@ -125,23 +125,26 @@ signed_8821_conversions AS (
     AND e.signed_8821_url IS NOT NULL
     AND COALESCE(e.signature_created_at, e.updated_at) > NOW() - INTERVAL '90 days'
 ),
--- Conversion event 3: invoice paid. Email comes via the client → its
--- billing AP email or contact email (whichever is non-null). Falls back
--- gracefully so we don't lose conversions when the AP email is unset.
+-- Conversion event 3: invoice paid. Email comes via the client's
+-- billing AP email. (The clients table doesn't have a separate
+-- "contact_email" — billing_ap_email IS the contact for invoicing.)
+-- Conversions for clients without billing_ap_email get dropped — they
+-- can be backfilled by either filling in the email or adding a manual
+-- attribution table down the road.
 invoice_conversions AS (
   SELECT
-    LOWER(COALESCE(c.billing_ap_email, c.contact_email)) AS email,
-    i.paid_at                    AS converted_at,
-    'invoice_paid'::TEXT         AS conversion_type,
-    i.id::TEXT                   AS conversion_ref,
-    i.invoice_number             AS conversion_label,
-    i.total_amount               AS conversion_value
+    LOWER(c.billing_ap_email) AS email,
+    i.paid_at                 AS converted_at,
+    'invoice_paid'::TEXT      AS conversion_type,
+    i.id::TEXT                AS conversion_ref,
+    i.invoice_number          AS conversion_label,
+    i.total_amount            AS conversion_value
   FROM public.invoices i
   JOIN public.clients c ON c.id = i.client_id
   WHERE i.status = 'paid'
     AND i.paid_at IS NOT NULL
     AND i.paid_at > NOW() - INTERVAL '90 days'
-    AND COALESCE(c.billing_ap_email, c.contact_email) IS NOT NULL
+    AND c.billing_ap_email IS NOT NULL
 ),
 all_conversions AS (
   SELECT * FROM request_conversions
