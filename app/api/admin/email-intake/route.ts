@@ -405,7 +405,7 @@ export async function POST(request: NextRequest) {
                   .from('request_entities')
                   .update({ signature_id: signatureRequestId, status: '8821_sent' })
                   .eq('id', entity.id);
-                console.log(`[email-intake] 8821 sent for ${entity.entity_name} → ${entity.signer_email}`);
+                console.log(`[email-intake] 8821 sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
               } catch (sendErr) {
                 console.error(`[email-intake] Failed to send 8821 for ${entity.entity_name}:`, sendErr);
               }

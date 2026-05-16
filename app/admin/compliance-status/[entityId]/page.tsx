@@ -23,6 +23,7 @@ import { createServerComponentClient, createAdminClient } from '@/lib/supabase-s
 import { buildTaxLiabilityReport } from '@/lib/tax-liability-report';
 import { compareIncomeSnapshots, type IncomeSnapshot } from '@/lib/income-reconciliation';
 import { MonitoringEnrollCTA } from '@/components/MonitoringEnrollCTA';
+import { TidReveal } from '@/components/TidReveal';
 
 interface PageProps {
   params: Promise<{ entityId: string }>;
@@ -166,7 +167,8 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
             Compliance Status Report — {entity.entity_name}
           </h1>
           <p className="text-gray-600 text-sm mt-1">
-            {clientName} · {entity.tid_kind || 'TIN'} {entity.tid} ·{' '}
+            {clientName} · {entity.tid_kind || 'TIN'}{' '}
+            <TidReveal tid={entity.tid} kind={entity.tid_kind} className="font-mono" /> ·{' '}
             generated from {report.transcriptsParsed} transcript{report.transcriptsParsed === 1 ? '' : 's'} on file
           </p>
           {entity.fiscal_year_end_month && entity.fiscal_year_end_month !== 12 && (

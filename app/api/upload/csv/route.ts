@@ -699,9 +699,9 @@ export async function POST(request: NextRequest) {
             // helper updates the row's status + signature_id itself.
             const result = await send8821WithFallback(entity, admin);
             if (result.outcome === 'sent_hellosign') {
-              console.log(`[csv-upload] 8821 sent via HelloSign for ${entity.entity_name} → ${entity.signer_email}`);
+              console.log(`[csv-upload] 8821 sent via HelloSign for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
             } else if (result.outcome === 'sent_manual') {
-              console.log(`[csv-upload] 8821 sent via MANUAL email for ${entity.entity_name} → ${entity.signer_email}`);
+              console.log(`[csv-upload] 8821 sent via MANUAL email for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
             } else {
               console.error(`[csv-upload] Failed to send 8821 for ${entity.entity_name}: ${result.error}`);
             }

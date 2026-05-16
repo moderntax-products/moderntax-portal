@@ -137,11 +137,11 @@ export async function POST(request: Request) {
         }
 
         // Notify admin users about the flagged issue
-        let entityData: { entity_name: string; request_id: string; signer_email: string | null; signer_first_name: string | null; signer_last_name: string | null; form_type: string; signed_8821_url: string | null } | null = null;
+        let entityData: { id: string; entity_name: string; request_id: string; signer_email: string | null; signer_first_name: string | null; signer_last_name: string | null; form_type: string; signed_8821_url: string | null } | null = null;
         try {
           const { data: entity } = await adminSupabase
             .from('request_entities')
-            .select('entity_name, request_id, signer_email, signer_first_name, signer_last_name, form_type, signed_8821_url')
+            .select('id, entity_name, request_id, signer_email, signer_first_name, signer_last_name, form_type, signed_8821_url')
             .eq('id', assignment.entity_id)
             .single();
 
@@ -179,9 +179,15 @@ export async function POST(request: Request) {
             // Generate a download URL for the signed 8821 if available
             let downloadUrl: string | null = null;
             if (entityData.signed_8821_url) {
+              // SOC 2 C1.1 — 1-hour TTL on 8821 signed URLs in outbound
+              // email. Was previously 7 days; a forwarded/cached email gave
+              // a week-long window into a PDF containing the taxpayer's
+              // full SSN + signature. If the expert needs a longer-lived
+              // link, they should re-fetch via /api/expert/download-8821
+              // which issues fresh 1-hour URLs on demand.
               const { data: signedUrl } = await adminSupabase.storage
                 .from('documents')
-                .createSignedUrl(entityData.signed_8821_url, 60 * 60 * 24 * 7); // 7 day expiry
+                .createSignedUrl(entityData.signed_8821_url, 60 * 60); // 1 hour
               downloadUrl = signedUrl?.signedUrl || null;
             }
 
@@ -221,7 +227,7 @@ export async function POST(request: Request) {
               },
             });
 
-            console.log(`[IRS Rejected] Auto fax-back email sent to ${entityData.signer_email} for entity ${entityData.entity_name}`);
+            console.log(`[IRS Rejected] Auto fax-back email sent for entity ${entityData.entity_name} (${entityData.id?.slice(0, 8) || '?'})`);
           } catch (faxEmailError) {
             console.error('Failed to send 8821 fax request email:', faxEmailError);
           }

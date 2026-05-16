@@ -162,7 +162,7 @@ export async function GET(request: NextRequest) {
         outcome: 'sent',
         signature_id: sig.signatureRequestId,
       });
-      console.log(`[8821-auto-send-pending] ✓ sent for ${entity.entity_name} (${entity.signer_email})`);
+      console.log(`[8821-auto-send-pending] ✓ sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
     } catch (err: any) {
       // 402 payment_required — Dropbox Sign free tier blocking production
       // signatures. Fall back to emailing the PDF directly via SendGrid
@@ -204,7 +204,7 @@ export async function GET(request: NextRequest) {
             outcome: 'sent',
             signature_id: `MANUAL-${entity.id.slice(0, 8)}`,
           });
-          console.log(`[8821-auto-send-pending] ✓ MANUAL email sent for ${entity.entity_name} (${entity.signer_email})`);
+          console.log(`[8821-auto-send-pending] ✓ MANUAL email sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
           continue;
         } catch (fbErr: any) {
           console.error(`[8821-auto-send-pending] ✗ manual fallback failed for ${entity.entity_name}:`, fbErr.message);

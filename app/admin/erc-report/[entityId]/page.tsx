@@ -19,6 +19,7 @@ import { buildERCReport, ercStatusLabel, type ERCStatus, type ERCQuarter } from 
 import { PRICE_CHECK_REISSUE, PRICE_ERC_FULL_SWEEP_PREMIUM, fmtUsdShort } from '@/lib/pricing';
 import { RequestCheckReissueButton } from '@/components/RequestCheckReissueButton';
 import { UpgradeToFullSweepButton } from '@/components/UpgradeToFullSweepButton';
+import { TidReveal } from '@/components/TidReveal';
 import Link from 'next/link';
 
 interface PageProps {
@@ -156,7 +157,7 @@ export default async function ERCReportPage({ params }: PageProps) {
             ERC Status Report — {entity.entity_name}
           </h1>
           <p className="text-gray-600 text-sm mt-1">
-            {clientName} · EIN {entity.tid} · Form 941 Account Transcripts ·
+            {clientName} · EIN <TidReveal tid={entity.tid} kind="EIN" className="font-mono" /> · Form 941 Account Transcripts ·
             generated from {transcripts.length} transcript{transcripts.length === 1 ? '' : 's'} on file
           </p>
         </div>

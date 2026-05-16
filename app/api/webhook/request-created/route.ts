@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
               })
               .eq('id', entity.id);
 
-            console.log(`[request-created] 8821 sent for ${entity.entity_name} → ${entity.signer_email} (sig: ${signatureRequestId})`);
+            console.log(`[request-created] 8821 sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'}, sig: ${signatureRequestId})`);
           } catch (sendError) {
             console.error(`[request-created] Failed to send 8821 for ${entity.entity_name}:`, sendError);
           }

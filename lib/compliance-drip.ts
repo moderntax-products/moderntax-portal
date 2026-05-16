@@ -310,10 +310,10 @@ export async function sendDripEmail(
         clickTracking: { enable: true },
       },
     });
-    console.log(`[compliance-drip] Stage ${stage} email sent to ${drip.signer_email} for ${drip.entity_name}`);
+    console.log(`[compliance-drip] Stage ${stage} email sent for ${drip.entity_name} (drip ${drip.id?.slice(0, 8) || '?'})`);
     return true;
   } catch (err) {
-    console.error(`[compliance-drip] Stage ${stage} email failed for ${drip.signer_email}:`, err);
+    console.error(`[compliance-drip] Stage ${stage} email failed for drip ${drip.id?.slice(0, 8) || '?'}:`, err);
     return false;
   }
 }

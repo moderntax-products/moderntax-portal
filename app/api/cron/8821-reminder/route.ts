@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
         try {
           await sendFreshPdf(entity);
           remindedManualPdf++;
-          console.log(`[8821-reminder] MANUAL fresh-PDF sent for ${entity.entity_name} → ${entity.signer_email}`);
+          console.log(`[8821-reminder] MANUAL fresh-PDF sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
         } catch (err) {
           failed++;
           const msg = err instanceof Error ? err.message : 'unknown';
@@ -144,7 +144,7 @@ export async function GET(request: NextRequest) {
       try {
         await sendReminder(entity.signature_id!, entity.signer_email!);
         remindedDropbox++;
-        console.log(`[8821-reminder] Dropbox reminder sent for ${entity.entity_name} → ${entity.signer_email}`);
+        console.log(`[8821-reminder] Dropbox reminder sent for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
       } catch (err) {
         const dropboxMsg = err instanceof Error ? err.message : 'unknown';
         try {
@@ -154,13 +154,13 @@ export async function GET(request: NextRequest) {
             signatureRequestId: entity.signature_id!,
           });
           remindedFallback++;
-          console.log(`[8821-reminder] SendGrid text reminder for ${entity.entity_name} → ${entity.signer_email} (Dropbox: ${dropboxMsg})`);
+          console.log(`[8821-reminder] SendGrid text reminder for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'}) (Dropbox: ${dropboxMsg})`);
         } catch (fallbackErr) {
           // Both API and text-fallback failed — try the manual PDF path
           try {
             await sendFreshPdf(entity);
             remindedManualPdf++;
-            console.log(`[8821-reminder] Fresh-PDF rescue for ${entity.entity_name} → ${entity.signer_email}`);
+            console.log(`[8821-reminder] Fresh-PDF rescue for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
           } catch (pdfErr) {
             failed++;
             const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : 'unknown';
