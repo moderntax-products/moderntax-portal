@@ -1,290 +1,201 @@
 /**
- * Auto-Assign Experts Cron Job
- * Finds unassigned entities that are ready for expert review and assigns them
- * to the least-loaded expert.
- * GET /api/cron/auto-assign-experts
+ * Auto-batch experts (formerly auto-assign-experts).
  *
- * Expected to be called by Vercel Cron every 15 minutes with CRON_SECRET in headers
+ * Replaces the old per-entity direct-assignment cron with the supply-demand
+ * batch workflow (Matt 2026-05-16 directive). Every 30 minutes:
+ *
+ *   1. Find eligible entities — 8821_signed or irs_queue, has signed 8821
+ *      (or is W2_INCOME or comes from API intake), no active assignment.
+ *   2. Group by client_id so batches stay client-coherent (one expert
+ *      handles all of a single client's entities in one batch when possible).
+ *   3. Find available experts — role=expert, complete designee creds,
+ *      no current pending_acceptance/accepted batch.
+ *   4. Round-robin offer batches of up to 5 entities per available expert.
+ *   5. createBatch() per pairing — validates each one + creates the offer.
+ *
+ * GET /api/cron/auto-assign-experts
+ * Auth: Vercel cron Bearer secret.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
-import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 import { requireBearer } from '@/lib/auth-util';
+import { createBatch, BATCH_MAX_ENTITIES } from '@/lib/assignment-batch';
+import { validateExpertDesigneeCreds } from '@/lib/8821-pdf';
 
 export const maxDuration = 60;
+export const runtime = 'nodejs';
+
+interface PoolEntity {
+  id: string;
+  request_id: string;
+  client_id: string;
+  entity_name: string;
+}
 
 export async function GET(request: NextRequest) {
-  try {
-    // Validate CRON_SECRET
-    const unauthorized = requireBearer(request, process.env.CRON_SECRET);
-    if (unauthorized) return unauthorized;
+  const unauthorized = requireBearer(request, process.env.CRON_SECRET);
+  if (unauthorized) return unauthorized;
 
-    const supabase = createAdminClient();
+  const admin = createAdminClient();
+  const skipped: Record<string, number> = {};
 
-    // Find entities with status '8821_signed' or 'irs_queue' that are ready for assignment
-    const { data: eligibleEntities, error: entitiesError } = await supabase
-      .from('request_entities')
-      .select('id, entity_name, status, signed_8821_url, form_type, request_id')
-      .in('status', ['8821_signed', 'irs_queue']) as { data: any[] | null; error: any };
+  // ─── 1. Eligible entities ────────────────────────────────────────────────
+  const { data: rawEligible } = await admin
+    .from('request_entities')
+    .select('id, entity_name, status, signed_8821_url, form_type, request_id')
+    .in('status', ['8821_signed', 'irs_queue']) as { data: any[] | null };
 
-    if (entitiesError) {
-      console.error('Failed to fetch eligible entities:', entitiesError);
-      return NextResponse.json(
-        { error: 'Failed to fetch entities' },
-        { status: 500 }
-      );
-    }
+  const eligible = rawEligible || [];
+  if (eligible.length === 0) {
+    return NextResponse.json({ success: true, batches_created: 0, entities_offered: 0, note: 'no eligible entities' });
+  }
 
-    // Determine which entities come from API-intake requests (e.g., ClearFirm)
-    // These skip 8821 internally, so they don't need signed_8821_url
-    const entityRequestIds = [...new Set((eligibleEntities || []).map((e: any) => e.request_id))];
-    let apiEntityIds = new Set<string>();
+  // Determine which requests are API-intake (they skip the 8821 flow internally)
+  const requestIds = [...new Set(eligible.map(e => e.request_id))];
+  const { data: requests } = await admin
+    .from('requests')
+    .select('id, client_id, intake_method')
+    .in('id', requestIds) as { data: any[] | null };
+  const apiRequestIds = new Set((requests || []).filter(r => r.intake_method === 'api').map(r => r.id));
+  const requestToClient = new Map<string, string>((requests || []).map(r => [r.id, r.client_id]));
 
-    if (entityRequestIds.length > 0) {
-      const { data: requests } = await supabase
-        .from('requests')
-        .select('id, intake_method')
-        .in('id', entityRequestIds)
-        .eq('intake_method', 'api') as { data: any[] | null; error: any };
+  // Entity is "ready" if it has a signed 8821 OR is W2_INCOME OR is API-intake
+  const ready = eligible.filter(e =>
+    e.signed_8821_url || e.form_type === 'W2_INCOME' || apiRequestIds.has(e.request_id),
+  );
+  skipped.not_ready_for_assignment = eligible.length - ready.length;
 
-      const apiRequestIds = new Set((requests || []).map((r: any) => r.id));
-      apiEntityIds = new Set(
-        (eligibleEntities || [])
-          .filter((e: any) => apiRequestIds.has(e.request_id))
-          .map((e: any) => e.id)
-      );
-    }
+  // Filter out anything that already has an active assignment
+  const { data: activeAssns } = await admin
+    .from('expert_assignments')
+    .select('entity_id')
+    .in('entity_id', ready.map(e => e.id))
+    .in('status', ['pending_acceptance', 'assigned', 'in_progress']);
+  const blockedIds = new Set((activeAssns || []).map((a: any) => a.entity_id));
+  const pool: PoolEntity[] = ready
+    .filter(e => !blockedIds.has(e.id))
+    .map(e => ({
+      id: e.id,
+      request_id: e.request_id,
+      client_id: requestToClient.get(e.request_id) || '',
+      entity_name: e.entity_name,
+    }))
+    .filter(e => e.client_id); // drop orphans we can't bucket
+  skipped.already_assigned = ready.length - pool.length - (skipped.not_ready_for_assignment || 0);
 
-    // Filter to entities that are ready:
-    //   1. Has signed_8821_url (internal 8821 flow complete), OR
-    //   2. Is W2_INCOME employment request, OR
-    //   3. Comes from API intake (8821 handled externally, e.g. ClearFirm)
-    const readyEntities = (eligibleEntities || []).filter(
-      (e: any) => e.signed_8821_url || e.form_type === 'W2_INCOME' || apiEntityIds.has(e.id)
-    );
+  if (pool.length === 0) {
+    return NextResponse.json({ success: true, batches_created: 0, entities_offered: 0, skipped });
+  }
 
-    if (readyEntities.length === 0) {
-      return NextResponse.json({
-        success: true,
-        assigned: 0,
-        skipped: 0,
-        message: 'No unassigned entities found',
-        processedAt: new Date().toISOString(),
-      });
-    }
+  // ─── 2. Available experts ────────────────────────────────────────────────
+  const { data: experts } = await admin
+    .from('profiles')
+    .select('id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
+    .eq('role', 'expert') as { data: any[] | null };
 
-    // For each entity, check if there's already an active expert_assignment
-    const entityIds = readyEntities.map((e: any) => e.id);
-    const { data: existingAssignments, error: assignmentsError } = await supabase
-      .from('expert_assignments')
-      .select('entity_id, status')
-      .in('entity_id', entityIds)
-      .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
+  const credsComplete = (experts || []).filter(e => validateExpertDesigneeCreds(e).length === 0);
+  skipped.experts_incomplete_creds = (experts || []).length - credsComplete.length;
 
-    if (assignmentsError) {
-      console.error('Failed to fetch existing assignments:', assignmentsError);
-      return NextResponse.json(
-        { error: 'Failed to fetch existing assignments' },
-        { status: 500 }
-      );
-    }
-
-    const assignedEntityIds = new Set((existingAssignments || []).map((a: any) => a.entity_id));
-    const unassignedEntities = readyEntities.filter((e: any) => !assignedEntityIds.has(e.id));
-
-    if (unassignedEntities.length === 0) {
-      return NextResponse.json({
-        success: true,
-        assigned: 0,
-        skipped: readyEntities.length,
-        message: 'All eligible entities already have active assignments',
-        processedAt: new Date().toISOString(),
-      });
-    }
-
-    // Get all experts (profiles where role='expert')
-    const { data: allExperts, error: expertsError } = await supabase
-      .from('profiles')
-      .select('id, email, full_name')
-      .eq('role', 'expert') as { data: any[] | null; error: any };
-
-    if (expertsError) {
-      console.error('Failed to fetch experts:', expertsError);
-      return NextResponse.json(
-        { error: 'Failed to fetch experts' },
-        { status: 500 }
-      );
-    }
-
-    // Filter out blocked experts (test accounts, inactive, etc.)
-    const BLOCKED_EXPERT_EMAILS = [
-      'test@moderntax.io',
-      'testexpert@moderntax.io',
-      'test@getclearfirm.com',
-    ];
-    const experts = (allExperts || []).filter(
-      (e: any) => !BLOCKED_EXPERT_EMAILS.includes(e.email?.toLowerCase())
-    );
-
-    if (experts.length === 0) {
-      return NextResponse.json({
-        success: true,
-        assigned: 0,
-        skipped: unassignedEntities.length,
-        message: 'No experts available for assignment',
-        processedAt: new Date().toISOString(),
-      });
-    }
-
-    // Get the first admin to use as assigned_by
-    const { data: adminProfile } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('role', 'admin')
-      .limit(1)
-      .single() as { data: { id: string } | null; error: any };
-
-    const assignedBy = adminProfile?.id || experts[0].id;
-
-    // For each expert, count their active assignments
-    const expertIds = experts.map((e: any) => e.id);
-    const { data: activeAssignments, error: activeError } = await supabase
-      .from('expert_assignments')
-      .select('expert_id')
-      .in('expert_id', expertIds)
-      .in('status', ['assigned', 'in_progress']) as { data: any[] | null; error: any };
-
-    if (activeError) {
-      console.error('Failed to fetch active assignment counts:', activeError);
-      return NextResponse.json(
-        { error: 'Failed to fetch active assignments' },
-        { status: 500 }
-      );
-    }
-
-    // Count assignments per expert
-    const assignmentCounts = new Map<string, number>();
-    experts.forEach((e: any) => assignmentCounts.set(e.id, 0));
-    (activeAssignments || []).forEach((a: any) => {
-      assignmentCounts.set(a.expert_id, (assignmentCounts.get(a.expert_id) || 0) + 1);
-    });
-
-    // Max outstanding assignments per expert before they stop receiving new ones
-    // Raised from 5 → 20 to support 50 req/hour throughput at scale
-    const MAX_ACTIVE_ASSIGNMENTS = 20;
-
-    let assigned = 0;
-    let capacityBlocked = 0;
-    const errors: { entityId: string; error: string }[] = [];
-    // Track assignments per expert for batch notification
-    const expertAssignmentMap = new Map<string, { email: string; entityNames: string[]; isEmployment: boolean[] }>();
-
-    const slaDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-    for (const entity of unassignedEntities) {
-      try {
-        // Pick expert with fewest active assignments, respecting capacity cap
-        let minCount = Infinity;
-        let bestExpert: any = null;
-        for (const expert of experts) {
-          const count = assignmentCounts.get(expert.id) || 0;
-          if (count < MAX_ACTIVE_ASSIGNMENTS && count < minCount) {
-            minCount = count;
-            bestExpert = expert;
-          }
-        }
-
-        if (!bestExpert) {
-          capacityBlocked++;
-          console.log(`[auto-assign] All experts at capacity (${MAX_ACTIVE_ASSIGNMENTS} max) — skipping ${entity.entity_name}`);
-          continue;
-        }
-
-        // Create expert_assignment
-        const { error: insertError } = await supabase
-          .from('expert_assignments')
-          .insert({
-            entity_id: entity.id,
-            expert_id: bestExpert.id,
-            assigned_by: assignedBy,
-            status: 'assigned',
-            sla_deadline: slaDeadline,
-          });
-
-        if (insertError) {
-          console.error(`[auto-assign] Insert failed for entity ${entity.id}:`, insertError);
-          errors.push({ entityId: entity.id, error: 'Assignment insert failed' });
-          continue;
-        }
-
-        // Update entity status to 'irs_queue' if not already
-        if (entity.status !== 'irs_queue') {
-          await supabase
-            .from('request_entities')
-            .update({ status: 'irs_queue' })
-            .eq('id', entity.id);
-        }
-
-        // Increment the count for load balancing of subsequent assignments
-        assignmentCounts.set(bestExpert.id, (assignmentCounts.get(bestExpert.id) || 0) + 1);
-
-        // Collect for batch notification
-        const isEmployment = entity.form_type === 'W2_INCOME';
-        if (!expertAssignmentMap.has(bestExpert.id)) {
-          expertAssignmentMap.set(bestExpert.id, {
-            email: bestExpert.email,
-            entityNames: [],
-            isEmployment: [],
-          });
-        }
-        const expertData = expertAssignmentMap.get(bestExpert.id)!;
-        expertData.entityNames.push(entity.entity_name);
-        expertData.isEmployment.push(isEmployment);
-
-        assigned++;
-        console.log(`[auto-assign] Assigned ${entity.entity_name} to ${bestExpert.full_name || bestExpert.email}`);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        console.error(`[auto-assign] Error assigning entity ${entity.id}:`, errorMessage);
-        errors.push({ entityId: entity.id, error: errorMessage });
-      }
-    }
-
-    // Send batch notifications per expert (parallelized to avoid timeout)
-    const notificationPromises = Array.from(expertAssignmentMap.values()).map(
-      async (expertData) => {
-        try {
-          const hasEmployment = expertData.isEmployment.some((v) => v);
-          await sendExpertAssignmentNotification(
-            expertData.email,
-            expertData.entityNames,
-            expertData.entityNames.length,
-            hasEmployment
-          );
-        } catch (notifErr) {
-          console.error(`[auto-assign] Notification error for ${expertData.email}:`, notifErr);
-        }
-      }
-    );
-    await Promise.all(notificationPromises);
-
+  if (credsComplete.length === 0) {
     return NextResponse.json({
       success: true,
-      assigned,
-      skipped: readyEntities.length - unassignedEntities.length,
-      capacityBlocked,
-      totalEligible: readyEntities.length,
-      maxPerExpert: MAX_ACTIVE_ASSIGNMENTS,
-      processedAt: new Date().toISOString(),
-      errors: errors.length > 0 ? errors : undefined,
+      batches_created: 0,
+      entities_offered: 0,
+      skipped: { ...skipped, no_credentialed_experts: 1 },
     });
-  } catch (error) {
-    console.error('Auto-assign experts cron error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json(
-      { error: 'Cron job failed', details: errorMessage },
-      { status: 500 }
-    );
   }
+
+  // Drop experts who already have a pending/accepted batch
+  const { data: busyBatches } = await admin
+    .from('assignment_batches')
+    .select('expert_id')
+    .in('status', ['pending_acceptance', 'accepted']);
+  const busyExperts = new Set((busyBatches || []).map((b: any) => b.expert_id));
+  const available = credsComplete.filter(e => !busyExperts.has(e.id));
+  skipped.experts_busy = credsComplete.length - available.length;
+
+  if (available.length === 0) {
+    return NextResponse.json({
+      success: true,
+      batches_created: 0,
+      entities_offered: 0,
+      skipped,
+      note: 'all credentialed experts already have an active batch — try again in 30 min',
+    });
+  }
+
+  // ─── 3. Group pool by client (client-coherent batches) ───────────────────
+  const byClient = new Map<string, PoolEntity[]>();
+  for (const e of pool) {
+    const arr = byClient.get(e.client_id) || [];
+    arr.push(e);
+    byClient.set(e.client_id, arr);
+  }
+
+  // Flatten into batches of up to BATCH_MAX_ENTITIES, preserving client grouping
+  const batchesToOffer: PoolEntity[][] = [];
+  for (const [, clientEntities] of byClient) {
+    for (let i = 0; i < clientEntities.length; i += BATCH_MAX_ENTITIES) {
+      batchesToOffer.push(clientEntities.slice(i, i + BATCH_MAX_ENTITIES));
+    }
+  }
+
+  // ─── 4. Round-robin offer to available experts ───────────────────────────
+  const created: { batchId: string; expertEmail: string; entityCount: number; entityNames: string[] }[] = [];
+  const errors: { expertEmail: string; entityIds: string[]; error: string }[] = [];
+
+  // Cap: one batch per expert per cron run (matches the one-active-batch rule)
+  const offerCount = Math.min(available.length, batchesToOffer.length);
+  for (let i = 0; i < offerCount; i++) {
+    const expert = available[i];
+    const batchEntities = batchesToOffer[i];
+
+    const result = await createBatch(admin, {
+      expertId: expert.id,
+      entityIds: batchEntities.map(e => e.id),
+      offeredBy: expert.id, // self-attributed since cron is system-actor; the
+                            // batch's offered_by is informational only and
+                            // expert_id is the authoritative recipient.
+      notes: 'Auto-batched by cron',
+    });
+
+    if (result.ok && result.batch) {
+      created.push({
+        batchId: result.batch.id,
+        expertEmail: expert.email,
+        entityCount: batchEntities.length,
+        entityNames: batchEntities.map(e => e.entity_name),
+      });
+      // Notify expert (best-effort)
+      try {
+        const { sendExpertAssignmentNotification } = await import('@/lib/sendgrid');
+        await sendExpertAssignmentNotification(
+          expert.email,
+          batchEntities.map(e => e.entity_name),
+          batchEntities.length,
+        );
+      } catch (notifyErr) {
+        console.warn('[auto-batch] notification failed (non-fatal):', notifyErr);
+      }
+    } else {
+      errors.push({
+        expertEmail: expert.email,
+        entityIds: batchEntities.map(e => e.id),
+        error: result.error || 'unknown',
+      });
+    }
+  }
+
+  return NextResponse.json({
+    success: true,
+    batches_created: created.length,
+    entities_offered: created.reduce((s, c) => s + c.entityCount, 0),
+    available_experts: available.length,
+    pending_pool_size: pool.length,
+    skipped,
+    created,
+    errors,
+    processed_at: new Date().toISOString(),
+  });
 }
