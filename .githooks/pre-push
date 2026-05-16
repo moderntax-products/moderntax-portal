@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-# .githooks/pre-push — runs before any `git push` to catch tracked files
-# that import non-tracked modules. Stops the deploy-breaking trap at the
+# .githooks/pre-push — runs before any `git push` to catch issues at the
 # source (your machine) instead of waiting for Vercel to ERROR.
+#
+# Three gates, in order of speed:
+#   1. Untracked imports (fastest — staged files only)
+#   2. next lint (catches unescaped apostrophes, unused vars — the class
+#      of failure that's killed three deploys in May 2026)
+#   3. tsc --noEmit (catches type errors)
 #
 # Bypass if you really need to: git push --no-verify
 set -e
+
+echo "→ check-untracked-imports..."
 node scripts/check-untracked-imports.mjs
+
+echo "→ next lint..."
+npx next lint --quiet
+
+echo "→ tsc --noEmit..."
+npx tsc --noEmit -p tsconfig.json
+
+echo "✓ pre-push gates clean"

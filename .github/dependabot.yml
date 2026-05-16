@@ -1,0 +1,45 @@
+# Dependabot — SOC 2 CC9.1 (Vendor Risk Management)
+#
+# Weekly automated PRs for npm + GitHub Actions dependency updates.
+# Closes the dependency audit H5 finding ("no automated security gates").
+#
+# Strategy:
+#   - Group minor + patch updates into a single PR per ecosystem (less PR noise)
+#   - Major updates get their own PR each (easier to evaluate breaking changes)
+#   - Security advisories ALWAYS get an immediate dedicated PR
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - automated
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    # Ignore Next.js majors here — handle as a deliberate planned upgrade
+    # (the 14 → 16 jump in particular needs hands-on regression).
+    ignore:
+      - dependency-name: next
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - automated

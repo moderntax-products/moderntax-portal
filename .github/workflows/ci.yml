@@ -1,0 +1,75 @@
+# GitHub Actions CI — SOC 2 CC8.1 (Change Management)
+#
+# Mandatory pre-deploy gates that the dependency audit (H5) flagged as
+# the single biggest control deficiency: no automated security or quality
+# checks were enforced before code reached production. This workflow runs
+# on every push to main and every PR, gating the merge on:
+#   1. Strict lockfile install (npm ci)
+#   2. Dependency audit (high+critical fail the build)
+#   3. Lint (catches the unescaped-apostrophe class of failures that killed
+#      two deploys in May 2026)
+#   4. TypeScript strict typecheck (catches the unused-variable class that
+#      killed the ERC merchant page deploy)
+#   5. Production build (catches everything else)
+#
+# Companion: ../dependabot.yml schedules weekly dependency PRs.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs when a new commit lands on the same branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read  # explicit minimum; default GITHUB_TOKEN scope is too broad
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies (strict lockfile)
+        run: npm ci
+
+      - name: Dependency audit (fail on high+critical)
+        # `npm audit` exits non-zero on findings at audit-level or higher.
+        # `|| true` is intentionally OMITTED — we want this to fail the build.
+        # If a high CVE has no fix available (e.g., xlsx prototype pollution),
+        # document an exception with `audit` config overrides rather than
+        # masking the signal.
+        run: npm audit --audit-level=high
+
+      - name: Lint (next lint)
+        run: npx next lint
+
+      - name: TypeScript strict typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Production build
+        run: npm run build
+        env:
+          # Build-time env stubs so Next can statically analyze. None of
+          # these are real secrets — Vercel injects real values at deploy.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+          NEXT_PUBLIC_APP_URL: https://portal.moderntax.io
