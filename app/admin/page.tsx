@@ -486,6 +486,34 @@ export default async function AdminPage({ searchParams }: PageProps) {
     failed: allEntities.filter((e: any) => e.status === 'failed').length,
   };
 
+  // Batch acceptance workflow stats (Matt 2026-05-16). Two-phase fallback
+  // tolerates the case where supabase/migration-assignment-batches.sql
+  // hasn't been applied yet — returns zero-count tile instead of crashing.
+  let batchStats = { pendingAccept: 0, accepted: 0, overdue: 0, completedToday: 0 };
+  {
+    try {
+      const { data: activeBatches } = await supabase
+        .from('assignment_batches')
+        .select('status, completion_deadline, completed_at') as { data: any[] | null };
+      if (activeBatches) {
+        const now = Date.now();
+        const yesterday = now - 86_400_000;
+        batchStats = {
+          pendingAccept: activeBatches.filter(b => b.status === 'pending_acceptance').length,
+          accepted: activeBatches.filter(b => b.status === 'accepted').length,
+          overdue: activeBatches.filter(b =>
+            b.status === 'accepted' && b.completion_deadline && new Date(b.completion_deadline).getTime() < now,
+          ).length,
+          completedToday: activeBatches.filter(b =>
+            b.status === 'completed' && b.completed_at && new Date(b.completed_at).getTime() > yesterday,
+          ).length,
+        };
+      }
+    } catch {
+      // table doesn't exist yet — keep zero counts
+    }
+  }
+
   // --- Billing & Revenue Calculations ---
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
@@ -582,11 +610,11 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   confirm prevents accidental bulk spend. */}
               <FireAllPending8821sButton />
               <Link
-                href="/admin/batches/new"
+                href="/admin/batches"
                 className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors"
-                title="Offer a 3-5 entity batch to an expert (30-min accept window, 24-hr completion)"
+                title="Live view of all expert batch offers + acceptances + completions"
               >
-                Offer Batch
+                Batches
               </Link>
               <Link
                 href="/admin/billing"
@@ -668,6 +696,20 @@ export default async function AdminPage({ searchParams }: PageProps) {
             <p className={`text-lg font-bold mt-0.5 ${bottlenecks.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{bottlenecks.length}</p>
             <p className="text-[11px] text-gray-500">{staleBottlenecks.length} stale · {unassignedBottlenecks.length} unassigned</p>
           </a>
+          {/* Expert Batches — supply-demand workflow status */}
+          <Link
+            href="/admin/batches"
+            className={`rounded-lg border p-3 hover:shadow-sm transition-all ${batchStats.overdue > 0 ? 'bg-red-50 border-red-300' : batchStats.pendingAccept + batchStats.accepted > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200'}`}
+          >
+            <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Batches</p>
+            <p className={`text-lg font-bold mt-0.5 ${batchStats.overdue > 0 ? 'text-red-700' : batchStats.pendingAccept + batchStats.accepted > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+              {batchStats.pendingAccept + batchStats.accepted}
+            </p>
+            <p className="text-[11px] text-gray-500">
+              {batchStats.pendingAccept} pending · {batchStats.accepted} in progress
+              {batchStats.overdue > 0 ? ` · ${batchStats.overdue} OVERDUE` : ''}
+            </p>
+          </Link>
           {/* Pending entities — neutral */}
           <a href="#all-requests" className="bg-white rounded-lg border border-gray-200 p-3 hover:border-mt-green hover:shadow-sm transition-all">
             <p className="text-[11px] uppercase tracking-wide text-gray-500 font-medium">Pending</p>
