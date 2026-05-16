@@ -21,6 +21,7 @@ import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import { checkOrderGate, buildOrderGateErrorBody } from '@/lib/order-gate';
+import { parseJsonBodyOrRespond } from '@/lib/request-body';
 
 interface EntityPayload {
   entity_name: string;
@@ -104,7 +105,12 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Parse body ---
-    const body: TranscriptIntakeBody = await request.json();
+    // SOC 2 CC7.2 — bounded JSON for partner intake. Largest legitimate
+    // payload observed is ~3 entities * ~500 bytes each = ~2KB. 256KB cap
+    // is the default and gives plenty of headroom while preventing DoS.
+    const parsed = await parseJsonBodyOrRespond<TranscriptIntakeBody>(request);
+    if (parsed instanceof NextResponse) return parsed;
+    const body: TranscriptIntakeBody = parsed;
 
     // --- Validate ---
     if (!body.request_token?.trim()) {

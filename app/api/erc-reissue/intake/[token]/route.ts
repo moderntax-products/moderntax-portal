@@ -28,19 +28,38 @@ export async function POST(
     .eq('erc_intake_token', params.token)
     .maybeSingle();
   if (entErr || !entity) {
+    // SOC 2 CC7.2 — log failed token lookups so enumeration attempts are
+    // visible to monitoring (audit H2). Truncate the token in the log to
+    // prevent log scrapers from re-using leaked tokens; the prefix is
+    // enough to correlate with a specific attacker session.
+    const ipHeader = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || '';
+    const ip = ipHeader.split(',')[0]?.trim() || 'unknown';
+    await supabase.from('audit_log').insert({
+      user_email: null,
+      action: 'erc_intake_bad_token',
+      entity_type: 'request_entity',
+      entity_id: null,
+      details: {
+        token_prefix: params.token.slice(0, 6),
+        token_length: params.token.length,
+        user_agent: request.headers.get('user-agent') || null,
+      },
+      ip_address: ip,
+    }).then(({ error }) => {
+      if (error) console.error('[AUDIT-LOG-FAILURE]', JSON.stringify({ action: 'erc_intake_bad_token', error: error.message }));
+    });
     return NextResponse.json({ error: 'Link no longer valid' }, { status: 404 });
   }
   if (entity.erc_intake_submitted_at) {
     return NextResponse.json({ error: 'This intake form was already submitted.' }, { status: 409 });
   }
 
-  // Parse payload
-  let payload: any;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
+  // SOC 2 CC7.2 — bounded JSON body (intake form payloads are ~5KB; 64KB cap
+  // is generous and prevents memory-DoS via giant payloads on this public route).
+  const { parseJsonBodyOrRespond } = await import('@/lib/request-body');
+  const parsed = await parseJsonBodyOrRespond(request, 64 * 1024);
+  if (parsed instanceof NextResponse) return parsed;
+  const payload: any = parsed;
 
   // Light validation
   const addr = payload?.new_mailing_address;

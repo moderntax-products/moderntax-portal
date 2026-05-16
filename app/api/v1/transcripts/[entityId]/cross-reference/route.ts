@@ -70,9 +70,11 @@ export async function POST(request: NextRequest, { params }: PageProps) {
     return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
   }
 
-  // Parse body
-  let body: any;
-  try { body = await request.json(); } catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+  // SOC 2 CC7.2 — bounded JSON body for partner API route.
+  const { parseJsonBodyOrRespond } = await import('@/lib/request-body');
+  const parsed = await parseJsonBodyOrRespond(request, 64 * 1024);
+  if (parsed instanceof NextResponse) return parsed;
+  const body: any = parsed;
   const taxYear = String(body?.tax_year || '').trim();
   const selfReported = body?.self_reported || {};
   if (!taxYear || !/^20\d{2}$/.test(taxYear)) {
