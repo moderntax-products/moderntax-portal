@@ -243,8 +243,11 @@ export async function POST(request: NextRequest) {
     });
 
     if (authError || !authData?.user) {
+      // SOC 2 CC6.7 — log Supabase error details server-side, return
+      // generic message to caller. authError.message can disclose whether
+      // an email already exists (enumeration vector) and other internals.
       console.error('[signup] Auth user creation error:', authError);
-      return NextResponse.json({ error: 'Failed to create account', details: authError?.message }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to create account' }, { status: 500 });
     }
 
     // SOC 2 CC6.2 — ban the user at the auth layer until an admin approves.
@@ -382,7 +385,10 @@ export async function POST(request: NextRequest) {
     }, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
+    // SOC 2 CC6.7 — log internally, return generic to caller. The prior
+    // `details: msg` leaked stack-trace fragments and DB column names to
+    // any signup-form submitter.
     console.error('[signup] Error:', msg);
-    return NextResponse.json({ error: 'Internal server error', details: msg }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

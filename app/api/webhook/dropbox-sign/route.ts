@@ -50,8 +50,13 @@ export async function POST(request: NextRequest) {
     );
 
     if (!isValid) {
-      console.error('[dropbox-sign] Invalid event hash');
-      return new NextResponse('Hello API Event Received', { status: 200 });
+      // SOC 2 CC6.1 / CC7.2 — return 401 on invalid signature (audit H1).
+      // Previously returned 200, which (a) prevented Dropbox Sign from
+      // retrying legitimate-but-corrupted events and (b) hid signature-
+      // verification failures from any monitoring. The 200/Hello-API
+      // response body is reserved for the GET URL-validation handshake.
+      console.error('[dropbox-sign] Invalid event hash — rejecting with 401');
+      return new NextResponse('Invalid signature', { status: 401 });
     }
 
     console.log(`[dropbox-sign] Received event: ${event.event_type}`);

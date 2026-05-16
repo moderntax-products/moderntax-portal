@@ -121,7 +121,11 @@ export async function GET(request: NextRequest, { params }: PageProps) {
   }
 
   if (lookupErr || !entity) {
-    return NextResponse.json({ error: 'Entity not found', details: lookupErr?.message }, { status: 404 });
+    // SOC 2 CC6.7 — don't leak DB error internals (column names, missing
+    // migrations, constraint details) to partner API consumers. Log
+    // server-side; return generic message.
+    if (lookupErr) console.error('[v1/transcripts/structured] entity lookup failed:', lookupErr);
+    return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
   }
   if (entity.requests?.client_id !== client.id) {
     // Don't leak existence — return 404 instead of 403 to keep enumeration cost high.

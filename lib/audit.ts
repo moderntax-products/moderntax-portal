@@ -97,7 +97,7 @@ export async function logAuditEvent(
     //   resourceType → entity_type
     //   resourceId → entity_id
     //   userId → organization_id (repurposed for user tracking)
-    await supabase.from('audit_log').insert({
+    const { error: insertErr } = await supabase.from('audit_log').insert({
       organization_id: userId || null,
       user_email: userEmail || null,
       action: event.action,
@@ -107,9 +107,28 @@ export async function logAuditEvent(
       ip_address: event.ipAddress || null,
       user_agent: event.userAgent || null,
     });
+    if (insertErr) {
+      // SOC 2 CC7.2 / CC7.3 — audit insert failures must be loud enough
+      // to alert on. Previously the failure only landed in Vercel runtime
+      // logs (ephemeral). The `[AUDIT-LOG-FAILURE]` prefix is what the
+      // external SIEM alert rule will key on (track item in audit M2).
+      console.error('[AUDIT-LOG-FAILURE]', JSON.stringify({
+        action: event.action,
+        resourceType: event.resourceType,
+        resourceId: event.resourceId,
+        userId: userId || null,
+        error: insertErr.message,
+        timestamp: new Date().toISOString(),
+      }));
+    }
   } catch (err) {
-    // Audit logging should never break the application
-    console.error('[audit] Failed to log event:', event.action, err);
+    // Audit logging should never break the application — but flag with
+    // the same SIEM-keyable prefix so unexpected throws also alert.
+    console.error('[AUDIT-LOG-FAILURE]', JSON.stringify({
+      action: event.action,
+      error: err instanceof Error ? err.message : String(err),
+      timestamp: new Date().toISOString(),
+    }));
   }
 }
 

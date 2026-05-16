@@ -166,14 +166,29 @@ export async function sendReminder(signatureRequestId: string, signerEmail: stri
 }
 
 /**
- * Validate a Dropbox Sign event callback hash
- * Uses HMAC-SHA256 with the API key
+ * Validate a Dropbox Sign event callback hash.
+ * Uses HMAC-SHA256 with the API key. Compares with timingSafeEqual to
+ * eliminate the secret-recovery timing leak that the prior `===` compare
+ * had (SOC 2 CC6.1 / CC6.7 — secrets handling audit H1).
  */
 export function validateEventHash(eventType: string, eventTime: string, eventHash: string): boolean {
   const crypto = require('crypto');
   const apiKey = process.env.DROPBOX_SIGN_API_KEY || '';
   const hmac = crypto.createHmac('sha256', apiKey);
   hmac.update(eventTime + eventType);
-  const expectedHash = hmac.digest('hex');
-  return expectedHash === eventHash;
+  const expectedHashHex = hmac.digest('hex');
+
+  // timingSafeEqual requires equal-length Buffers. Mismatched length =
+  // immediate reject (without leaking length-equality timing either).
+  if (typeof eventHash !== 'string' || eventHash.length !== expectedHashHex.length) {
+    return false;
+  }
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(expectedHashHex, 'utf8'),
+      Buffer.from(eventHash, 'utf8'),
+    );
+  } catch {
+    return false;
+  }
 }

