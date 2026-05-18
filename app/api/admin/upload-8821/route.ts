@@ -103,17 +103,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Years are required at upload time — without them the IRS expert has no idea
-    // which periods to request from PPS. The Processor8821Panel enforces this on the
-    // client; we re-enforce here so direct API hits can't bypass it.
-    const years = parseYearsField(yearsRaw);
-    if (!years || years.length === 0) {
-      return NextResponse.json(
-        { error: 'years field is required (e.g. "2021,2022,2023" or "2021-2024")' },
-        { status: 400 }
-      );
-    }
-
     // formType defaults to existing entity value, but must be a valid 8821 form code
     const validForms = ['1040', '1065', '1120', '1120S', '941'];
     const formType = formTypeRaw && validForms.includes(formTypeRaw) ? formTypeRaw : null;
@@ -132,13 +121,33 @@ export async function POST(request: NextRequest) {
 
     const adminSupabase = createAdminClient();
 
-    // Verify entity exists. signer_email + signer name fields are read so we
-    // can decide whether to backfill from the PDF (only if currently null).
+    // Verify entity exists. We also pull existing years + form_type here so a
+    // REPLACEMENT upload (entity already has years set) can fall back to them
+    // when the form doesn't include the years field — the Admin8821Upload
+    // component intentionally doesn't surface a years input, and a replacement
+    // shouldn't blow up because the field is missing. New uploads (entity has
+    // NULL/empty years) still require yearsRaw to be provided.
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, request_id, status, tid_kind, signer_email, signer_first_name, signer_last_name')
+      .select('id, entity_name, request_id, status, tid_kind, years, form_type, signer_email, signer_first_name, signer_last_name, signed_8821_url')
       .eq('id', entityId)
       .single() as { data: any; error: any };
+
+    // Resolve years: explicit yearsRaw wins; fall back to existing entity years
+    // for replacement uploads. Fail only if BOTH are missing.
+    let years = parseYearsField(yearsRaw);
+    if ((!years || years.length === 0) && Array.isArray(entity?.years) && entity.years.length > 0) {
+      years = entity.years;
+    }
+    if (!years || years.length === 0) {
+      return NextResponse.json(
+        {
+          error: 'years field is required (e.g. "2021,2022,2023" or "2021-2024"). This entity has no years on file — provide them with the upload.',
+          existing_entity_years: entity?.years || null,
+        },
+        { status: 400 }
+      );
+    }
 
     // If formType is being changed, verify it matches tid_kind on the entity —
     // blocks an EIN business from being stamped 1040 or an SSN individual from
