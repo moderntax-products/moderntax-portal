@@ -40,7 +40,7 @@
     "audit-ci": "7.1.0",
     "autoprefixer": "^10.4.16",
     "dotenv": "^17.3.1",
-    "eslint": "^8.56.0",
+    "eslint": "^10.4.0",
     "eslint-config-next": "^14.2.0",
     "pg": "^8.19.0",
     "postcss": "^8.4.32",
