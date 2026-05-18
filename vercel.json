@@ -3,15 +3,7 @@
   "crons": [
     {
       "path": "/api/cron/expire-batches",
-      "schedule": "0 14 * * *"
-    },
-    {
-      "path": "/api/cron/expire-batches",
-      "schedule": "0 19 * * *"
-    },
-    {
-      "path": "/api/cron/expire-batches",
-      "schedule": "0 0 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/nudge",
@@ -55,15 +47,7 @@
     },
     {
       "path": "/api/cron/auto-assign-experts",
-      "schedule": "0 15 * * *"
-    },
-    {
-      "path": "/api/cron/auto-assign-experts",
-      "schedule": "0 20 * * *"
-    },
-    {
-      "path": "/api/cron/auto-assign-experts",
-      "schedule": "0 1 * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/auto-enroll-monitoring",
