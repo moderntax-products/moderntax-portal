@@ -2,6 +2,10 @@ import { redirect } from 'next/navigation';
 import { createServerComponentClient } from '@/lib/supabase-server';
 import Link from 'next/link';
 import { LogoutButton } from '@/components/LogoutButton';
+import { FireAllPending8821sButton } from '@/components/FireAllPending8821sButton';
+import { UpgradeYourTeamPanel } from '@/components/UpgradeYourTeamPanel';
+import { ProcessorUpgradeCTAs } from '@/components/ProcessorUpgradeCTAs';
+import { AskAIPanel } from '@/components/AskAIPanel';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 
 export default async function DashboardPage({
@@ -80,17 +84,108 @@ export default async function DashboardPage({
   let teamProfiles: { id: string; full_name: string | null; email: string }[] = [];
   let officerStats: Record<string, { name: string; total: number; completed: number; pending: number; amount: number }> = {};
 
-  // Fetch client record for free trial status
+  // Fetch client record for free trial status + add-on toggles + payment
+  // method state. Drives:
+  //   - Manager "Upgrade Your Team" panel (toggles)
+  //   - Processor inline upgrade CTAs (ask-your-manager mailto)
+  //   - Trial-counter banner ("X of 3 free pulls used") — visible to all roles
+  //   - Payment-method-required banner (when trial used + no method on file)
   let clientFreeTrial = true; // default: trial active
+  let monitoringDefaultEnabled = true;
+  let cashFlowAutoAttach = false;
+  let monitoredEntitiesCount = 0;
+  let unmonitoredCompletedCount = 0;
+  let hasPaymentMethod = false;
+  let paymentMethodLabel: string | null = null;
+  // Per-client billing rates — drive both the manager officer-stat revenue
+  // breakdown AND the dollar-amount labels on the dashboard. Defaults to the
+  // standard tier rates if a client doesn't have overrides set.
+  let clientBillingRatePdf = 59.98;
+  let clientBillingRateCsv = 69.98;
   if (profile.client_id) {
     const { data: clientRecord } = await supabase
       .from('clients')
-      .select('free_trial')
+      .select('free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv')
       .eq('id', profile.client_id)
-      .single() as { data: { free_trial: boolean | null } | null; error: any };
-    if (clientRecord?.free_trial === false) {
-      clientFreeTrial = false;
+      .single() as { data: { free_trial: boolean | null; monitoring_default_enabled: boolean | null; cash_flow_auto_attach: boolean | null; stripe_payment_method_id: string | null; payment_method_status: string | null; payment_method_brand: string | null; payment_method_last4: string | null; payment_method_type: string | null; billing_rate_pdf: number | null; billing_rate_csv: number | null } | null; error: any };
+    if (typeof clientRecord?.billing_rate_pdf === 'number') clientBillingRatePdf = clientRecord.billing_rate_pdf;
+    if (typeof clientRecord?.billing_rate_csv === 'number') clientBillingRateCsv = clientRecord.billing_rate_csv;
+    if (clientRecord?.free_trial === false) clientFreeTrial = false;
+    if (clientRecord?.monitoring_default_enabled === false) monitoringDefaultEnabled = false;
+    if (clientRecord?.cash_flow_auto_attach === true) cashFlowAutoAttach = true;
+    hasPaymentMethod =
+      !!clientRecord?.stripe_payment_method_id && clientRecord?.payment_method_status === 'active';
+    if (clientRecord?.payment_method_last4) {
+      const brand = (clientRecord.payment_method_brand || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      paymentMethodLabel = `${brand || (clientRecord.payment_method_type === 'us_bank_account' ? 'Bank account' : 'Card')} ending in ${clientRecord.payment_method_last4}`;
     }
+
+    // Counts that drive the upgrade-CTA copy: "You have X completed loans
+    // not in monitoring — enable now → ~$Y MRR". Cheap aggregate queries.
+    const { count: monCount } = await supabase
+      .from('entity_monitoring')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', profile.client_id)
+      .in('status', ['active', 'paused']) as { count: number | null };
+    monitoredEntitiesCount = monCount || 0;
+
+    const { count: completedCount } = await supabase
+      .from('request_entities')
+      .select('id, requests!inner(client_id)', { count: 'exact', head: true })
+      .eq('requests.client_id', profile.client_id)
+      .eq('status', 'completed')
+      .neq('form_type', 'W2_INCOME') as { count: number | null };
+    unmonitoredCompletedCount = Math.max(0, (completedCount || 0) - monitoredEntitiesCount);
+  }
+
+  // Trial counter — total completed entities for THIS client (W2 included
+  // because trial counts every entity, not just monitorable ones). Drives
+  // the "X of 3 free pulls used" banner + the gate enforcement messaging.
+  let totalCompletedEntities = 0;
+  let hasRecentPaidInvoice = false;
+  if (profile.client_id) {
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const [trialCountRes, paidInvRes] = await Promise.all([
+      supabase
+        .from('request_entities')
+        .select('id, requests!inner(client_id)', { count: 'exact', head: true })
+        .eq('requests.client_id', profile.client_id)
+        .eq('status', 'completed'),
+      supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('client_id', profile.client_id)
+        .eq('status', 'paid')
+        .gte('paid_at', ninetyDaysAgo.toISOString()),
+    ]);
+    totalCompletedEntities = (trialCountRes as any).count || 0;
+    hasRecentPaidInvoice = ((paidInvRes as any).count || 0) > 0;
+  }
+  const TRIAL_FREE_PULLS = 3;
+  const trialRemaining = Math.max(0, TRIAL_FREE_PULLS - totalCompletedEntities);
+  const trialExhausted = trialRemaining === 0;
+  // Hard-block ordering ONLY when trial is used AND no Stripe card AND no
+  // recent paid invoice. Established Mercury ACH customers (who have a paid
+  // invoice in the last 90 days) keep ordering normally — manager still gets
+  // a softer nudge to add a Stripe card for in-app purchases.
+  const needsPaymentMethod = trialExhausted && !hasPaymentMethod && !hasRecentPaidInvoice;
+  const managerShouldAddCard = trialExhausted && !hasPaymentMethod && hasRecentPaidInvoice;
+
+  // Find the team's manager so processors can ping them via the upgrade CTAs'
+  // "Ask your manager" mailto link. Picks the first manager by created_at.
+  // Falls back silently to a generic /invoicing link when no manager exists.
+  let teamManagerEmail: string | null = null;
+  if (profile.client_id && isProcessor) {
+    const { data: mgr } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('client_id', profile.client_id)
+      .eq('role', 'manager')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle() as { data: { email: string } | null; error: any };
+    teamManagerEmail = mgr?.email || null;
   }
 
   if (profile.client_id) {
@@ -154,9 +249,13 @@ export default async function DashboardPage({
           nameLookup[p.id] = p.full_name || p.email;
         });
 
-        // Billing rates by intake method
-        const RATE_PDF = 59.98;   // Per entity with signed 8821 PDF
-        const RATE_CSV = 69.98;   // Per unique EIN on CSV/Excel upload
+        // Billing rates by intake method — pulled from clients.billing_rate_*
+        // so the officer-stat revenue breakdown matches the actual contract
+        // rate (Cal Statewide is on $79.98 flat, Centerstone on $59.98/$69.98).
+        // Was previously hardcoded → wrong revenue numbers for any client
+        // not on the default tier.
+        const RATE_PDF = clientBillingRatePdf;
+        const RATE_CSV = clientBillingRateCsv;
         const FREE_ENTITIES_PER_ACCOUNT = 3;
 
         // Flatten all entities with their request context for entity-level counting
@@ -545,6 +644,89 @@ export default async function DashboardPage({
           </div>
         )}
 
+        {/* CRITICAL BANNER — trial exhausted AND no payment method on file.
+            Blocks new orders; the gate at /api/upload/* returns 402 until
+            the manager attaches a method via /payment-method. Visible to all
+            roles so the whole team understands why uploads are failing. */}
+        {needsPaymentMethod && (
+          <div className="rounded-xl shadow p-5 mb-6 bg-gradient-to-br from-red-50 to-amber-50 border-2 border-red-300">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-start gap-3 flex-1">
+                <div className="shrink-0 w-12 h-12 rounded-lg bg-red-100 flex items-center justify-center">
+                  <svg className="w-6 h-6 text-red-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-red-900">New orders paused — payment method required</h3>
+                  <p className="text-sm text-red-800 mt-1 leading-relaxed">
+                    Your team has used all {TRIAL_FREE_PULLS} free trial pulls ({totalCompletedEntities} completed). Add a card or bank account to keep ordering. Auto-charges happen at completion at your tier&rsquo;s per-pull rate — no setup fee, cancel anytime.
+                  </p>
+                  {!isManager && (
+                    <p className="text-xs text-red-700 mt-2 italic">
+                      Only your manager can attach a payment method. Forward this page to your manager or email matt@moderntax.io.
+                    </p>
+                  )}
+                </div>
+              </div>
+              {(isManager || isAdmin) && (
+                <Link
+                  href="/payment-method"
+                  className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  Add payment method →
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* SOFTER NUDGE — manager-only — for established Mercury ACH customers
+            (Centerstone, Cal Statewide, etc.) who have a recent paid invoice
+            so ordering still flows, but who haven't yet attached a Stripe
+            card for in-app one-off charges (cash-flow pack, monitoring, tier
+            upgrades). Hidden for processors — they shouldn't see billing nags. */}
+        {managerShouldAddCard && isManager && (
+          <div className="rounded-xl p-4 mb-6 bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3 flex-1">
+              <div className="shrink-0 w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h.01M11 15h2m4-9H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V8a2 2 0 00-2-2z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-blue-900">Add a card for instant in-app purchases</p>
+                <p className="text-xs text-blue-800 mt-0.5">
+                  Your account is current — your team keeps ordering on Mercury ACH (monthly invoices). Add a Stripe card to enable instant cash-flow packs, monitoring upgrades, and tier upgrades without waiting for the next invoice cycle.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/payment-method"
+              className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 whitespace-nowrap"
+            >
+              Add card →
+            </Link>
+          </div>
+        )}
+
+        {/* QUIET INFO BAR — payment method on file. Lets managers see "method
+            attached" status at a glance + jump to replace it. Auto-hides for
+            processors (clutter). */}
+        {hasPaymentMethod && (isManager || isAdmin) && paymentMethodLabel && (
+          <div className="rounded-lg p-3 mb-4 bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-xs text-emerald-900 flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-700" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
+              </svg>
+              <strong>Payment method on file:</strong> {paymentMethodLabel} · auto-charge enabled
+            </p>
+            <Link href="/payment-method" className="text-xs font-semibold text-emerald-700 hover:underline">
+              Manage →
+            </Link>
+          </div>
+        )}
+
         {/* Trial Progress Banner — manager + processor visible (so the
             whole team sees the credits they share). Surfaces the dollar
             value ($239.94 = 3 × $79.98 per-TIN reference rate) so the
@@ -598,14 +780,18 @@ export default async function DashboardPage({
                   </div>
                 </div>
                 <Link
-                  href={exhausted && isManager ? '/invoicing' : '/new'}
+                  href={exhausted && isManager ? (hasPaymentMethod ? '/invoicing' : '/payment-method') : '/new'}
                   className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg transition-colors ${
                     exhausted
                       ? 'bg-amber-600 text-white hover:bg-amber-700'
                       : 'bg-mt-green text-white hover:bg-mt-green/90'
                   }`}
                 >
-                  {exhausted ? (isManager ? 'Set up billing →' : 'Submit request →') : 'Use credit →'}
+                  {exhausted
+                    ? isManager
+                      ? hasPaymentMethod ? 'View billing →' : 'Add payment method →'
+                      : 'Submit request →'
+                    : 'Use credit →'}
                 </Link>
               </div>
             </div>
@@ -744,6 +930,34 @@ export default async function DashboardPage({
           </div>
         )}
 
+        {/* "Upgrade Your Team" panel — bulk add-on toggles. Manager + admin can see
+            it; processors get the slimmer banner instead. Admins viewing the
+            generic dashboard see it scoped to their own profile.client_id (when
+            set) — admins without a client should use /admin where each client
+            row exposes the same toggles inline. */}
+        {(isManager || isAdmin) && profile.client_id && (
+          <UpgradeYourTeamPanel
+            clientId={profile.client_id}
+            monitoringDefaultEnabled={monitoringDefaultEnabled}
+            cashFlowAutoAttach={cashFlowAutoAttach}
+            monitoredEntitiesCount={monitoredEntitiesCount}
+            unmonitoredCompletedCount={unmonitoredCompletedCount}
+          />
+        )}
+
+        {/* Processor-only — slim "ask your manager to enable X" banner. Self-hides
+            when the team has no completed entities or both add-ons are already on. */}
+        {isProcessor && profile.client_id && (
+          <ProcessorUpgradeCTAs
+            monitoringDefaultEnabled={monitoringDefaultEnabled}
+            monitoredEntitiesCount={monitoredEntitiesCount}
+            unmonitoredCompletedCount={unmonitoredCompletedCount}
+            cashFlowAutoAttach={cashFlowAutoAttach}
+            managerEmail={teamManagerEmail}
+            processorName={profile.full_name || undefined}
+          />
+        )}
+
         {/* Recent Requests Table */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 space-y-4">
@@ -752,22 +966,36 @@ export default async function DashboardPage({
                 {mineOnly ? 'My Requests' : 'All Team Requests'}
                 <span className="ml-2 text-xs font-normal text-gray-500">{requests.length} shown</span>
               </h2>
-              {/* Mine vs Team toggle — every team member can see the full org's
-                  request list now (B3.1 cross-team visibility). They can flip
-                  to "Mine only" if they prefer the single-user view. */}
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
-                <Link
-                  href={`/${searchQuery ? `?search=${encodeURIComponent(searchQuery)}` : ''}${searchQuery && statusFilter !== 'all' ? '&' : (statusFilter !== 'all' ? '?' : '')}${statusFilter !== 'all' ? `status=${statusFilter}` : ''}`}
-                  className={`px-3 py-1.5 font-semibold transition-colors ${!mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-                >
-                  Whole Team
-                </Link>
-                <Link
-                  href={`/?mine=1${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''}${statusFilter !== 'all' ? `&status=${statusFilter}` : ''}`}
-                  className={`px-3 py-1.5 font-semibold transition-colors border-l border-gray-200 ${mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-                >
-                  Mine Only
-                </Link>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Bulk fire-all-pending-8821s — visible to processor + manager.
+                    The component fetches its own live count and is a no-op if
+                    the team has zero pending 8821s. Used to be admin-only;
+                    opening it up to processors saves them ~30 clicks per
+                    multi-entity loan upload. Server enforces client scope so a
+                    processor can never accidentally fire across tenants. */}
+                {(isProcessor || isManager) && profile.client_id && (
+                  <FireAllPending8821sButton
+                    clientId={profile.client_id}
+                    label="Fire team pending 8821s"
+                  />
+                )}
+                {/* Mine vs Team toggle — every team member can see the full org's
+                    request list now (B3.1 cross-team visibility). They can flip
+                    to "Mine only" if they prefer the single-user view. */}
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                  <Link
+                    href={`/${searchQuery ? `?search=${encodeURIComponent(searchQuery)}` : ''}${searchQuery && statusFilter !== 'all' ? '&' : (statusFilter !== 'all' ? '?' : '')}${statusFilter !== 'all' ? `status=${statusFilter}` : ''}`}
+                    className={`px-3 py-1.5 font-semibold transition-colors ${!mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    Whole Team
+                  </Link>
+                  <Link
+                    href={`/?mine=1${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ''}${statusFilter !== 'all' ? `&status=${statusFilter}` : ''}`}
+                    className={`px-3 py-1.5 font-semibold transition-colors border-l border-gray-200 ${mineOnly ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    Mine Only
+                  </Link>
+                </div>
               </div>
             </div>
 
@@ -912,6 +1140,12 @@ export default async function DashboardPage({
           )}
         </div>
       </div>
+
+      {/* In-app Q&A — floating "Ask AI" button. Mount on the dashboard
+          so processors / managers / experts have it from the page they
+          land on first. Same component works for all roles (server-side
+          API gates which roles can call it). */}
+      <AskAIPanel />
     </div>
   );
 }
