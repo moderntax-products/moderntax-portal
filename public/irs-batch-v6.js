@@ -1,5 +1,10 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.8 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.9 — DIRECT-TO-PORTAL
+// v6.9 changes:
+//   - 941/940 stay as native HTML (no PDF conversion). Filenames include
+//     -Q1/-Q2/-Q3/-Q4 so each quarter is unique; payload includes
+//     taxPeriod ("MM-DD-YYYY") + quarter ("Q3") for downstream dedup.
+//   - 1120/1040 income transcripts unchanged (PDF primary, HTML secondary).
 // =====================================================
 // Run on the IRS SOR inbox page. Automatically:
 //   1. Logs you into ModernTax (email + password, cached for session)
@@ -247,7 +252,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.8</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.9</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -413,7 +418,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.8' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.9' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -669,6 +674,8 @@
 
                 // Extract metadata: form, TIN, year, name
                 let formType = '', tin = '', taxYear = '', taxpayerName = '';
+                let taxPeriod = '';   // Full "MM-DD-YYYY" period-ending for 941/940
+                let quarterLabel = ''; // "Q1" | "Q2" | "Q3" | "Q4" (941/940 only)
                 let entityData = null; // Extra data for Entity Transcripts
 
                 const items = doc.querySelectorAll('.item-container');
@@ -725,17 +732,27 @@
                 // For 941 Account Transcripts, preserve form as "941" (not the entity's primary form)
                 const is941 = formType === '941' || formType === '940';
                 if (is941) {
-                    // Extract period ending for 941 quarterly naming
+                    // Extract period ending — used both for filename uniqueness
+                    // (so Q1/Q2/Q3/Q4 of the same year don't collapse to one upload)
+                    // and so the API's dedup can key on quarter, not just year.
                     const periodItems = doc.querySelectorAll('.item-container');
                     periodItems.forEach(item => {
                         const label = item.querySelector('.item-label')?.textContent?.trim() || '';
                         const value = item.querySelector('.item-value')?.textContent?.trim() || '';
                         if (label.match(/Report for Tax Period/i)) {
-                            // Use full date for quarterly (e.g. "09-30-2025")
-                            if (!taxYear) {
-                                const ym = value.match(/(\d{2}-\d{2}-\d{4})/);
-                                if (ym) taxYear = ym[1];
-                                else { const y = value.match(/(\d{4})/); if (y) taxYear = y[1]; }
+                            const ym = value.match(/(\d{2}-\d{2}-\d{4})/);
+                            if (ym) {
+                                taxPeriod = ym[1]; // "06-30-2020"
+                                const [mm, _dd, yyyy] = ym[1].split('-');
+                                if (!taxYear) taxYear = yyyy;
+                                const month = parseInt(mm, 10);
+                                if (month === 3)       quarterLabel = 'Q1';
+                                else if (month === 6)  quarterLabel = 'Q2';
+                                else if (month === 9)  quarterLabel = 'Q3';
+                                else if (month === 12) quarterLabel = 'Q4';
+                            } else if (!taxYear) {
+                                const y = value.match(/(\d{4})/);
+                                if (y) taxYear = y[1];
                             }
                         }
                     });
@@ -794,7 +811,9 @@
 
                 const name = taxpayerName || 'Unknown';
                 const cleanName = name.substring(0, 20).replace(/[^a-zA-Z0-9 &]/g, '').trim().replace(/\s+/g, ' ');
-                const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}`;
+                // 941/940: append "-Q3" so each quarter has a unique filename
+                const periodSuffix = is941 && quarterLabel ? `-${quarterLabel}` : '';
+                const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}${periodSuffix}`;
                 const metadata = { name, tin, formType, taxYear, shortType };
 
                 // Debug: log all extracted metadata
@@ -848,39 +867,58 @@
                     }
                 }
 
-                // ---- CONVERT TO PDF ----
-                addLog(`  🔄 Converting...`, 'info');
-                let pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
-
-                // If PDF is too large, recompress at lower quality
-                if (pdfBlob.size > 3.5 * 1024 * 1024) {
-                    addLog(`  🗜️ Compressing (${(pdfBlob.size / 1024 / 1024).toFixed(1)}MB)...`, 'warn');
-                    pdfBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf', 0.45);
-                    addLog(`  📦 Compressed to ${(pdfBlob.size / 1024 / 1024).toFixed(1)}MB`, 'info');
+                // ---- BUILD UPLOAD BLOB ----
+                // 941/940 stay as native HTML — the ERC analyzer parses HTML
+                // directly (TC 766/846/740 transaction codes) and the PDF
+                // conversion is lossy + has been flaky. Income transcripts
+                // (1120/1040) still get PDF-primary + HTML-secondary because
+                // processors download the PDF.
+                let primaryBlob;
+                let primaryExt;
+                if (is941) {
+                    addLog(`  📄 Using native HTML (skipping PDF for 941/940)`, 'info');
+                    primaryBlob = new Blob([transcriptHtml], { type: 'text/html' });
+                    primaryExt = '.html';
+                } else {
+                    addLog(`  🔄 Converting...`, 'info');
+                    primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
+                    if (primaryBlob.size > 3.5 * 1024 * 1024) {
+                        addLog(`  🗜️ Compressing (${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB)...`, 'warn');
+                        primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf', 0.45);
+                        addLog(`  📦 Compressed to ${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB`, 'info');
+                    }
+                    primaryExt = '.pdf';
                 }
+                // Alias for legacy error-path code that references pdfBlob
+                const pdfBlob = primaryBlob;
 
                 // ---- UPLOAD TO PORTAL (with retry) ----
                 addLog(`  📤 Uploading...`, 'upload');
 
                 const formData = new FormData();
-                formData.append('file', pdfBlob, baseFilename + '.pdf');
+                formData.append('file', primaryBlob, baseFilename + primaryExt);
                 const uploadMetadata = {
                     tin, formType, taxYear, shortType,
                     taxpayerName: name,
-                    filename: baseFilename + '.pdf',
+                    filename: baseFilename + primaryExt,
                     compliance: finding,
                     transcriptCategory: isEntityTranscript ? 'entity' : is941 ? 'payroll' : 'income',
+                    ...(taxPeriod ? { taxPeriod } : {}),
+                    ...(quarterLabel ? { quarter: quarterLabel } : {}),
                 };
                 if (entityData) uploadMetadata.entityData = entityData;
                 formData.append('metadata', JSON.stringify(uploadMetadata));
 
-                // Also include raw HTML for webhook delivery to API clients (e.g., ClearFirm)
-                try {
-                    const htmlBlob = new Blob([transcriptHtml], { type: 'text/html' });
-                    formData.append('htmlFile', htmlBlob, baseFilename + '.html');
-                } catch (htmlErr) {
-                    // Non-critical — PDF is the primary artifact
-                    console.warn('Could not attach HTML:', htmlErr);
+                // Income transcripts: also include raw HTML for webhook delivery to API clients (e.g., ClearFirm).
+                // 941/940: the primary file IS the HTML, no secondary needed.
+                if (!is941) {
+                    try {
+                        const htmlBlob = new Blob([transcriptHtml], { type: 'text/html' });
+                        formData.append('htmlFile', htmlBlob, baseFilename + '.html');
+                    } catch (htmlErr) {
+                        // Non-critical — PDF is the primary artifact
+                        console.warn('Could not attach HTML:', htmlErr);
+                    }
                 }
 
                 let uploaded = false;
@@ -914,7 +952,7 @@
                             } else {
                                 addLog(`  ❌ Upload failed: ${uploadResult.error || 'Unknown'}`, 'error');
                                 addLog(`  💾 Saving locally as backup...`, 'info');
-                                downloadBlob(pdfBlob, baseFilename + '.pdf');
+                                downloadBlob(primaryBlob, baseFilename + primaryExt);
                             }
                         }
                     } catch (uploadErr) {
@@ -923,7 +961,7 @@
                             await delay(2000);
                         } else {
                             addLog(`  ❌ Upload failed: ${uploadErr.message}`, 'error');
-                            downloadBlob(pdfBlob, baseFilename + '.pdf');
+                            downloadBlob(primaryBlob, baseFilename + primaryExt);
                             addLog(`  💾 Saved locally as backup`, 'info');
                         }
                     }
@@ -936,7 +974,7 @@
 
                 // Also save locally if toggle is on
                 if (window.irsAlsoLocal && uploaded) {
-                    downloadBlob(pdfBlob, baseFilename + '.pdf');
+                    downloadBlob(primaryBlob, baseFilename + primaryExt);
                 }
 
                 results.push({ success: uploaded, filename: baseFilename, name, tin, formType, taxYear, finding });

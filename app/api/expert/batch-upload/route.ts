@@ -86,6 +86,11 @@ export async function POST(request: NextRequest) {
       compliance: any;
       transcriptCategory?: 'income' | 'payroll' | 'entity';
       entityData?: Record<string, string>;
+      // 941/940 only: full period-ending date ("MM-DD-YYYY") + quarter label
+      // ("Q1"–"Q4"). Sent by bookmarklet v6.9+ so dedup can key on quarter,
+      // not just year. Absent on older bookmarklets — fall back to old key.
+      taxPeriod?: string;
+      quarter?: 'Q1' | 'Q2' | 'Q3' | 'Q4';
     };
 
     try {
@@ -236,8 +241,12 @@ export async function POST(request: NextRequest) {
     const entityId = entity.id;
     const assignmentId = match.id;
 
-    // Dedup check: build a key from formType + shortType + taxYear to detect re-uploads
-    const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}`.toLowerCase();
+    // Dedup check: key on formType + shortType + taxYear + quarter (for 941/940).
+    // Earlier versions keyed on year only, which collapsed Q1/Q2/Q3/Q4 of the
+    // same year into one upload — losing 3 of every 4 ERC quarters. Bookmarklet
+    // v6.9+ sends metadata.quarter; older uploads still match by year alone.
+    const quarterSuffix = metadata.quarter ? `-${metadata.quarter.toLowerCase()}` : '';
+    const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}${quarterSuffix}`.toLowerCase();
     const existingUrls: string[] = entity.transcript_urls || [];
     const alreadyUploaded = existingUrls.some((url: string) => {
       // Extract filename from storage path (after the timestamp prefix)
