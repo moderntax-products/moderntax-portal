@@ -4,8 +4,16 @@
  * Fills IRS Form 8821 (Tax Information Authorization) PDF form fields
  * with taxpayer, designee, and tax information data.
  *
- * Uses pymupdf (fitz) via Python subprocess to handle XFA form fields
- * that pdf-lib cannot write to.
+ * Uses pdf-lib (pure JS) so the function runs on Vercel's serverless
+ * runtime — the previous pymupdf/Python-subprocess implementation
+ * failed with "spawn python3 ENOENT" once deployed there (caught
+ * 2026-05-18 when Matt clicked Regenerate 8821 w/ expert creds on
+ * Joel Abernathy's assignment).
+ *
+ * The IRS 8821 templates in public/templates are hybrid PDFs — they
+ * contain both XFA and AcroForm layers. pdf-lib can write the AcroForm
+ * layer; the visual output is identical. After filling, we flatten the
+ * form so the values render as static text (no longer editable).
  *
  * Two template types:
  *  - Individual (1040): Civil Penalties + Income, Form 1040/W-2, 2022-2026
@@ -14,11 +22,9 @@
  * Returns a filled PDF buffer ready for Dropbox Sign or download.
  */
 
-import { execFile } from 'child_process';
-import { readFile, writeFile, unlink } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import path from 'path';
-import { randomUUID } from 'crypto';
-import os from 'os';
+import { PDFDocument } from 'pdf-lib';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -203,9 +209,14 @@ function getSection3Business(years: string): Section3Row[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate a filled IRS Form 8821 PDF.
+ * Generate a filled IRS Form 8821 PDF (pure JS, Vercel-compatible).
  *
- * Uses pymupdf via Python subprocess to write XFA form fields.
+ * Loads the AcroForm-bearing template from public/templates, fills
+ * every named field via pdf-lib, flattens the form so the values
+ * burn into the visual layer (no longer editable), and returns the
+ * Buffer. Compatible with both Dropbox Sign upload (which wants an
+ * unflattened form) and direct admin download (which wants flattened
+ * so the borrower sees the values, not the empty fields).
  *
  * @returns Buffer containing the filled PDF
  */
@@ -213,13 +224,18 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
   const { taxpayer, designee, formType, years = '2022-2026' } = options;
   const isIndividual = formType === '1040';
 
-  const templatePath = path.join(process.cwd(), 'public', 'templates',
-    isIndividual ? '8821-individual-v2.pdf' : '8821-business-v2.pdf');
+  const templatePath = path.join(
+    process.cwd(),
+    'public',
+    'templates',
+    isIndividual ? '8821-individual-v2.pdf' : '8821-business-v2.pdf',
+  );
 
-  // Build field map for pymupdf
+  // Build field map — same field IDs the previous Python implementation
+  // wrote to. IRS XFA forms expose the same field names on the AcroForm
+  // side, so pdf-lib finds them under the same identifiers.
   const d1Addr = `${designee.name}\n${designee.address}, ${designee.city}, ${designee.state} ${designee.zip}`;
   const d2Addr = `${BACKUP_DESIGNEE.name}\n${BACKUP_DESIGNEE.address}, ${BACKUP_DESIGNEE.city}, ${BACKUP_DESIGNEE.state} ${BACKUP_DESIGNEE.zip}`;
-
   const rows = isIndividual ? getSection3Individual(years) : getSection3Business(years);
 
   const fieldMap: Record<string, string> = {
@@ -261,41 +277,61 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     'f1_31': rows[2]?.specific || '',
   };
 
-  // Write field data to temp file for Python to read
-  const tmpId = randomUUID();
-  const jsonPath = path.join(os.tmpdir(), `8821-fields-${tmpId}.json`);
-  const outputPath = path.join(os.tmpdir(), `8821-filled-${tmpId}.pdf`);
+  const templateBytes = await readFile(templatePath);
+  const pdfDoc = await PDFDocument.load(templateBytes);
+  const form = pdfDoc.getForm();
+  const fields = form.getFields();
 
-  await writeFile(jsonPath, JSON.stringify({ templatePath, outputPath, fieldMap }));
-
-  // Run Python script to fill XFA form fields
-  const pyScript = `
-import fitz, json, sys
-data = json.load(open(sys.argv[1]))
-doc = fitz.open(data["templatePath"])
-page = doc[0]
-for widget in page.widgets():
-    short = widget.field_name.split(".")[-1].replace("[0]", "")
-    if short in data["fieldMap"]:
-        widget.field_value = data["fieldMap"][short]
-        widget.update()
-doc.save(data["outputPath"])
-doc.close()
-`;
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      execFile('python3', ['-c', pyScript, jsonPath], (error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-
-    const pdfBuffer = await readFile(outputPath);
-    return Buffer.from(pdfBuffer);
-  } finally {
-    // Clean up temp files
-    await unlink(jsonPath).catch(() => {});
-    await unlink(outputPath).catch(() => {});
+  if (fields.length === 0) {
+    // Template has no AcroForm fields exposed to pdf-lib — it's XFA-only.
+    // The pre-2026-05-18 Python implementation could handle this; the
+    // pure-JS path cannot. Surface a clear error so we know to either
+    // (a) regenerate the template as AcroForm via Adobe Acrobat, or
+    // (b) implement coordinate-based text overlay as a fallback.
+    throw new Error(
+      `Template ${path.basename(templatePath)} has no AcroForm fields readable by pdf-lib ` +
+      `(likely XFA-only). Convert template to AcroForm in Adobe Acrobat ` +
+      `(Tools → Prepare Form → recognize fields) or implement a coordinate-overlay fallback.`,
+    );
   }
+
+  // Fill every matching field. We iterate the form fields and match by
+  // the SHORT name (the last segment of the dotted path, with [0] stripped)
+  // — same logic the prior Python implementation used. This makes the
+  // function tolerant of either naming convention pdf-lib exposes.
+  let filledCount = 0;
+  for (const field of fields) {
+    const fullName = field.getName();
+    const short = fullName.split('.').pop()?.replace(/\[0\]$/, '') || fullName;
+    const value = fieldMap[short];
+    if (value === undefined) continue;
+    try {
+      const textField = form.getTextField(fullName);
+      textField.setText(value);
+      filledCount += 1;
+    } catch {
+      // Field exists but isn't a text field (checkbox / radio) — skip.
+    }
+  }
+
+  if (filledCount === 0) {
+    throw new Error(
+      `pdf-lib found ${fields.length} fields but none matched the expected names (f1_6, f1_7, ...). ` +
+      `Field name format may have changed. Sample names: ${fields.slice(0, 5).map(f => f.getName()).join(', ')}.`,
+    );
+  }
+
+  // Flatten — values become part of the visual layer; the form is no
+  // longer interactive. This is what we want for download-and-print and
+  // for Dropbox Sign (signature placement happens on top of flat text).
+  try {
+    form.flatten();
+  } catch (err) {
+    // Some PDFs choke on flatten; non-fatal — values are still in the
+    // form layer and most readers render them anyway.
+    console.warn('[8821-pdf] form.flatten() failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return Buffer.from(pdfBytes);
 }
