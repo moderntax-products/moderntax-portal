@@ -51,13 +51,16 @@ jobs:
       - name: Install dependencies (strict lockfile)
         run: npm ci
 
-      - name: Dependency audit (fail on high+critical)
-        # `npm audit` exits non-zero on findings at audit-level or higher.
-        # `|| true` is intentionally OMITTED — we want this to fail the build.
-        # If a high CVE has no fix available (e.g., xlsx prototype pollution),
-        # document an exception with `audit` config overrides rather than
-        # masking the signal.
-        run: npm audit --audit-level=high
+      - name: Dependency audit (fails on NEW high+critical, allowlists known)
+        # Uses audit-ci (config: .audit-ci.json) so we get a STABLE gate:
+        #   · Net-new HIGH/CRITICAL CVEs fail the build (the actual point)
+        #   · Known unfixable HIGH advisories (Next 14.x batch + xlsx
+        #     prototype pollution) are allowlisted with GHSA IDs and
+        #     tracked separately in the SOC 2 audit report (H1, H2 of
+        #     the dependencies audit — both need major-version upgrades).
+        # When you upgrade Next or xlsx, remove the corresponding IDs
+        # from .audit-ci.json so the gate tightens again.
+        run: npx audit-ci --config .audit-ci.json
 
       - name: Lint (next lint)
         run: npx next lint
