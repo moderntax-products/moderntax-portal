@@ -568,6 +568,7 @@ export default async function AdminRequestManagePage({ params }: Props) {
                         entityId={entity.id}
                         entityName={entity.entity_name}
                         currentUrl={entity.signed_8821_url}
+                        expertRegeneratedUrl={(entity as any).expert_regenerated_8821_url || null}
                       />
                     </div>
 
