@@ -617,6 +617,13 @@ export default async function AdminPage({ searchParams }: PageProps) {
                 Batches
               </Link>
               <Link
+                href="/admin/erc-engagements"
+                className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 transition-colors"
+                title="ERC refund recovery engagements — track Mento-style cases through the IRS reissue process"
+              >
+                ERC Recovery
+              </Link>
+              <Link
                 href="/admin/billing"
                 className="px-3 py-1.5 text-xs sm:text-sm font-medium text-white bg-mt-green rounded-lg hover:bg-mt-green/90 transition-colors"
               >

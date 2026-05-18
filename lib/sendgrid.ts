@@ -2983,3 +2983,65 @@ ${args.additionalNotes ? `<p><strong>Additional notes from merchant:</strong></p
     // Non-blocking — don't throw
   }
 }
+
+// =============================================================================
+// ERC Recovery — stage update email (fires on every admin-driven stage advance)
+// =============================================================================
+
+interface ErcStageUpdateArgs {
+  toEmail: string;
+  toName?: string | null;
+  entityName: string;
+  stageLabel: string;        // e.g., "Refund trace filed"
+  stageMerchantCopy: string; // canned per-stage explanation from STAGES[]
+  customNote?: string | null;// optional admin-written note for this specific transition
+  trackingUrl: string;
+}
+
+/**
+ * Sent to the merchant every time admin advances the engagement to a new
+ * stage. Pulls the canned per-stage copy from STAGES[] and optionally an
+ * admin-written note (e.g., "trace confirmation #IRS-2026-0517-3344").
+ */
+export async function sendErcStageUpdate(args: ErcStageUpdateArgs): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid not configured — skipping ERC stage update email');
+    return;
+  }
+  const firstName = (args.toName || '').trim().split(/\s+/)[0] || 'there';
+  const content = `
+<p>Hi ${firstName},</p>
+
+<p>Status update on the ERC refund recovery for <strong>${args.entityName}</strong>:</p>
+
+<div style="background:#D1FAE5;border-left:4px solid #10B981;padding:14px 18px;margin:16px 0;border-radius:4px;">
+  <div style="font-weight:700;color:#065F46;font-size:16px;margin-bottom:4px;">${args.stageLabel}</div>
+  <div style="color:#1a1a1a;font-size:14px;">${args.stageMerchantCopy}</div>
+</div>
+
+${args.customNote ? `<p><strong>From your case manager:</strong></p><blockquote style="border-left:3px solid #00C48C;padding-left:12px;margin:8px 0;color:#444;font-style:italic;">${args.customNote}</blockquote>` : ''}
+
+<p>Full timeline + all updates always live at your status page:</p>
+<p style="text-align:center;margin:20px 0;">
+  <a href="${args.trackingUrl}" style="display:inline-block;background-color:#00C48C;color:#ffffff;padding:12px 26px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;">View status page →</a>
+</p>
+
+<p>Reply to this email or text Matt if you have any questions.</p>
+<p style="margin-top:24px;">— Matt</p>
+  `.trim();
+
+  const html = createEmailTemplate(`${args.entityName} — ${args.stageLabel}`, content, undefined);
+
+  try {
+    await sgMail.send({
+      to: args.toEmail,
+      from: { email: fromEmail, name: 'Matt Parker · ModernTax' },
+      subject: `${args.entityName} — ${args.stageLabel}`,
+      html,
+      replyTo: 'matt@moderntax.io',
+      categories: ['transactional_erc_stage_update'],
+    });
+  } catch (error) {
+    console.error('Failed to send ERC stage update email:', error);
+  }
+}
