@@ -69,15 +69,35 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
   }
 
-  // Active assignment
-  const { data: activeAssn } = await admin
-    .from('expert_assignments')
-    .select('id, expert_id, profiles!expert_assignments_expert_id_fkey(id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code)')
-    .eq('entity_id', body.entityId)
-    .in('status', ['assigned', 'in_progress'])
-    .order('assigned_at', { ascending: false })
-    .limit(1)
-    .maybeSingle() as { data: any };
+  // Active assignment. Two-phase select to tolerate envs where the
+  // expert_template_8821_url column hasn't been migrated yet (older state
+  // gracefully falls back to programmatic generation).
+  let activeAssn: any = null;
+  {
+    const fullSel = 'id, expert_id, profiles!expert_assignments_expert_id_fkey(id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, expert_template_8821_url)';
+    const baseSel = 'id, expert_id, profiles!expert_assignments_expert_id_fkey(id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code)';
+    const r = await admin
+      .from('expert_assignments')
+      .select(fullSel)
+      .eq('entity_id', body.entityId)
+      .in('status', ['assigned', 'in_progress'])
+      .order('assigned_at', { ascending: false })
+      .limit(1)
+      .maybeSingle() as { data: any; error: any };
+    if (r.error && /expert_template_8821_url|column .* does not exist|PGRST204/i.test(r.error.message || '')) {
+      const r2 = await admin
+        .from('expert_assignments')
+        .select(baseSel)
+        .eq('entity_id', body.entityId)
+        .in('status', ['assigned', 'in_progress'])
+        .order('assigned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: any };
+      activeAssn = r2.data ? { ...r2.data, profiles: { ...r2.data.profiles, expert_template_8821_url: null } } : null;
+    } else {
+      activeAssn = r.data;
+    }
+  }
 
   if (!activeAssn) {
     return NextResponse.json({ error: 'No active expert assignment on this entity' }, { status: 400 });
@@ -90,6 +110,22 @@ export async function POST(request: NextRequest) {
       error: `Assigned expert ${expertProfile.full_name || expertProfile.email} is missing required designee fields: ${missing.join(', ')}. They must complete /expert/profile first.`,
       missing_fields: missing,
     }, { status: 400 });
+  }
+
+  // If the expert has a pre-filled template uploaded, pull its bytes from
+  // storage and pass to generate8821PDF — only taxpayer fields will be
+  // overlaid; designee + Section 3 come from the template.
+  let expertTemplateBytes: Buffer | undefined;
+  if (expertProfile.expert_template_8821_url) {
+    const { data: dl, error: dlErr } = await admin.storage
+      .from('uploads')
+      .download(expertProfile.expert_template_8821_url);
+    if (dlErr || !dl) {
+      console.warn(`[regenerate-8821] Could not download expert template at ${expertProfile.expert_template_8821_url}: ${dlErr?.message || 'no data'}. Falling back to programmatic generation.`);
+    } else {
+      const arrBuf = await dl.arrayBuffer();
+      expertTemplateBytes = Buffer.from(arrBuf);
+    }
   }
 
   // Build the new designee + generate the PDF
@@ -108,6 +144,12 @@ export async function POST(request: NextRequest) {
       designee,
       formType: (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S' | '941',
       years: Array.isArray(entity.years) ? entity.years.join(', ') : '2022-2026',
+      // When the expert has uploaded their personal pre-filled template,
+      // use it as the canvas (designee + Section 3 already baked in) and
+      // only overlay the taxpayer fields. When null/undefined, the
+      // generator falls back to the default IRS template + programmatic
+      // designee/Section 3 fills.
+      expertTemplateBytes,
     });
   } catch (err) {
     console.error('[regenerate-8821] PDF generation failed:', err);

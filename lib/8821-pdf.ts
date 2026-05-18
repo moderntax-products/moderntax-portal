@@ -55,6 +55,20 @@ export interface Fill8821Options {
   formType: '1040' | '1065' | '1120' | '1120S' | '990' | '1041' | '941';
   /** Override Section 3 years (default: "2022-2026") */
   years?: string;
+  /**
+   * Optional: raw bytes of an expert-supplied pre-filled 8821 template
+   * (designee + Section 3 already populated to the expert's preferences).
+   * When provided, this replaces the default 8821-business-v2.pdf /
+   * 8821-individual-v2.pdf template, and ONLY the taxpayer fields
+   * (Section 1: f1_6, f1_7, f1_8) are overlaid. The designee preset
+   * passed in `designee` is ignored — the template carries the expert's
+   * actual designee block.
+   *
+   * Loaded by callers from Supabase storage path
+   * `profiles.expert_template_8821_url` per the per-expert template
+   * feature shipped 2026-05-18.
+   */
+  expertTemplateBytes?: Uint8Array | Buffer;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,15 +235,8 @@ function getSection3Business(years: string): Section3Row[] {
  * @returns Buffer containing the filled PDF
  */
 export async function generate8821PDF(options: Fill8821Options): Promise<Buffer> {
-  const { taxpayer, designee, formType, years = '2022-2026' } = options;
+  const { taxpayer, designee, formType, years = '2022-2026', expertTemplateBytes } = options;
   const isIndividual = formType === '1040';
-
-  const templatePath = path.join(
-    process.cwd(),
-    'public',
-    'templates',
-    isIndividual ? '8821-individual-v2.pdf' : '8821-business-v2.pdf',
-  );
 
   // Build field map — same field IDs the previous Python implementation
   // wrote to. IRS XFA forms expose the same field names on the AcroForm
@@ -238,46 +245,70 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
   const d2Addr = `${BACKUP_DESIGNEE.name}\n${BACKUP_DESIGNEE.address}, ${BACKUP_DESIGNEE.city}, ${BACKUP_DESIGNEE.state} ${BACKUP_DESIGNEE.zip}`;
   const rows = isIndividual ? getSection3Individual(years) : getSection3Business(years);
 
-  const fieldMap: Record<string, string> = {
-    // Section 1: Taxpayer
-    'f1_6': `${taxpayer.name}\n${taxpayer.address}`,
-    'f1_7': taxpayer.tin,
-    'f1_8': taxpayer.phone || '',
+  // When using an expert's pre-filled template, ONLY the taxpayer fields
+  // (Section 1) are overlaid — the designee block + Section 3 are already
+  // baked into the template to the expert's preferences. When using the
+  // default template, every field is filled.
+  const fieldMap: Record<string, string> = expertTemplateBytes
+    ? {
+        // Section 1 only — taxpayer fields. Everything else lives in the template.
+        'f1_6': `${taxpayer.name}\n${taxpayer.address}`,
+        'f1_7': taxpayer.tin,
+        'f1_8': taxpayer.phone || '',
+      }
+    : {
+        // Section 1: Taxpayer
+        'f1_6': `${taxpayer.name}\n${taxpayer.address}`,
+        'f1_7': taxpayer.tin,
+        'f1_8': taxpayer.phone || '',
 
-    // Section 2: Designee 1 (assigned expert)
-    'f1_10': d1Addr,
-    'f1_11': designee.caf,
-    'f1_12': designee.ptin,
-    'f1_13': designee.phone,
-    'f1_14': designee.fax || '',
+        // Section 2: Designee 1 (assigned expert)
+        'f1_10': d1Addr,
+        'f1_11': designee.caf,
+        'f1_12': designee.ptin,
+        'f1_13': designee.phone,
+        'f1_14': designee.fax || '',
 
-    // Section 2: Designee 2 (backup)
-    'f1_15': d2Addr,
-    'f1_16': BACKUP_DESIGNEE.caf,
-    'f1_17': BACKUP_DESIGNEE.ptin,
-    'f1_18': BACKUP_DESIGNEE.phone,
-    'f1_19': BACKUP_DESIGNEE.fax || '',
+        // Section 2: Designee 2 (backup)
+        'f1_15': d2Addr,
+        'f1_16': BACKUP_DESIGNEE.caf,
+        'f1_17': BACKUP_DESIGNEE.ptin,
+        'f1_18': BACKUP_DESIGNEE.phone,
+        'f1_19': BACKUP_DESIGNEE.fax || '',
 
-    // Section 3 Row 1
-    'f1_20': rows[0]?.type || '',
-    'f1_21': rows[0]?.form || '',
-    'f1_22': rows[0]?.years || '',
-    'f1_23': rows[0]?.specific || '',
+        // Section 3 Row 1
+        'f1_20': rows[0]?.type || '',
+        'f1_21': rows[0]?.form || '',
+        'f1_22': rows[0]?.years || '',
+        'f1_23': rows[0]?.specific || '',
 
-    // Section 3 Row 2
-    'f1_24': rows[1]?.type || '',
-    'f1_25': rows[1]?.form || '',
-    'f1_26': rows[1]?.years || '',
-    'f1_27': rows[1]?.specific || '',
+        // Section 3 Row 2
+        'f1_24': rows[1]?.type || '',
+        'f1_25': rows[1]?.form || '',
+        'f1_26': rows[1]?.years || '',
+        'f1_27': rows[1]?.specific || '',
 
-    // Section 3 Row 3
-    'f1_28': rows[2]?.type || '',
-    'f1_29': rows[2]?.form || '',
-    'f1_30': rows[2]?.years || '',
-    'f1_31': rows[2]?.specific || '',
-  };
+        // Section 3 Row 3
+        'f1_28': rows[2]?.type || '',
+        'f1_29': rows[2]?.form || '',
+        'f1_30': rows[2]?.years || '',
+        'f1_31': rows[2]?.specific || '',
+      };
 
-  const templateBytes = await readFile(templatePath);
+  let templateBytes: Uint8Array;
+  if (expertTemplateBytes) {
+    templateBytes = expertTemplateBytes instanceof Uint8Array
+      ? expertTemplateBytes
+      : new Uint8Array(expertTemplateBytes);
+  } else {
+    const templatePath = path.join(
+      process.cwd(),
+      'public',
+      'templates',
+      isIndividual ? '8821-individual-v2.pdf' : '8821-business-v2.pdf',
+    );
+    templateBytes = await readFile(templatePath);
+  }
   const pdfDoc = await PDFDocument.load(templateBytes);
   const form = pdfDoc.getForm();
   const fields = form.getFields();
@@ -289,8 +320,9 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     // (a) regenerate the template as AcroForm via Adobe Acrobat, or
     // (b) implement coordinate-based text overlay as a fallback.
     throw new Error(
-      `Template ${path.basename(templatePath)} has no AcroForm fields readable by pdf-lib ` +
-      `(likely XFA-only). Convert template to AcroForm in Adobe Acrobat ` +
+      `Template (${expertTemplateBytes ? 'expert-supplied' : isIndividual ? '8821-individual-v2.pdf' : '8821-business-v2.pdf'}) ` +
+      `has no AcroForm fields readable by pdf-lib (likely XFA-only). ` +
+      `Convert template to AcroForm in Adobe Acrobat ` +
       `(Tools → Prepare Form → recognize fields) or implement a coordinate-overlay fallback.`,
     );
   }
