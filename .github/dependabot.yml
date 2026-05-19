@@ -28,9 +28,18 @@ updates:
           - patch
     # Ignore Next.js majors here — handle as a deliberate planned upgrade
     # (the 14 → 16 jump in particular needs hands-on regression).
+    # Also ignore @supabase/ssr minors until the codebase is rewritten to
+    # satisfy the stricter generic typing introduced in 0.10.x (~25 sites
+    # in app/api/* + components/ pass Record<string,unknown> to .update()
+    # or reference columns not in the generated DB types). PR #8 caught
+    # this on 2026-05-19. Re-enable when the typing-fix task is complete.
     ignore:
       - dependency-name: next
         update-types: [version-update:semver-major]
+      - dependency-name: '@supabase/ssr'
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
