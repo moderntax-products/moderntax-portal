@@ -17,6 +17,9 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import * as XLSX from 'xlsx';
+import type { Database } from '@/lib/database.types';
+
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 // --- Types ---
 
@@ -235,7 +238,7 @@ export async function POST(request: NextRequest) {
 
         // Update each matched entity with 8821 completion data
         for (const entity of entities) {
-          const updateData: Record<string, unknown> = {
+          const updateData: EntityUpdate = {
             status: 'irs_queue', // 8821 complete → ready for expert
           };
 

@@ -17,6 +17,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { triggerIncrementalWebhook } from '@/lib/webhook';
 import { triggerV3Webhook, type TranscriptUploadContext } from '@/lib/webhook-v3';
+import type { Database } from '@/lib/database.types';
+
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 // Allow larger file uploads (IRS Record of Account transcripts can exceed 4MB)
 export const maxDuration = 30;
@@ -328,7 +331,7 @@ export async function POST(request: NextRequest) {
     // transcript_html_urls = secondary format (fallback)
     const existingHtmlUrls: string[] = (entity as any).transcript_html_urls || [];
 
-    const entityUpdate: Record<string, unknown> = {};
+    const entityUpdate: EntityUpdate = {};
 
     if (transcriptFormat === 'html' && htmlStoragePath) {
       // HTML-preferring client: HTML is primary, PDF is secondary

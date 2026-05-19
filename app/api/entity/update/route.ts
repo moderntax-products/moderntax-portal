@@ -7,6 +7,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import { sendAdminReadyFor8821Notification } from '@/lib/sendgrid';
+import type { Database } from '@/lib/database.types';
+
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 const EDITABLE_STATUSES = ['pending', 'submitted'];
 
@@ -21,7 +24,9 @@ const ALLOWED_FIELDS = [
   'entity_name',
   'tid',
   'form_type',
-];
+] as const satisfies ReadonlyArray<keyof EntityUpdate>;
+
+type EditableField = (typeof ALLOWED_FIELDS)[number];
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -72,13 +77,21 @@ export async function PATCH(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Filter to allowed fields only
-    const safeUpdates: Record<string, any> = {};
-    for (const [key, value] of Object.entries(updates)) {
-      if (ALLOWED_FIELDS.includes(key)) {
-        safeUpdates[key] = value;
-      }
-    }
+    // Build the typed update one field at a time so each assignment is checked
+    // against its exact column type (entity_name/tid/form_type are non-nullable,
+    // the rest are string | null).
+    const safeUpdates: EntityUpdate = {};
+    const u = updates as Partial<Record<EditableField, unknown>>;
+    if (typeof u.signer_email === 'string' || u.signer_email === null) safeUpdates.signer_email = u.signer_email;
+    if (typeof u.signer_first_name === 'string' || u.signer_first_name === null) safeUpdates.signer_first_name = u.signer_first_name;
+    if (typeof u.signer_last_name === 'string' || u.signer_last_name === null) safeUpdates.signer_last_name = u.signer_last_name;
+    if (typeof u.address === 'string' || u.address === null) safeUpdates.address = u.address;
+    if (typeof u.city === 'string' || u.city === null) safeUpdates.city = u.city;
+    if (typeof u.state === 'string' || u.state === null) safeUpdates.state = u.state;
+    if (typeof u.zip_code === 'string' || u.zip_code === null) safeUpdates.zip_code = u.zip_code;
+    if (typeof u.entity_name === 'string') safeUpdates.entity_name = u.entity_name;
+    if (typeof u.tid === 'string') safeUpdates.tid = u.tid;
+    if (typeof u.form_type === 'string') safeUpdates.form_type = u.form_type;
 
     if (Object.keys(safeUpdates).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });

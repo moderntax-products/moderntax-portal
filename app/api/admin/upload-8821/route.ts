@@ -4,6 +4,9 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { validateFormTypeMatchesTidKind } from '@/lib/form-type-validation';
 import { extractEmailsFrom8821 } from '@/lib/extract-8821-pdf';
+import type { Database } from '@/lib/database.types';
+
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 /**
  * Parse a free-form years string from the upload form into a normalized
@@ -210,7 +213,7 @@ export async function POST(request: NextRequest) {
     const extracted = await extractEmailsFrom8821(buffer, signerName);
 
     // Update entity with signed_8821_url, years, form_type, and auto-advance status
-    const updateFields: Record<string, unknown> = {
+    const updateFields: EntityUpdate = {
       signed_8821_url: filePath,
       years,
     };
@@ -407,7 +410,7 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    const updateFields: Record<string, unknown> = { years };
+    const updateFields: EntityUpdate = { years };
     if (formType) updateFields.form_type = formType;
     // Manual borrower email always wins on PATCH (explicit processor action).
     // PATCH never extracts from a PDF — that only happens on POST.

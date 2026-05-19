@@ -3,6 +3,9 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertIssueNotification, send8821FaxRequest } from '@/lib/sendgrid';
+import type { Database } from '@/lib/database.types';
+
+type AssignmentUpdate = Database['public']['Tables']['expert_assignments']['Update'];
 
 export async function POST(request: Request) {
   try {
@@ -88,7 +91,7 @@ export async function POST(request: Request) {
         ];
         const needsResubmission = RESUBMISSION_REASONS.includes(missReason);
 
-        const updateData: Record<string, unknown> = {
+        const updateData: AssignmentUpdate = {
           miss_reason: missReason || null,
           expert_notes: notes || null,
           needs_resubmission: needsResubmission,

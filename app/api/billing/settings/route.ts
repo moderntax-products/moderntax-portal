@@ -6,6 +6,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient } from '@/lib/supabase-server';
+import type { Database } from '@/lib/database.types';
+
+type ClientUpdate = Database['public']['Tables']['clients']['Update'];
 
 export async function GET() {
   try {
@@ -70,7 +73,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid payment method. Must be "ach" or "wire".' }, { status: 400 });
     }
 
-    const updateData: Record<string, any> = {};
+    const updateData: ClientUpdate = {};
     if (billing_payment_method !== undefined) updateData.billing_payment_method = billing_payment_method;
     if (billing_ap_email !== undefined) updateData.billing_ap_email = billing_ap_email;
     if (billing_ap_phone !== undefined) updateData.billing_ap_phone = billing_ap_phone;

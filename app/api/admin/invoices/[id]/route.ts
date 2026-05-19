@@ -5,6 +5,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
+import type { Database } from '@/lib/database.types';
+
+type InvoiceUpdate = Database['public']['Tables']['invoices']['Update'];
 
 export async function PATCH(
   request: NextRequest,
@@ -29,7 +32,7 @@ export async function PATCH(
     const body = await request.json();
     const admin = createAdminClient();
 
-    const updateData: Record<string, any> = {};
+    const updateData: InvoiceUpdate = {};
 
     if (body.status) {
       if (!['draft', 'sent', 'paid', 'overdue'].includes(body.status)) {

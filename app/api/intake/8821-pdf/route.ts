@@ -42,6 +42,9 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import { extractEmailsFrom8821 } from '@/lib/extract-8821-pdf';
 import { validateFormTypeMatchesTidKind } from '@/lib/form-type-validation';
+import type { Database } from '@/lib/database.types';
+
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -260,7 +263,7 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Update entity ---
-    const updateFields: Record<string, unknown> = {
+    const updateFields: EntityUpdate = {
       signed_8821_url: filePath,
       signature_created_at: new Date().toISOString(),
     };

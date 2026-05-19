@@ -4,6 +4,10 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendStatusChangeNotification, sendFirstTranscriptCelebrationEmail } from '@/lib/sendgrid';
 import { triggerWebhookForRequest, triggerErrorWebhookForRequest } from '@/lib/webhook';
+import type { Database } from '@/lib/database.types';
+
+type RequestUpdate = Database['public']['Tables']['requests']['Update'];
+type EntityUpdate = Database['public']['Tables']['request_entities']['Update'];
 
 export async function POST(request: Request) {
   try {
@@ -55,7 +59,7 @@ export async function POST(request: Request) {
 
         const oldStatus = currentRequest?.status || 'unknown';
 
-        const updateData: Record<string, unknown> = { status };
+        const updateData: RequestUpdate = { status };
         if (status === 'completed') {
           updateData.completed_at = new Date().toISOString();
         }
@@ -124,7 +128,7 @@ export async function POST(request: Request) {
 
         const oldEntityStatus = currentEntity?.status || 'unknown';
 
-        const entityUpdate: Record<string, unknown> = { status };
+        const entityUpdate: EntityUpdate = { status };
         if (status === 'completed') {
           entityUpdate.completed_at = new Date().toISOString();
         }
@@ -225,7 +229,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Missing entityId' }, { status: 400 });
         }
 
-        const entityUpdate: Record<string, unknown> = {};
+        const entityUpdate: EntityUpdate = {};
         if (transcriptUrls !== undefined) {
           entityUpdate.transcript_urls = transcriptUrls;
         }
@@ -288,7 +292,7 @@ export async function POST(request: Request) {
         }
 
         const oldFormType = currentEntity.form_type;
-        const update: Record<string, unknown> = { form_type: formType };
+        const update: EntityUpdate = { form_type: formType };
         // If `requeue: true` is passed, kick the entity back to irs_queue
         // so an expert picks it up again. Only safe when 8821 is already
         // signed (the existing 8821 covers 1065/1120/1120S/990/1041
