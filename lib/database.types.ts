@@ -360,6 +360,7 @@ export type Database = {
           zip_code: string | null;
           form_type: string;
           years: string[];
+          fiscal_year_end_month: number | null;
           signer_first_name: string | null;
           signer_last_name: string | null;
           signer_email: string | null;
@@ -388,8 +389,10 @@ export type Database = {
           zip_code?: string | null;
           form_type: string;
           years: string[];
+          fiscal_year_end_month?: number | null;
           signer_first_name?: string | null;
           signer_last_name?: string | null;
+          signer_email?: string | null;
           signature_id?: string | null;
           signature_created_at?: string | null;
           signed_8821_url?: string | null;
@@ -415,8 +418,10 @@ export type Database = {
           zip_code?: string | null;
           form_type?: string;
           years?: string[];
+          fiscal_year_end_month?: number | null;
           signer_first_name?: string | null;
           signer_last_name?: string | null;
+          signer_email?: string | null;
           signature_id?: string | null;
           signature_created_at?: string | null;
           signed_8821_url?: string | null;
