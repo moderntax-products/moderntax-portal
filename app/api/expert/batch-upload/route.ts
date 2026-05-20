@@ -91,6 +91,13 @@ export async function POST(request: NextRequest) {
       // not just year. Absent on older bookmarklets — fall back to old key.
       taxPeriod?: string;
       quarter?: 'Q1' | 'Q2' | 'Q3' | 'Q4';
+      // True when IRS returned "No record of return filed / Requested data not
+      // found" — the file is a legitimate stub recording what IRS said. Two
+      // stubs for the same period (e.g., Account + Return) would otherwise
+      // collide on the year-keyed dedup. v6.10+ sends this flag and the
+      // filename already includes a unique discriminator; on the API side
+      // we additionally skip dedup so the row always lands.
+      isStub?: boolean;
     };
 
     try {
@@ -245,16 +252,26 @@ export async function POST(request: NextRequest) {
     // Earlier versions keyed on year only, which collapsed Q1/Q2/Q3/Q4 of the
     // same year into one upload — losing 3 of every 4 ERC quarters. Bookmarklet
     // v6.9+ sends metadata.quarter; older uploads still match by year alone.
-    const quarterSuffix = metadata.quarter ? `-${metadata.quarter.toLowerCase()}` : '';
-    const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}${quarterSuffix}`.toLowerCase();
+    //
+    // Exception: "No record of return filed" stubs (metadata.isStub) skip dedup
+    // entirely. IRS may return multiple distinct stubs per period (Account stub
+    // + Return stub + RoA stub) and each one is a legitimate record of what
+    // IRS told us. Bookmarklet v6.10+ also includes a per-stub discriminator
+    // in the filename so the existing-URL substring check wouldn't match
+    // anyway — this guard just makes it explicit + future-proof.
     const existingUrls: string[] = entity.transcript_urls || [];
-    const alreadyUploaded = existingUrls.some((url: string) => {
-      // Extract filename from storage path (after the timestamp prefix)
-      const filename = url.split('/').pop() || '';
-      // Remove timestamp prefix (digits followed by dash)
-      const cleanFilename = filename.replace(/^\d+-/, '').toLowerCase();
-      return cleanFilename.includes(transcriptKey.replace(/\s+/g, ' '));
-    });
+    let alreadyUploaded = false;
+    if (!metadata.isStub) {
+      const quarterSuffix = metadata.quarter ? `-${metadata.quarter.toLowerCase()}` : '';
+      const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}${quarterSuffix}`.toLowerCase();
+      alreadyUploaded = existingUrls.some((url: string) => {
+        // Extract filename from storage path (after the timestamp prefix)
+        const filename = url.split('/').pop() || '';
+        // Remove timestamp prefix (digits followed by dash)
+        const cleanFilename = filename.replace(/^\d+-/, '').toLowerCase();
+        return cleanFilename.includes(transcriptKey.replace(/\s+/g, ' '));
+      });
+    }
 
     if (alreadyUploaded) {
       return corsJson({

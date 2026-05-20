@@ -1,5 +1,14 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.9 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.10 — DIRECT-TO-PORTAL
+// v6.10 changes (on top of v6.9):
+//   - "No record of return filed" + "Requested data not found" stubs are
+//     recognized as legitimate order information (IRS confirming the
+//     return is unfiled). Filename gets a unique per-stub discriminator
+//     derived from the SOR message id so two stubs for the same period
+//     (e.g., Account stub + Return stub for the same unfiled year) don't
+//     collide on the year-keyed dedup. Payload includes isStub:true so
+//     the API skips dedup entirely for these.
+//
 // v6.9 changes:
 //   - 941/940 stay as native HTML (no PDF conversion). Filenames include
 //     -Q1/-Q2/-Q3/-Q4 so each quarter is unique; payload includes
@@ -252,7 +261,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.9</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.10</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -418,7 +427,7 @@
             heightLeft -= (pageHeight - margin * 2);
         }
 
-        pdf.setProperties({ title: filename, creator: 'ModernTax v6.9' });
+        pdf.setProperties({ title: filename, creator: 'ModernTax v6.10' });
         renderContainer.innerHTML = '';
         return pdf.output('blob');
     }
@@ -813,8 +822,16 @@
                 const cleanName = name.substring(0, 20).replace(/[^a-zA-Z0-9 &]/g, '').trim().replace(/\s+/g, ' ');
                 // 941/940: append "-Q3" so each quarter has a unique filename
                 const periodSuffix = is941 && quarterLabel ? `-${quarterLabel}` : '';
-                const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}${periodSuffix}`;
-                const metadata = { name, tin, formType, taxYear, shortType };
+                // "No record of return filed" stubs are real information about the order
+                // (IRS confirmed the return is unfiled). Two stubs for the same period —
+                // e.g., the RoA stub AND the Return Transcript stub for the same year —
+                // would otherwise collide on the formType+shortType+year dedup key.
+                // Append a short stub-discriminator derived from the SOR message id so
+                // each stub keeps a unique filename and the API stores all of them.
+                const isNoRecord = /No record of return filed|Requested data not found|No transcript available/i.test(fullText);
+                const stubSuffix = isNoRecord ? `-no-record-${(msg.id || '').toString().slice(-6) || Math.random().toString(36).slice(2, 8)}` : '';
+                const baseFilename = `${cleanName} - ${formType} ${shortType} - ${taxYear}${periodSuffix}${stubSuffix}`;
+                const metadata = { name, tin, formType, taxYear, shortType, ...(isNoRecord ? { isStub: true } : {}) };
 
                 // Debug: log all extracted metadata
                 console.log(`[IRS-DEBUG] Msg ${msg.id} metadata:`, JSON.stringify({ name, tin, formType, taxYear, shortType, titleText: titleText?.substring(0,60) }));
@@ -905,6 +922,7 @@
                     transcriptCategory: isEntityTranscript ? 'entity' : is941 ? 'payroll' : 'income',
                     ...(taxPeriod ? { taxPeriod } : {}),
                     ...(quarterLabel ? { quarter: quarterLabel } : {}),
+                    ...(isNoRecord ? { isStub: true } : {}),
                 };
                 if (entityData) uploadMetadata.entityData = entityData;
                 formData.append('metadata', JSON.stringify(uploadMetadata));
