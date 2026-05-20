@@ -58,6 +58,22 @@ export const CLIENT_CONFIG: Record<string, Omit<Client, 'id' | 'created_at' | 'u
     billing_rate_pdf: 59.98,
     billing_rate_csv: 69.98,
   },
+  'enterprisebank.com': {
+    name: 'Enterprise Bank & Trust',
+    slug: 'enterprise-bank',
+    domain: 'enterprisebank.com',
+    logo_url: null,
+    intake_methods: ['pdf', 'manual'],
+    api_key: null,
+    api_request_limit: 3,
+    webhook_url: null,
+    webhook_secret: null,
+    billing_payment_method: null,
+    billing_ap_email: null,
+    billing_ap_phone: null,
+    billing_rate_pdf: 59.98,
+    billing_rate_csv: 69.98,
+  },
 };
 
 /**

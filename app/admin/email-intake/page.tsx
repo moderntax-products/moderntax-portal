@@ -37,12 +37,22 @@ export default function EmailIntakePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  // Mode toggle: 'csv' (batch) or 'manual' (single entity + PDF 8821)
+  const [mode, setMode] = useState<'csv' | 'manual'>('manual');
+
   // Form fields
   const [users, setUsers] = useState<UserOption[]>([]);
   const [selectedEmail, setSelectedEmail] = useState('');
   const [loanNumber, setLoanNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<File | null>(null);
+
+  // Manual mode fields
+  const [entityName, setEntityName] = useState('');
+  const [tid, setTid] = useState('');
+  const [tidKind, setTidKind] = useState<'EIN' | 'SSN'>('EIN');
+  const [formType, setFormType] = useState('1120');
+  const [years, setYears] = useState('');
 
   // Result / error
   const [result, setResult] = useState<IntakeResult | null>(null);
@@ -116,17 +126,24 @@ export default function EmailIntakePage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
-      const validTypes = [
-        'text/csv',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      ];
-      const validExtensions = ['.csv', '.xlsx', '.xls'];
-      const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+      if (mode === 'manual') {
+        if (!f.name.toLowerCase().endsWith('.pdf')) {
+          setError('Please upload a PDF file (signed 8821)');
+          return;
+        }
+      } else {
+        const validTypes = [
+          'text/csv',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ];
+        const validExtensions = ['.csv', '.xlsx', '.xls'];
+        const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
 
-      if (!validTypes.includes(f.type) && !validExtensions.includes(ext)) {
-        setError('Please upload a CSV or Excel file');
-        return;
+        if (!validTypes.includes(f.type) && !validExtensions.includes(ext)) {
+          setError('Please upload a CSV or Excel file');
+          return;
+        }
       }
       setFile(f);
       setError('');
@@ -146,20 +163,35 @@ export default function EmailIntakePage() {
       setError('Loan number is required');
       return;
     }
-    if (!file) {
+    if (mode === 'csv' && !file) {
       setError('Please upload a CSV or Excel file');
       return;
+    }
+    if (mode === 'manual') {
+      if (!entityName.trim()) { setError('Entity name is required'); return; }
+      if (!tid.trim()) { setError('EIN/SSN is required'); return; }
+      if (!years.trim()) { setError('Tax year(s) required'); return; }
     }
 
     setSubmitting(true);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('mode', mode);
       formData.append('sender_email', selectedEmail);
       formData.append('loan_number', loanNumber.trim());
       if (notes.trim()) {
         formData.append('notes', notes.trim());
+      }
+      if (file) {
+        formData.append('file', file);
+      }
+      if (mode === 'manual') {
+        formData.append('entity_name', entityName.trim());
+        formData.append('tid', tid.trim());
+        formData.append('tid_kind', tidKind);
+        formData.append('form_type', formType);
+        formData.append('years', years.trim());
       }
 
       const res = await fetch('/api/admin/email-intake', {
@@ -181,6 +213,11 @@ export default function EmailIntakePage() {
       setLoanNumber('');
       setNotes('');
       setFile(null);
+      setEntityName('');
+      setTid('');
+      setTidKind('EIN');
+      setFormType('1120');
+      setYears('');
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -282,6 +319,32 @@ export default function EmailIntakePage() {
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-5">
+                {/* Mode toggle */}
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => { setMode('manual'); setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+                    className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      mode === 'manual'
+                        ? 'bg-[#0A1929] text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    Manual Entry + 8821 PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setMode('csv'); setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+                    className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      mode === 'csv'
+                        ? 'bg-[#0A1929] text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    CSV Batch Upload
+                  </button>
+                </div>
+
                 {/* User select */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -321,10 +384,88 @@ export default function EmailIntakePage() {
                   />
                 </div>
 
+                {/* Manual entry fields */}
+                {mode === 'manual' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                        Entity / Business Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={entityName}
+                        onChange={(e) => setEntityName(e.target.value)}
+                        placeholder="e.g. K.O.K. Trucking LLC"
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          EIN / SSN <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={tid}
+                          onChange={(e) => setTid(e.target.value)}
+                          placeholder="XX-XXXXXXX"
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          TID Type
+                        </label>
+                        <select
+                          value={tidKind}
+                          onChange={(e) => setTidKind(e.target.value as 'EIN' | 'SSN')}
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                        >
+                          <option value="EIN">EIN</option>
+                          <option value="SSN">SSN</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Form Type <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          value={formType}
+                          onChange={(e) => setFormType(e.target.value)}
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                        >
+                          <option value="1040">1040 (Individual)</option>
+                          <option value="1065">1065 (Partnership)</option>
+                          <option value="1120">1120 (C-Corp)</option>
+                          <option value="1120S">1120S (S-Corp)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Tax Year(s) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={years}
+                          onChange={(e) => setYears(e.target.value)}
+                          placeholder="e.g. 2024 or 2023, 2024"
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 {/* File upload */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    CSV / Excel File <span className="text-red-500">*</span>
+                    {mode === 'manual' ? (
+                      <>Signed 8821 PDF <span className="text-gray-400">(optional — upload later)</span></>
+                    ) : (
+                      <>CSV / Excel File <span className="text-red-500">*</span></>
+                    )}
                   </label>
                   <div
                     onClick={() => fileInputRef.current?.click()}
@@ -360,17 +501,19 @@ export default function EmailIntakePage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
                         <p className="text-sm text-gray-600">
-                          Click to upload CSV or Excel file
+                          {mode === 'manual'
+                            ? 'Click to upload signed 8821 PDF'
+                            : 'Click to upload CSV or Excel file'}
                         </p>
                         <p className="text-xs text-gray-400 mt-1">
-                          .csv, .xlsx, .xls
+                          {mode === 'manual' ? '.pdf' : '.csv, .xlsx, .xls'}
                         </p>
                       </div>
                     )}
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".csv,.xlsx,.xls"
+                      accept={mode === 'manual' ? '.pdf' : '.csv,.xlsx,.xls'}
                       onChange={handleFileChange}
                       className="hidden"
                     />
@@ -451,38 +594,61 @@ export default function EmailIntakePage() {
             {/* How it works */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
               <h3 className="text-sm font-semibold text-[#0A1929] mb-3">How It Works</h3>
-              <ol className="text-sm text-gray-600 space-y-2.5">
-                <li className="flex gap-2">
-                  <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">1</span>
-                  <span>User emails a CSV to matt@moderntax.io</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">2</span>
-                  <span>Select the sender from the dropdown</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">3</span>
-                  <span>Upload the CSV file and enter the loan number</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">4</span>
-                  <span>The request appears under their account as if they submitted it</span>
-                </li>
-              </ol>
+              {mode === 'manual' ? (
+                <ol className="text-sm text-gray-600 space-y-2.5">
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                    <span>User emails an 8821 PDF to matt@moderntax.io</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                    <span>Select the sender and enter entity details</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                    <span>Upload the signed 8821 PDF (or add later)</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">4</span>
+                    <span>Request is created and queued for processing</span>
+                  </li>
+                </ol>
+              ) : (
+                <ol className="text-sm text-gray-600 space-y-2.5">
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                    <span>User emails a CSV to matt@moderntax.io</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                    <span>Select the sender from the dropdown</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                    <span>Upload the CSV file and enter the loan number</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="flex-shrink-0 w-5 h-5 bg-[#00C48C]/10 text-[#00C48C] rounded-full flex items-center justify-center text-xs font-bold">4</span>
+                    <span>The request appears under their account as if they submitted it</span>
+                  </li>
+                </ol>
+              )}
             </div>
 
-            {/* Expected CSV format */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-              <h3 className="text-sm font-semibold text-[#0A1929] mb-3">Expected CSV Columns</h3>
-              <div className="text-xs text-gray-600 space-y-1 font-mono bg-gray-50 rounded-lg p-3">
-                <p className="text-[#00C48C] font-semibold">Required:</p>
-                <p>legal_name, tid, tid_kind</p>
-                <p className="text-gray-400 mt-2 font-semibold">Optional:</p>
-                <p>address, city, state, zip_code,</p>
-                <p>years, form, signature_id,</p>
-                <p>first name, last name</p>
+            {/* Expected CSV format - only show in CSV mode */}
+            {mode === 'csv' && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <h3 className="text-sm font-semibold text-[#0A1929] mb-3">Expected CSV Columns</h3>
+                <div className="text-xs text-gray-600 space-y-1 font-mono bg-gray-50 rounded-lg p-3">
+                  <p className="text-[#00C48C] font-semibold">Required:</p>
+                  <p>legal_name, tid, tid_kind</p>
+                  <p className="text-gray-400 mt-2 font-semibold">Optional:</p>
+                  <p>address, city, state, zip_code,</p>
+                  <p>years, form, signature_id,</p>
+                  <p>first name, last name</p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Recent intakes */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
