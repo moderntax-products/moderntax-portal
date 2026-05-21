@@ -169,9 +169,21 @@ export async function POST(request: NextRequest) {
     const senderEmail = formData.get('sender_email') as string | null;
     const loanNumber = formData.get('loan_number') as string | null;
     const notes = formData.get('notes') as string | null;
+    // Mode: 'csv' (default, existing behavior) or 'manual' (no CSV, entities
+    // supplied inline as JSON). Driver: Enterprise Bank's first trial request
+    // arrived as a secure email with the loan note + a pre-signed 8821 from
+    // another vendor and no CSV.
+    const mode = ((formData.get('mode') as string | null) || 'csv').toLowerCase();
+    const manualEntitiesRaw = formData.get('entities') as string | null;
+    // Multiple supplementary attachments (loan note, prior-vendor 8821, etc.)
+    const attachments = formData.getAll('attachments') as File[];
 
-    if (!file) {
+    if (mode !== 'manual' && !file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    }
+
+    if (mode === 'manual' && !manualEntitiesRaw) {
+      return NextResponse.json({ error: 'Manual mode requires entities[] in the payload' }, { status: 400 });
     }
 
     if (!senderEmail?.trim()) {
@@ -204,20 +216,66 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Read and parse CSV/Excel
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+    // Build rows from either CSV/Excel parse OR the manual-entry JSON payload.
+    let rows: CsvRow[] = [];
+    let sourceFileUrl: string | null = null;
+    let primaryFilename: string | null = null;
+    let primaryFileSize = 0;
 
-    if (rawRows.length === 0) {
-      return NextResponse.json({ error: 'File contains no data rows' }, { status: 400 });
+    if (mode === 'manual') {
+      // Manual mode: entities arrive as a JSON array. Coerce to the same
+      // CsvRow shape so the downstream entity-creation logic is reused
+      // unchanged (signer pickup, repeat-entity check, 8821 auto-send).
+      let parsed: any[] = [];
+      try {
+        parsed = JSON.parse(manualEntitiesRaw!);
+        if (!Array.isArray(parsed)) throw new Error('entities must be an array');
+      } catch (e: any) {
+        return NextResponse.json({ error: `Invalid entities JSON: ${e.message}` }, { status: 400 });
+      }
+      if (parsed.length === 0) {
+        return NextResponse.json({ error: 'At least one entity is required' }, { status: 400 });
+      }
+      rows = parsed.map((e: any) => mapRow({
+        legal_name: e.legal_name || e.entityName || '',
+        tid: e.tid || '',
+        tid_kind: e.tid_kind || e.tidKind || 'EIN',
+        address: e.address || '',
+        city: e.city || '',
+        state: e.state || '',
+        zip_code: e.zip_code || e.zipCode || '',
+        years: Array.isArray(e.years) ? e.years.join(',') : (e.years || ''),
+        form: e.form || e.form_type || e.formType || '1040',
+        signature_id: e.signature_id || '',
+        'first name': e.first_name || e.firstName || '',
+        'last name': e.last_name || e.lastName || '',
+        email: e.email || e.signer_email || e.signerEmail || '',
+        fye_month: e.fye_month || e.fyeMonth || '',
+      } as Record<string, unknown>));
+    } else {
+      // CSV/Excel mode (existing path, unchanged).
+      const buffer = Buffer.from(await file!.arrayBuffer());
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+
+      if (rawRows.length === 0) {
+        return NextResponse.json({ error: 'File contains no data rows' }, { status: 400 });
+      }
+
+      rows = rawRows.map(mapRow);
+      // Upload source file to storage (primary)
+      const filePath = `${senderProfile.client_id}/${Date.now()}-email-intake-${file!.name}`;
+      const { error: uploadError } = await adminSupabase.storage
+        .from('uploads')
+        .upload(filePath, buffer, { contentType: file!.type, upsert: false });
+      sourceFileUrl = uploadError ? null : filePath;
+      primaryFilename = file!.name;
+      primaryFileSize = buffer.length;
     }
 
-    const rows = rawRows.map(mapRow);
     const errors: string[] = [];
-
     rows.forEach((row, idx) => {
       if (!row.legal_name) errors.push(`Row ${idx + 2}: missing legal_name`);
       if (!row.tid) errors.push(`Row ${idx + 2}: missing tid`);
@@ -230,34 +288,73 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Upload source file to storage
-    const filePath = `${senderProfile.client_id}/${Date.now()}-email-intake-${file.name}`;
-    const { error: uploadError } = await adminSupabase.storage
-      .from('uploads')
-      .upload(filePath, buffer, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    const sourceFileUrl = uploadError ? null : filePath;
+    // Upload any supplementary attachments (loan notes, prior-vendor 8821s).
+    // In manual mode, if no CSV exists, the FIRST attachment doubles as the
+    // primary source_file_url so the existing admin UI still has something
+    // to link to from the request detail page.
+    const extraAttachmentUrls: string[] = [];
+    const ts = Date.now();
+    for (let i = 0; i < attachments.length; i++) {
+      const att = attachments[i];
+      if (!att || !att.size) continue;
+      const aBuf = Buffer.from(await att.arrayBuffer());
+      const safeName = (att.name || `attachment-${i + 1}`).replace(/[^\w.\-]+/g, '_');
+      const aPath = `${senderProfile.client_id}/email-intake-attachments/${ts}-${i + 1}-${safeName}`;
+      const { error: aErr } = await adminSupabase.storage.from('uploads')
+        .upload(aPath, aBuf, { contentType: att.type || 'application/octet-stream', upsert: false });
+      if (aErr) {
+        console.error(`[email-intake] attachment ${i + 1} (${safeName}) upload failed:`, aErr);
+        continue;
+      }
+      extraAttachmentUrls.push(aPath);
+      // Manual mode + no CSV: first attachment becomes primary for UI continuity
+      if (mode === 'manual' && !sourceFileUrl) {
+        sourceFileUrl = aPath;
+        primaryFilename = att.name;
+        primaryFileSize = aBuf.length;
+      }
+    }
 
     const effectiveLoanNumber = loanNumber!.trim();
 
-    // Create batch as the sender
-    const { data: batch, error: batchError } = await adminSupabase
+    // Create batch as the sender. Try the new extra_attachment_urls +
+    // intake_subtype columns; fall back to the legacy insert if the
+    // migration hasn't been applied yet so this code ships safely.
+    const baseBatchPayload = {
+      client_id: senderProfile.client_id,
+      uploaded_by: senderProfile.id,
+      intake_method: 'csv' as const,
+      source_file_url: sourceFileUrl,
+      original_filename: primaryFilename ?? (mode === 'manual' ? 'manual-entry.json' : null),
+      entity_count: rows.length,
+      request_count: 1,
+      status: 'completed',
+    };
+
+    // First try with the new columns (extra_attachment_urls + intake_subtype).
+    // If the migration hasn't been applied yet on this env, retry without them.
+    // Cast to `any` because the columns are new and the generated DB types
+    // file (lib/database.types) won't include them until regenerated.
+    let batchInsert = await adminSupabase
       .from('batches')
       .insert({
-        client_id: senderProfile.client_id,
-        uploaded_by: senderProfile.id,
-        intake_method: 'csv',
-        source_file_url: sourceFileUrl,
-        original_filename: file.name,
-        entity_count: rows.length,
-        request_count: 1,
-        status: 'completed',
-      })
+        ...baseBatchPayload,
+        extra_attachment_urls: extraAttachmentUrls,
+        intake_subtype: mode === 'manual' ? 'manual' : 'csv',
+      } as any)
       .select()
-      .single() as { data: { id: string } | null; error: unknown };
+      .single() as { data: { id: string } | null; error: any };
+
+    if (batchInsert.error && /column .* (extra_attachment_urls|intake_subtype)/i.test(batchInsert.error.message || '')) {
+      console.warn('[email-intake] Falling back: extra_attachment_urls / intake_subtype columns not yet migrated');
+      batchInsert = await adminSupabase
+        .from('batches')
+        .insert(baseBatchPayload as any)
+        .select()
+        .single() as { data: { id: string } | null; error: any };
+    }
+
+    const { data: batch, error: batchError } = batchInsert;
 
     if (batchError || !batch) {
       console.error('Batch creation error:', batchError);
@@ -433,7 +530,11 @@ export async function POST(request: NextRequest) {
       resourceId: batch.id,
       details: {
         intake_method: 'email_intake',
-        filename: file.name,
+        intake_subtype: mode,
+        filename: primaryFilename || '(manual-entry, no csv)',
+        primary_file_size: primaryFileSize || null,
+        attachments_count: extraAttachmentUrls.length,
+        attachments: extraAttachmentUrls,
         entity_count: entityCount,
         request_id: req.id,
         loan_number: effectiveLoanNumber,

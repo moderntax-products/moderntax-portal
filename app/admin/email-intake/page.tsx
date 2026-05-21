@@ -44,6 +44,41 @@ export default function EmailIntakePage() {
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<File | null>(null);
 
+  // Mode: 'csv' (existing) | 'manual' (no CSV, entities entered inline + free-form
+  // attachments like loan notes or third-party 8821s). Driver: Enterprise Bank
+  // 2026-05-20 — first trial request arrived as a secure email with the loan
+  // note + a pre-signed 8821 for another vendor; no CSV in sight.
+  const [mode, setMode] = useState<'csv' | 'manual'>('csv');
+
+  // Manual-mode entity rows
+  type ManualEntity = {
+    id: string;
+    legal_name: string;
+    tid: string;
+    tid_kind: 'EIN' | 'SSN';
+    form: string;
+    years: string[];
+    address: string;
+    city: string;
+    state: string;
+    zip_code: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+  };
+  const newRow = (): ManualEntity => ({
+    id: Math.random().toString(36).slice(2, 10),
+    legal_name: '', tid: '', tid_kind: 'EIN', form: '1120S', years: [],
+    address: '', city: '', state: '', zip_code: '',
+    first_name: '', last_name: '', email: '',
+  });
+  const [manualEntities, setManualEntities] = useState<ManualEntity[]>([newRow()]);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const attachmentsInputRef = useRef<HTMLInputElement>(null);
+
+  const currentYear = new Date().getFullYear();
+  const TAX_YEARS = Array.from({ length: 6 }, (_, i) => String(currentYear - i));
+
   // Result / error
   const [result, setResult] = useState<IntakeResult | null>(null);
   const [error, setError] = useState('');
@@ -146,16 +181,52 @@ export default function EmailIntakePage() {
       setError('Loan number is required');
       return;
     }
-    if (!file) {
+
+    if (mode === 'csv' && !file) {
       setError('Please upload a CSV or Excel file');
       return;
+    }
+    if (mode === 'manual') {
+      const populated = manualEntities.filter(e => e.legal_name.trim() && e.tid.trim());
+      if (populated.length === 0) {
+        setError('Add at least one entity with legal name and TIN');
+        return;
+      }
+      // Validate every populated row has both legal_name + tid
+      const incomplete = manualEntities.find(e => (e.legal_name.trim() || e.tid.trim()) && (!e.legal_name.trim() || !e.tid.trim()));
+      if (incomplete) {
+        setError('Every entity row needs both Legal Name and TIN. Remove blank rows or fill them in.');
+        return;
+      }
     }
 
     setSubmitting(true);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('mode', mode);
+      if (mode === 'csv' && file) {
+        formData.append('file', file);
+      } else if (mode === 'manual') {
+        const populated = manualEntities.filter(e => e.legal_name.trim() && e.tid.trim());
+        formData.append('entities', JSON.stringify(populated.map(e => ({
+          legal_name: e.legal_name.trim(),
+          tid: e.tid.trim(),
+          tid_kind: e.tid_kind,
+          form: e.form,
+          years: e.years,
+          address: e.address.trim() || undefined,
+          city: e.city.trim() || undefined,
+          state: e.state.trim() || undefined,
+          zip_code: e.zip_code.trim() || undefined,
+          first_name: e.first_name.trim() || undefined,
+          last_name: e.last_name.trim() || undefined,
+          email: e.email.trim() || undefined,
+        }))));
+      }
+      // Multi-file attachments (loan notes, prior-vendor 8821 references, etc.)
+      for (const a of attachments) formData.append('attachments', a);
+
       formData.append('sender_email', selectedEmail);
       formData.append('loan_number', loanNumber.trim());
       if (notes.trim()) {
@@ -181,9 +252,10 @@ export default function EmailIntakePage() {
       setLoanNumber('');
       setNotes('');
       setFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      setManualEntities([newRow()]);
+      setAttachments([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (attachmentsInputRef.current) attachmentsInputRef.current.value = '';
 
       // Add to recent intakes
       setRecentIntakes((prev) => [
@@ -281,6 +353,32 @@ export default function EmailIntakePage() {
                 </div>
               </div>
 
+              {/* Mode tabs */}
+              <div className="flex gap-2 mb-5 border-b border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setMode('csv')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    mode === 'csv'
+                      ? 'border-[#00C48C] text-[#0A1929]'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  CSV / Excel upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('manual')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    mode === 'manual'
+                      ? 'border-[#00C48C] text-[#0A1929]'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Manual entry (no CSV)
+                </button>
+              </div>
+
               <form onSubmit={handleSubmit} className="space-y-5">
                 {/* User select */}
                 <div>
@@ -321,7 +419,8 @@ export default function EmailIntakePage() {
                   />
                 </div>
 
-                {/* File upload */}
+                {/* File upload — CSV mode only */}
+                {mode === 'csv' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
                     CSV / Excel File <span className="text-red-500">*</span>
@@ -372,6 +471,190 @@ export default function EmailIntakePage() {
                       type="file"
                       accept=".csv,.xlsx,.xls"
                       onChange={handleFileChange}
+                      className="hidden"
+                    />
+                  </div>
+                </div>
+                )}
+
+                {/* Manual entity entry — manual mode only */}
+                {mode === 'manual' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Entities <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setManualEntities([...manualEntities, newRow()])}
+                      className="text-xs font-medium text-[#00C48C] hover:text-[#00B07D]"
+                    >
+                      + Add another entity
+                    </button>
+                  </div>
+                  {manualEntities.map((ent, idx) => (
+                    <div key={ent.id} className="border border-gray-200 rounded-lg p-4 bg-gray-50/50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-500">Entity {idx + 1}</span>
+                        {manualEntities.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setManualEntities(manualEntities.filter(e => e.id !== ent.id))}
+                            className="text-xs text-red-500 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Legal name <span className="text-red-500">*</span></label>
+                          <input
+                            type="text"
+                            value={ent.legal_name}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, legal_name: e.target.value } : x))}
+                            placeholder="e.g. Enterprise Bank Holdings, LLC"
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">TIN <span className="text-red-500">*</span></label>
+                          <input
+                            type="text"
+                            value={ent.tid}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, tid: e.target.value } : x))}
+                            placeholder="EIN or SSN"
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">TIN kind</label>
+                          <select
+                            value={ent.tid_kind}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, tid_kind: e.target.value as 'EIN' | 'SSN' } : x))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          >
+                            <option value="EIN">EIN</option>
+                            <option value="SSN">SSN / ITIN</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Form</label>
+                          <select
+                            value={ent.form}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, form: e.target.value } : x))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          >
+                            <option value="1040">1040 (individual)</option>
+                            <option value="1065">1065 (partnership)</option>
+                            <option value="1120">1120 (C-corp)</option>
+                            <option value="1120S">1120S (S-corp)</option>
+                            <option value="941">941 (payroll)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Years</label>
+                          <div className="flex flex-wrap gap-1">
+                            {TAX_YEARS.map(y => (
+                              <button
+                                key={y}
+                                type="button"
+                                onClick={() => setManualEntities(manualEntities.map(x => x.id === ent.id ? {
+                                  ...x,
+                                  years: x.years.includes(y) ? x.years.filter(yy => yy !== y) : [...x.years, y],
+                                } : x))}
+                                className={`px-2 py-1 text-xs font-medium rounded ${
+                                  ent.years.includes(y)
+                                    ? 'bg-[#00C48C] text-white'
+                                    : 'bg-white text-gray-600 border border-gray-300 hover:border-[#00C48C]'
+                                }`}
+                              >
+                                {y}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <input
+                            type="text" value={ent.first_name}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, first_name: e.target.value } : x))}
+                            placeholder="Signer first name"
+                            className="px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          />
+                          <input
+                            type="text" value={ent.last_name}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, last_name: e.target.value } : x))}
+                            placeholder="Signer last name"
+                            className="px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          />
+                          <input
+                            type="email" value={ent.email}
+                            onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, email: e.target.value } : x))}
+                            placeholder="Signer email (auto-fires 8821)"
+                            className="px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                          />
+                        </div>
+                        <details className="sm:col-span-2">
+                          <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700">Address (optional)</summary>
+                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-4 gap-2">
+                            <input type="text" value={ent.address}
+                              onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, address: e.target.value } : x))}
+                              placeholder="Street" className="sm:col-span-2 px-3 py-2 border border-gray-300 rounded text-sm outline-none"/>
+                            <input type="text" value={ent.city}
+                              onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, city: e.target.value } : x))}
+                              placeholder="City" className="px-3 py-2 border border-gray-300 rounded text-sm outline-none"/>
+                            <div className="grid grid-cols-2 gap-2">
+                              <input type="text" value={ent.state}
+                                onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, state: e.target.value } : x))}
+                                placeholder="ST" className="px-3 py-2 border border-gray-300 rounded text-sm outline-none"/>
+                              <input type="text" value={ent.zip_code}
+                                onChange={(e) => setManualEntities(manualEntities.map(x => x.id === ent.id ? { ...x, zip_code: e.target.value } : x))}
+                                placeholder="ZIP" className="px-3 py-2 border border-gray-300 rounded text-sm outline-none"/>
+                            </div>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                )}
+
+                {/* Attachments (any mode, optional) */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Attachments <span className="text-gray-400">(optional — loan note, prior-vendor 8821, etc.)</span>
+                  </label>
+                  <div
+                    onClick={() => attachmentsInputRef.current?.click()}
+                    className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer border-gray-300 hover:border-gray-400 bg-gray-50/50"
+                  >
+                    {attachments.length === 0 ? (
+                      <p className="text-sm text-gray-500">Click to attach one or more files (PDFs, images, anything)</p>
+                    ) : (
+                      <div className="space-y-1 text-left">
+                        {attachments.map((a, i) => (
+                          <div key={i} className="flex items-center justify-between text-sm">
+                            <span className="text-gray-700 truncate">📎 {a.name} <span className="text-xs text-gray-400">({(a.size / 1024).toFixed(1)}KB)</span></span>
+                            <button
+                              type="button"
+                              onClick={(ev) => { ev.stopPropagation(); setAttachments(attachments.filter((_, j) => j !== i)); }}
+                              className="text-xs text-red-500 hover:text-red-700 ml-2"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                        <p className="text-xs text-gray-400 italic mt-2">Click to add more</p>
+                      </div>
+                    )}
+                    <input
+                      ref={attachmentsInputRef}
+                      type="file"
+                      multiple
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files || []);
+                        if (files.length) setAttachments([...attachments, ...files]);
+                      }}
                       className="hidden"
                     />
                   </div>
