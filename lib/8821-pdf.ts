@@ -346,57 +346,64 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     }
   }
 
-  if (filledCount === 0) {
-    throw new Error(
-      `pdf-lib found ${fields.length} fields but none matched the expected names (f1_6, f1_7, ...). ` +
-      `Field name format may have changed. Sample names: ${fields.slice(0, 5).map(f => f.getName()).join(', ')}.`,
-    );
-  }
-
-  // Section 1 (taxpayer info) overlay — our public/templates/8821-*.pdf
-  // files don't carry the f1_6/f1_7/f1_8 AcroForm fields (template was
-  // stripped of Section 1 fields at some point), so the field-map writes
-  // for taxpayer name/TIN/phone silently no-op. Draw the taxpayer values
-  // directly onto the page at the IRS-form coordinates so Section 1
-  // renders without requiring a downstream template fix. Coordinates
-  // measured against the IRS Form 8821 (Rev. January 2021) — letter size,
-  // portrait, origin = bottom-left in pdf-lib's coordinate system.
-  if (!expertTemplateBytes) {
+  // Section 1 (taxpayer info) gap on our public/templates/8821-*.pdf files:
+  // f1_6 (name+address), f1_7 (TIN), f1_8 (phone) exist as real widget
+  // annotations with proper /Rect coords, but pdf-lib's getFields() filters
+  // them out — likely because they're duplicate-annotation refs to the same
+  // field. setText by full path silently fails, and even when /V gets set
+  // pdf-lib's save() drops them on serialization. Until we either rebuild
+  // the templates in Acrobat or fix it upstream in pdf-lib, draw the
+  // Section 1 values directly onto the page at the template's exact field
+  // rectangles (read from the template bytes 2026-05-20):
+  //   f1_6 (name + address) Rect [ 36, 635.97, 344.85, 671.97 ]
+  //   f1_7 (TIN)            Rect [ 345.6, 659.97, 576, 671.97 ]
+  //   f1_8 (phone)          Rect [ 345.6, 635.97, 460.8, 647.97 ]
+  // No drawing happens when an expert-supplied template is in use —
+  // those carry their own Section 1 baked in.
+  if (!expertTemplateBytes && (taxpayer.name || taxpayer.tin || taxpayer.phone)) {
     try {
       const { StandardFonts, rgb } = await import('pdf-lib');
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const page = pdfDoc.getPage(0);
 
-      // Taxpayer name + address (multi-line). Split on \n into stacked rows
-      // so a typical 3-line block (name / street / city,state zip) fits in
-      // the left-column cell without overflowing into the TIN cell.
-      const nameAddressLines = [taxpayer.name, ...taxpayer.address.split('\n')].flatMap(l =>
+      // Build multi-line taxpayer block: name on line 1, then split address
+      // on commas while keeping "City, ST ZIP" intact on its own line.
+      const lines = [taxpayer.name, ...taxpayer.address.split('\n')].flatMap(l =>
         l.split(',').reduce<string[]>((acc, part, idx, arr) => {
-          // Keep "City, ST ZIP" on one line by re-joining after first comma split
           if (idx === arr.length - 1 && acc.length > 0) acc[acc.length - 1] += ',' + part;
           else acc.push(part.trim());
           return acc;
         }, []),
       ).filter(Boolean);
 
-      const drawLeft = (lines: string[], xStart: number, yTop: number, size: number, lineHeight: number) => {
-        for (let i = 0; i < lines.length; i++) {
-          page.drawText(lines[i], { x: xStart, y: yTop - i * lineHeight, size, font, color: rgb(0, 0, 0) });
-        }
-      };
+      // f1_6 cell: top=672, bottom=636 — 36pt of vertical space. Stack up to
+      // 3 lines from the top with ~11pt line height; first baseline at 660.
+      const f6_TOP = 660;
+      const F6_LH = 11;
+      const F6_SIZE = 9;
+      for (let i = 0; i < Math.min(lines.length, 3); i++) {
+        page.drawText(lines[i], { x: 40, y: f6_TOP - i * F6_LH, size: F6_SIZE, font, color: rgb(0, 0, 0) });
+      }
 
-      // Left cell (name + address). Top of cell ≈ y=712 in PDF units; first
-      // line drops down ~10pt to clear the cell border.
-      drawLeft(nameAddressLines, 24, 702, 9, 11);
+      // f1_7 cell (TIN): single-line at top=672, bottom=660. Baseline ~662.
+      if (taxpayer.tin) {
+        page.drawText(taxpayer.tin, { x: 350, y: 662, size: 10, font, color: rgb(0, 0, 0) });
+      }
 
-      // Right column: TIN (top cell) + phone (bottom cell)
-      page.drawText(taxpayer.tin, { x: 333, y: 696, size: 10, font, color: rgb(0, 0, 0) });
+      // f1_8 cell (phone): single-line at top=648, bottom=636. Baseline ~638.
       if (taxpayer.phone) {
-        page.drawText(taxpayer.phone, { x: 333, y: 670, size: 10, font, color: rgb(0, 0, 0) });
+        page.drawText(taxpayer.phone, { x: 350, y: 638, size: 10, font, color: rgb(0, 0, 0) });
       }
     } catch (overlayErr) {
       console.warn('[8821-pdf] Section 1 overlay failed (non-fatal):', overlayErr instanceof Error ? overlayErr.message : overlayErr);
     }
+  }
+
+  if (filledCount === 0) {
+    throw new Error(
+      `pdf-lib found ${fields.length} fields but none matched the expected names (f1_6, f1_7, ...). ` +
+      `Field name format may have changed. Sample names: ${fields.slice(0, 5).map(f => f.getName()).join(', ')}.`,
+    );
   }
 
   // Flatten — values become part of the visual layer; the form is no
