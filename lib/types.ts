@@ -345,6 +345,26 @@ export interface AdminDailySummaryStats {
     free_entities: number;
     amount: number;
   }[];
+  /**
+   * Cost-of-goods-sold for today across all categories. Populated by
+   * lib/daily-cogs.computeDailyCogs(). Optional so the email still renders
+   * if the computation fails.
+   */
+  cogs?: {
+    total: number;
+    line_items: {
+      category: 'infrastructure' | 'email' | 'esign' | 'voice_ai' | 'ai_extraction' | 'payment_rails' | 'expert_payouts';
+      label: string;
+      amount: number;
+      detail: string;
+    }[];
+    warnings: string[];
+  };
+  /** revenue_today - cogs.total, with margin pct. */
+  gross_margin?: {
+    dollars: number;
+    pct: number;
+  };
 }
 
 /**

@@ -23,6 +23,7 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { sendAdminDailySummary } from '@/lib/sendgrid';
 import type { AdminDailySummaryStats } from '@/lib/types';
 import { businessDayStart, pacificDateLabel } from '@/lib/business-day';
+import { computeDailyCogs, grossMargin } from '@/lib/daily-cogs';
 import { requireBearer } from '@/lib/auth-util';
 
 export const maxDuration = 60;
@@ -313,6 +314,21 @@ export async function GET(request: NextRequest) {
     revenueToday = Math.round(revenueToday * 100) / 100;
     revenueBreakdown.sort((a, b) => b.amount - a.amount);
 
+    // Compute daily COGS (infra + email + e-sign + voice + AI + payments + expert payouts)
+    // Best-effort — if any sub-query fails the breakdown still renders with a warning.
+    let cogs: AdminDailySummaryStats['cogs'];
+    let margin: AdminDailySummaryStats['gross_margin'];
+    try {
+      // dayEndUtc = todayStart + 24h, locked to the same business-day window
+      // used everywhere else in this file (Pacific midnight).
+      const dayEndUtc = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      cogs = await computeDailyCogs(supabase, todayISO, dayEndUtc, revenueToday);
+      margin = grossMargin(revenueToday, cogs.total);
+    } catch (err) {
+      console.error('[admin-daily-summary] COGS computation failed:', err);
+      // Leave cogs/margin undefined; email template handles the absence.
+    }
+
     const stats: AdminDailySummaryStats = {
       new_requests_today: newRequestsToday || 0,
       completions_today: completionsToday || 0,
@@ -325,6 +341,8 @@ export async function GET(request: NextRequest) {
       revenue_today: revenueToday,
       free_trial_entities_today: freeTrialEntitiesToday,
       revenue_breakdown: revenueBreakdown,
+      cogs,
+      gross_margin: margin,
     };
 
     // Skip sending if there is zero activity today

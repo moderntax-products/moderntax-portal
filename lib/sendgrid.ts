@@ -1273,6 +1273,35 @@ ${stats.revenue_breakdown.length === 0
   <li style="border-top:1px solid #e5e7eb;padding-top:6px;margin-top:6px;"><strong>Total billable revenue: $${stats.revenue_today.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>${stats.free_trial_entities_today > 0 ? ` <span style="color:#6b7280;">(${stats.free_trial_entities_today} free-trial entit${stats.free_trial_entities_today === 1 ? 'y' : 'ies'} excluded)</span>` : ''}</li>
 </ul>
 
+${stats.cogs ? `
+<p><strong>Cost of Goods Sold (today)</strong> <span style="color:#6b7280;font-size:12px;">(infra + voice + e-sign + AI + payments + expert payouts)</span></p>
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="background:#f9fafb;border-bottom:1px solid #e5e7eb;">
+      <th style="text-align:left;padding:6px 8px;font-weight:600;color:#374151;">Category</th>
+      <th style="text-align:left;padding:6px 8px;font-weight:600;color:#374151;">Detail</th>
+      <th style="text-align:right;padding:6px 8px;font-weight:600;color:#374151;">Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+${stats.cogs.line_items.map(li => `    <tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:6px 8px;color:#111827;">${li.label}</td>
+      <td style="padding:6px 8px;color:#6b7280;font-size:12px;">${li.detail.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))}</td>
+      <td style="padding:6px 8px;text-align:right;color:#111827;font-variant-numeric:tabular-nums;">$${li.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+    </tr>`).join('\n')}
+    <tr style="border-top:2px solid #e5e7eb;background:#fafafa;">
+      <td colspan="2" style="padding:6px 8px;font-weight:600;color:#111827;">Total COGS</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:600;color:#111827;font-variant-numeric:tabular-nums;">$${stats.cogs.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+    </tr>
+${stats.gross_margin ? `    <tr>
+      <td colspan="2" style="padding:6px 8px;font-weight:600;color:${stats.gross_margin.dollars >= 0 ? '#047857' : '#b91c1c'};">Gross margin <span style="color:#6b7280;font-weight:400;">(revenue − COGS)</span></td>
+      <td style="padding:6px 8px;text-align:right;font-weight:600;color:${stats.gross_margin.dollars >= 0 ? '#047857' : '#b91c1c'};font-variant-numeric:tabular-nums;">$${stats.gross_margin.dollars.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style="font-weight:400;font-size:12px;">(${stats.gross_margin.pct}%)</span></td>
+    </tr>` : ''}
+  </tbody>
+</table>
+${stats.cogs.warnings.length > 0 ? `<p style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;margin-top:8px;"><strong>Telemetry gaps:</strong> ${stats.cogs.warnings.map(w => w.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))).join(' · ')}</p>` : ''}
+` : ''}
+
 <p>Visit the admin dashboard for full details and to manage assignments.</p>
   `.trim();
 
