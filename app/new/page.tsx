@@ -31,7 +31,7 @@ export default function NewRequestChooserPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {/* CSV / Excel */}
           <Link
             href="/new/csv"
@@ -109,6 +109,33 @@ export default function NewRequestChooserPage() {
             </ul>
             <div className="flex items-center justify-between pt-3 border-t border-gray-100">
               <span className="text-xs px-2 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold">~30 seconds</span>
+              <span className="text-mt-green font-semibold text-sm group-hover:translate-x-0.5 transition-transform">Open →</span>
+            </div>
+          </Link>
+
+          {/* Convert Vendor 8821 */}
+          <Link
+            href="/new/convert"
+            className="group bg-white rounded-2xl border-2 border-gray-200 hover:border-mt-green hover:shadow-lg transition-all p-7 flex flex-col"
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-3 rounded-xl bg-amber-50 text-amber-700 group-hover:bg-amber-100 transition-colors">
+                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </div>
+              <h2 className="text-lg font-bold text-mt-dark">Convert Vendor 8821</h2>
+            </div>
+            <p className="text-sm text-gray-600 flex-1 mb-4">
+              Borrower already signed an 8821 for Tax Guard / Wolters Kluwer / another vendor? Upload it — we read the taxpayer info and download a fresh ModernTax-designated 8821 ready for re-signature.
+            </p>
+            <ul className="text-xs text-gray-500 space-y-1.5 mb-4">
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Vision-extracts taxpayer name, EIN, address, signer</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Side-by-side preview — edit any field before download</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Output is signature-ready (Matt Parker · CAF 0316-30210R)</span></li>
+            </ul>
+            <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+              <span className="text-xs px-2 py-0.5 rounded bg-amber-50 text-amber-700 font-semibold">For vendor switches</span>
               <span className="text-mt-green font-semibold text-sm group-hover:translate-x-0.5 transition-transform">Open →</span>
             </div>
           </Link>

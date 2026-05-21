@@ -10,7 +10,7 @@
 
 import Link from 'next/link';
 
-type Mode = 'csv' | 'pdf' | 'manual';
+type Mode = 'csv' | 'pdf' | 'manual' | 'convert';
 
 interface Props {
   mode: Mode;
@@ -20,6 +20,7 @@ const TABS: { mode: Mode; href: string; label: string; icon: string; tagline: st
   { mode: 'csv', href: '/new/csv', label: 'CSV / Excel Upload', icon: '📊', tagline: 'Multiple borrowers at once' },
   { mode: 'pdf', href: '/new/pdf', label: 'Signed 8821 PDF', icon: '📄', tagline: 'Signature already collected' },
   { mode: 'manual', href: '/new/manual', label: 'Manual Entry', icon: '✏️', tagline: 'One borrower, fastest path' },
+  { mode: 'convert', href: '/new/convert', label: 'Convert Vendor 8821', icon: '🔄', tagline: 'Re-designate a Tax Guard / other vendor 8821 to ModernTax' },
 ];
 
 export function NewRequestHeader({ mode }: Props) {

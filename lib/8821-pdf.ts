@@ -353,6 +353,52 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     );
   }
 
+  // Section 1 (taxpayer info) overlay — our public/templates/8821-*.pdf
+  // files don't carry the f1_6/f1_7/f1_8 AcroForm fields (template was
+  // stripped of Section 1 fields at some point), so the field-map writes
+  // for taxpayer name/TIN/phone silently no-op. Draw the taxpayer values
+  // directly onto the page at the IRS-form coordinates so Section 1
+  // renders without requiring a downstream template fix. Coordinates
+  // measured against the IRS Form 8821 (Rev. January 2021) — letter size,
+  // portrait, origin = bottom-left in pdf-lib's coordinate system.
+  if (!expertTemplateBytes) {
+    try {
+      const { StandardFonts, rgb } = await import('pdf-lib');
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const page = pdfDoc.getPage(0);
+
+      // Taxpayer name + address (multi-line). Split on \n into stacked rows
+      // so a typical 3-line block (name / street / city,state zip) fits in
+      // the left-column cell without overflowing into the TIN cell.
+      const nameAddressLines = [taxpayer.name, ...taxpayer.address.split('\n')].flatMap(l =>
+        l.split(',').reduce<string[]>((acc, part, idx, arr) => {
+          // Keep "City, ST ZIP" on one line by re-joining after first comma split
+          if (idx === arr.length - 1 && acc.length > 0) acc[acc.length - 1] += ',' + part;
+          else acc.push(part.trim());
+          return acc;
+        }, []),
+      ).filter(Boolean);
+
+      const drawLeft = (lines: string[], xStart: number, yTop: number, size: number, lineHeight: number) => {
+        for (let i = 0; i < lines.length; i++) {
+          page.drawText(lines[i], { x: xStart, y: yTop - i * lineHeight, size, font, color: rgb(0, 0, 0) });
+        }
+      };
+
+      // Left cell (name + address). Top of cell ≈ y=712 in PDF units; first
+      // line drops down ~10pt to clear the cell border.
+      drawLeft(nameAddressLines, 24, 702, 9, 11);
+
+      // Right column: TIN (top cell) + phone (bottom cell)
+      page.drawText(taxpayer.tin, { x: 333, y: 696, size: 10, font, color: rgb(0, 0, 0) });
+      if (taxpayer.phone) {
+        page.drawText(taxpayer.phone, { x: 333, y: 670, size: 10, font, color: rgb(0, 0, 0) });
+      }
+    } catch (overlayErr) {
+      console.warn('[8821-pdf] Section 1 overlay failed (non-fatal):', overlayErr instanceof Error ? overlayErr.message : overlayErr);
+    }
+  }
+
   // Flatten — values become part of the visual layer; the form is no
   // longer interactive. This is what we want for download-and-print and
   // for Dropbox Sign (signature placement happens on top of flat text).
