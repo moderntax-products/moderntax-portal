@@ -24,6 +24,7 @@ import { buildTaxLiabilityReport } from '@/lib/tax-liability-report';
 import { compareIncomeSnapshots, type IncomeSnapshot } from '@/lib/income-reconciliation';
 import { MonitoringEnrollCTA } from '@/components/MonitoringEnrollCTA';
 import { TidReveal } from '@/components/TidReveal';
+import { TaxClassificationPanel } from '@/components/TaxClassificationPanel';
 
 interface PageProps {
   params: Promise<{ entityId: string }>;
@@ -194,6 +195,9 @@ export default async function ComplianceStatusPage({ params }: PageProps) {
           <p className="text-xs font-bold uppercase tracking-wide mb-1 opacity-80">Overall Assessment</p>
           <p className="text-base font-bold">{report.headlineSummary}</p>
         </div>
+
+        {/* Tax Classification Status — surfaces 2553 lag / form-mismatch findings */}
+        <TaxClassificationPanel entityId={entity.id} />
 
         {/* Section 1: Filing Compliance */}
         <section className="bg-white rounded-lg shadow border border-gray-200 p-6 mb-6">
