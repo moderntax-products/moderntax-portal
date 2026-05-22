@@ -451,6 +451,49 @@ export async function POST(request: NextRequest) {
         .eq('id', assignmentId);
     }
 
+    // Time-tracking auto-instrumentation: every batch-upload from this
+    // expert opens-or-extends an `sor_upload` time-log session. The
+    // session auto-closes via the expert-stale-session-cleanup cron
+    // after IDLE_THRESHOLD_MINUTES of no new uploads.
+    try {
+      const existing = await supabase
+        .from('expert_time_logs')
+        .select('id, attributed_entity_ids, start_at')
+        .eq('expert_id', profile.id)
+        .eq('kind', 'sor_upload')
+        .is('end_at', null)
+        .order('start_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: any; error: any };
+      const nowIso = new Date().toISOString();
+      if (existing.data) {
+        const entIds = new Set<string>(existing.data.attributed_entity_ids || []);
+        entIds.add(entityId);
+        await (supabase.from('expert_time_logs') as any)
+          .update({ last_activity_at: nowIso, attributed_entity_ids: [...entIds] })
+          .eq('id', existing.data.id);
+      } else {
+        await (supabase.from('expert_time_logs') as any).insert({
+          expert_id: profile.id,
+          start_at: nowIso,
+          end_at: null,
+          break_minutes: 0,
+          hours_worked: 0,
+          tins_completed: 0,
+          kind: 'sor_upload',
+          attributed_entity_ids: [entityId],
+          source_session_id: null,
+          last_activity_at: nowIso,
+          notes: `Auto-opened by SOR bookmarklet upload of "${metadata.filename}"`,
+        });
+      }
+    } catch (timeErr) {
+      // Non-fatal — if the migration columns don't exist yet (kind/last_activity_at),
+      // this throws but doesn't block the upload. Surfaces in logs so we
+      // know the migration is missing.
+      console.warn('[batch-upload] Time-log auto-extend failed (non-fatal):', timeErr instanceof Error ? timeErr.message : timeErr);
+    }
+
     // Store entity transcript data (filing requirements, NAICS, etc.) if provided
     if (metadata.entityData && metadata.transcriptCategory === 'entity') {
       const existingCompliance = (entity.gross_receipts as any) || {};

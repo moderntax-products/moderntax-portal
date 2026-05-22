@@ -8,6 +8,7 @@ import { IrsCallStatusPanel } from '@/components/IrsCallStatusPanel';
 import { IrsCallHistory } from '@/components/IrsCallHistory';
 import { LogoutButton } from '@/components/LogoutButton';
 import { PendingBatchOffer } from '@/components/PendingBatchOffer';
+import { ExpertTimeTrackerWidget } from '@/components/ExpertTimeTrackerWidget';
 import { useRouter } from 'next/navigation';
 
 interface AssignmentData {
@@ -239,6 +240,12 @@ export default function ExpertDashboard() {
 
         {/* Supply-demand batch offer / active batch card */}
         <PendingBatchOffer />
+
+        {/* Time tracker — auto-instruments SOR uploads + Bland calls;
+            manual buttons for IRS direct-dial + misc sessions. */}
+        <div className="mb-6">
+          <ExpertTimeTrackerWidget />
+        </div>
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">

@@ -147,6 +147,64 @@ export async function POST(request: NextRequest) {
         .eq('id', session.id);
     }
 
+    // Time-tracking auto-instrumentation for bland calls. We open a session
+    // on `connected` (live agent reached) and close it when this webhook
+    // fires marking the call done. Sessions for callback-accepted-but-never-
+    // connected calls don't get time-logged — the expert wasn't actually on
+    // the phone with anyone.
+    try {
+      if (session.expert_id) {
+        if (callbackStatusUpdate === 'connected') {
+          // Open or extend
+          const { data: open } = await adminSupabase
+            .from('expert_time_logs')
+            .select('id')
+            .eq('expert_id', session.expert_id)
+            .eq('kind', 'bland_call')
+            .eq('source_session_id', session.id)
+            .is('end_at', null)
+            .maybeSingle() as { data: any; error: any };
+          const now = new Date().toISOString();
+          if (!open) {
+            await (adminSupabase.from('expert_time_logs') as any).insert({
+              expert_id: session.expert_id,
+              start_at: now, end_at: null,
+              break_minutes: 0, hours_worked: 0, tins_completed: 0,
+              kind: 'bland_call',
+              source_session_id: session.id,
+              attributed_entity_ids: [],
+              last_activity_at: now,
+              notes: `Auto-opened by Bland call ${session.id.slice(0, 8)} reaching live IRS agent`,
+            } as any);
+          } else {
+            await (adminSupabase.from('expert_time_logs') as any)
+              .update({ last_activity_at: now }).eq('id', open.id);
+          }
+        } else if (sessionStatus === 'completed' || sessionStatus === 'failed') {
+          // Close any open bland_call session for this irs_call_sessions row
+          const { data: open } = await adminSupabase
+            .from('expert_time_logs')
+            .select('id, start_at')
+            .eq('expert_id', session.expert_id)
+            .eq('kind', 'bland_call')
+            .eq('source_session_id', session.id)
+            .is('end_at', null)
+            .maybeSingle() as { data: any; error: any };
+          if (open) {
+            const endIso = new Date().toISOString();
+            const hours = Math.round((new Date(endIso).getTime() - new Date(open.start_at).getTime()) / 1000 / 3600 * 100) / 100;
+            await (adminSupabase.from('expert_time_logs') as any).update({
+              end_at: endIso,
+              hours_worked: hours,
+              auto_closed_reason: 'bland_call_completed',
+            }).eq('id', open.id);
+          }
+        }
+      }
+    } catch (timeErr) {
+      console.warn('[bland-call-complete] Time-log auto-update failed (non-fatal):', timeErr instanceof Error ? timeErr.message : timeErr);
+    }
+
     // If agent answered but expert didn't connect, flag for retry
     if (agentAnswered && callbackStatusUpdate !== 'connected' && callbackStatusUpdate !== 'waiting') {
       coachingTags.push('needs_retry');

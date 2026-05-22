@@ -26,6 +26,14 @@
       "schedule": "0 12 * * 2"
     },
     {
+      "path": "/api/cron/expert-time-log-idle-cleanup",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/early-morning-pps-fire",
+      "schedule": "0 11 * * 5"
+    },
+    {
       "path": "/api/cron/manager-weekly-summary",
       "schedule": "0 14 * * 1"
     },
