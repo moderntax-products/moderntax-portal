@@ -200,13 +200,40 @@ export async function attachPriorTranscripts(
  *
  * Returns true if enrollment succeeded.
  */
+// System UUID for cron-driven enrollments where no real user is in scope.
+// `entity_monitoring.enrolled_by` is a NOT-NULL UUID column — passing the
+// literal string 'cron' fails Postgres UUID validation (error 22P02). This
+// UUID is matt@moderntax.io's admin profile (a real row in `profiles`),
+// which serves as the canonical "system" actor for audit purposes.
+const SYSTEM_USER_UUID = '4a62ae4c-c3c4-4399-87e1-63f4f6851153';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface AutoEnrollOptions {
+  /** Override frequency. Default 'quarterly'. */
+  frequency?: 'weekly' | 'monthly' | 'quarterly' | 'custom';
+  /** Override enrollment fee (cents → not used; pass dollars). Default 19.99. */
+  enrollmentFee?: number;
+  /** Override per-pull fee. Default 39.99. */
+  perPullFee?: number;
+  /** Reason tag stored in pull_history[0].type. Default 'repeat_entity_auto_enroll'. */
+  enrollmentType?: string;
+  /** Override the next pull date (ISO date string). Default = today + frequency. */
+  nextPullDate?: string;
+}
+
 export async function autoEnrollMonitoring(
   supabase: SupabaseClient,
   entityId: string,
   requestId: string,
   clientId: string,
-  enrolledBy: string
+  enrolledBy: string,
+  opts: AutoEnrollOptions = {},
 ): Promise<boolean> {
+  // Coerce non-UUID values to the system UUID so the insert doesn't fail
+  // validation. Cron paths pass strings like 'cron' / 'system'; real user
+  // IDs pass through unchanged.
+  const enrolledByUuid = enrolledBy && UUID_RE.test(enrolledBy) ? enrolledBy : SYSTEM_USER_UUID;
+
   // Check if already enrolled
   const { data: existing } = await supabase
     .from('entity_monitoring' as any)
@@ -217,10 +244,23 @@ export async function autoEnrollMonitoring(
 
   if (existing) return false; // Already monitored
 
-  // Compute next pull date (quarterly = 3 months from now)
-  const nextPull = new Date();
-  nextPull.setMonth(nextPull.getMonth() + 3);
-  const nextPullDate = nextPull.toISOString().split('T')[0];
+  const frequency = opts.frequency || 'quarterly';
+  const enrollmentFee = opts.enrollmentFee ?? MONITORING_ENROLLMENT_FEE;
+  const perPullFee = opts.perPullFee ?? MONITORING_PER_PULL_FEE;
+  const enrollmentType = opts.enrollmentType || 'repeat_entity_auto_enroll';
+
+  // Compute next pull date based on frequency unless overridden.
+  let nextPullDate = opts.nextPullDate;
+  if (!nextPullDate) {
+    const nextPull = new Date();
+    switch (frequency) {
+      case 'weekly':    nextPull.setDate(nextPull.getDate() + 7); break;
+      case 'monthly':   nextPull.setMonth(nextPull.getMonth() + 1); break;
+      case 'quarterly':
+      default:          nextPull.setMonth(nextPull.getMonth() + 3); break;
+    }
+    nextPullDate = nextPull.toISOString().split('T')[0];
+  }
 
   const { error } = await supabase
     .from('entity_monitoring' as any)
@@ -228,17 +268,17 @@ export async function autoEnrollMonitoring(
       entity_id: entityId,
       request_id: requestId,
       client_id: clientId,
-      enrolled_by: enrolledBy,
-      frequency: 'quarterly',
+      enrolled_by: enrolledByUuid,
+      frequency,
       next_pull_date: nextPullDate,
       status: 'active',
-      enrollment_fee: MONITORING_ENROLLMENT_FEE,
-      per_pull_fee: MONITORING_PER_PULL_FEE,
-      total_billed: MONITORING_ENROLLMENT_FEE,
+      enrollment_fee: enrollmentFee,
+      per_pull_fee: perPullFee,
+      total_billed: enrollmentFee,
       pull_history: [{
         date: new Date().toISOString(),
         status: 'auto_enrolled',
-        type: 'repeat_entity_auto_enroll',
+        type: enrollmentType,
       }],
     }) as { error: any };
 
