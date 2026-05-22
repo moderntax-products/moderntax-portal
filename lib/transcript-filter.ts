@@ -142,7 +142,21 @@ export function filterRequestedTranscripts(
       continue;
     }
 
-    if (transcriptForm !== reqForm) {
+    // The IRS labels "no record found" / "data not yet posted" stubs with
+    // the generic family form name like "1120 Series" or "1040 Series"
+    // instead of the specific variant (1120S, 1120-S). Without this guard,
+    // the stub for a 1120S taxpayer's 2025 return (deadline still in the
+    // future) gets hidden from the processor view as "different form" —
+    // looks like a missing transcript. Filed 2026-05-22 by Justin Kim
+    // (Centerstone, loan 18037, Jaygopal/Honey Hospitality/Kalamazoo 2025).
+    const isStubFamilyForm = /^1120SERIES$|^1040SERIES$|^1065SERIES$/.test(transcriptForm);
+    const reqFormFamily =
+      reqForm.startsWith('1120') ? '1120SERIES' :
+      reqForm.startsWith('1040') ? '1040SERIES' :
+      reqForm.startsWith('1065') ? '1065SERIES' : null;
+    const matchesViaStubFamily = isStubFamilyForm && transcriptForm === reqFormFamily;
+
+    if (transcriptForm !== reqForm && !matchesViaStubFamily) {
       internalOnly.push(url);
       if (parsed.isBonusErcSweep) internalUniqueKeys.bonusErcSweep.add(triple);
       else internalUniqueKeys.differentForm.add(triple);
