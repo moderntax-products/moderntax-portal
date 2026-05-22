@@ -63,11 +63,27 @@ export async function GET(request: NextRequest) {
     else if (idleMinutes >= idleThreshold) reason = 'idle_timeout';
     if (!reason) continue;
 
-    const effectiveEndMs = now.getTime();
+    // For hard-cap closures, the effective end is start + HARD_CAP_HOURS,
+    // NOT now — otherwise a session that was orphaned 6 hours ago records
+    // the full 6 hours as billable (Matt's iCloud-expert orphan on 2026-05-22
+    // logged 6.02h when it should have capped at 4.00h, blowing daily COGS).
+    //
+    // For idle-timeout closures, the effective end is start + idle threshold
+    // (in minutes — same logic). The reasoning: we don't know what happened
+    // between the threshold and now, but the threshold is the latest moment
+    // we have any evidence of activity, so it's the most defensible bound.
+    let effectiveEndMs: number;
+    if (reason === 'session_max_duration') {
+      effectiveEndMs = startMs + HARD_CAP_HOURS * 3600 * 1000;
+    } else {
+      effectiveEndMs = startMs + idleThreshold * 60 * 1000;
+    }
     const hours = Math.round(((effectiveEndMs - startMs) / 1000 / 3600) * 100) / 100;
+    const auditNote = `[auto-closed by idle-cleanup ${nowIso} reason=${reason} capped_to=${hours}h]`;
     await (sb.from('expert_time_logs') as any).update({
       end_at: new Date(effectiveEndMs).toISOString(),
       hours_worked: hours,
+      notes: s.notes ? `${auditNote} | ${s.notes}` : auditNote,
     }).eq('id', s.id);
     closedCount++;
     closures.push({ id: s.id, kind, hours, reason });
