@@ -160,8 +160,8 @@ export async function POST(request: NextRequest) {
             .from('expert_time_logs')
             .select('id')
             .eq('expert_id', session.expert_id)
-            .eq('kind', 'bland_call')
-            .eq('source_session_id', session.id)
+            .eq('source', 'bland_call')
+            .eq('source_id', session.id)
             .is('end_at', null)
             .maybeSingle() as { data: any; error: any };
           const now = new Date().toISOString();
@@ -170,24 +170,22 @@ export async function POST(request: NextRequest) {
               expert_id: session.expert_id,
               start_at: now, end_at: null,
               break_minutes: 0, hours_worked: 0, tins_completed: 0,
-              kind: 'bland_call',
-              source_session_id: session.id,
-              attributed_entity_ids: [],
-              last_activity_at: now,
+              source: 'bland_call',
+              source_id: session.id,
               notes: `Auto-opened by Bland call ${session.id.slice(0, 8)} reaching live IRS agent`,
             } as any);
-          } else {
-            await (adminSupabase.from('expert_time_logs') as any)
-              .update({ last_activity_at: now }).eq('id', open.id);
           }
+          // No-op on extend; without last_activity_at column there's nothing
+          // useful to write on existing-session ping. The idle-cleanup cron
+          // will still close at hard-cap based on start_at.
         } else if (sessionStatus === 'completed' || sessionStatus === 'failed') {
           // Close any open bland_call session for this irs_call_sessions row
           const { data: open } = await adminSupabase
             .from('expert_time_logs')
             .select('id, start_at')
             .eq('expert_id', session.expert_id)
-            .eq('kind', 'bland_call')
-            .eq('source_session_id', session.id)
+            .eq('source', 'bland_call')
+            .eq('source_id', session.id)
             .is('end_at', null)
             .maybeSingle() as { data: any; error: any };
           if (open) {
@@ -196,7 +194,6 @@ export async function POST(request: NextRequest) {
             await (adminSupabase.from('expert_time_logs') as any).update({
               end_at: endIso,
               hours_worked: hours,
-              auto_closed_reason: 'bland_call_completed',
             }).eq('id', open.id);
           }
         }

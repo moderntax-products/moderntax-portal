@@ -85,13 +85,14 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // Find this expert's currently-open session of the same kind (if any).
-  // We allow one open session PER (expert, kind) — so an expert can have
-  // simultaneous "on Bland call" + "running SOR script" sessions if they
-  // really do both at once, but not two of the same kind.
+  // The migration adds dedicated `kind` + `last_activity_at` columns but
+  // until that's applied we map to the pre-existing `source` column and
+  // shove activity bookkeeping into notes. Either path stays out of the
+  // hot path of business logic.
   const { data: openSessions } = await admin.from('expert_time_logs')
-    .select('id, start_at, last_activity_at, attributed_entity_ids, source_session_id, notes')
+    .select('id, start_at, source, notes')
     .eq('expert_id', expertId)
-    .eq('kind', kind)
+    .eq('source', kind)
     .is('end_at', null)
     .order('start_at', { ascending: false })
     .limit(1) as { data: any[] | null };
@@ -99,16 +100,29 @@ export async function POST(request: NextRequest) {
 
   const now = new Date().toISOString();
 
+  // Build the notes string with embedded structured data we can't put in
+  // dedicated columns yet. Format: "kind=X; entities=[id1,id2]; user-note".
+  const buildNotes = (existingNotes: string | null | undefined, addEntityId?: string, addUserNote?: string): string => {
+    const m = (existingNotes || '').match(/entities=\[([^\]]*)\]/);
+    const existingIds = new Set((m?.[1] || '').split(',').map(s => s.trim()).filter(Boolean));
+    if (addEntityId) existingIds.add(addEntityId);
+    // Pull user-visible portion (everything after the last "; " that isn't an internal tag)
+    const userPart = (existingNotes || '').replace(/(^|;\s*)(kind|entities)=[^;]*/g, '').replace(/^[;\s]+/, '').trim();
+    const finalUserNote = addUserNote || userPart;
+    const parts: string[] = [];
+    if (existingIds.size > 0) parts.push(`entities=[${[...existingIds].join(',')}]`);
+    if (finalUserNote) parts.push(finalUserNote);
+    return parts.join('; ');
+  };
+
   if (action === 'start') {
     if (openSession) {
       // Already open — treat as extend (idempotent)
-      const newEntityList = mergeEntities(openSession.attributed_entity_ids, entity_id);
-      await (admin.from('expert_time_logs') as any).update({
-        last_activity_at: now,
-        attributed_entity_ids: newEntityList,
-      }).eq('id', openSession.id);
+      const newNotes = buildNotes(openSession.notes, entity_id, notes);
+      await (admin.from('expert_time_logs') as any).update({ notes: newNotes }).eq('id', openSession.id);
       return NextResponse.json({ session_id: openSession.id, action: 'extended (was already open)' });
     }
+    const insertedNotes = buildNotes(null, entity_id, notes);
     const { data: created, error: insErr } = await (admin.from('expert_time_logs') as any).insert({
       expert_id: expertId,
       start_at: now,
@@ -116,11 +130,9 @@ export async function POST(request: NextRequest) {
       break_minutes: 0,
       hours_worked: 0,
       tins_completed: 0,
-      kind,
-      attributed_entity_ids: entity_id ? [entity_id] : [],
-      source_session_id: source_session_id || null,
-      last_activity_at: now,
-      notes: notes || null,
+      source: kind,
+      source_id: source_session_id || null,
+      notes: insertedNotes || null,
     } as any).select('id').single() as { data: any; error: any };
     if (insErr) return NextResponse.json({ error: 'Insert failed', detail: insErr.message }, { status: 500 });
     return NextResponse.json({ session_id: created.id, action: 'started' });
@@ -129,6 +141,7 @@ export async function POST(request: NextRequest) {
   if (action === 'extend') {
     if (!openSession) {
       // No open session — treat as start (idempotent: first event ever auto-opens)
+      const insertedNotes = buildNotes(null, entity_id, notes);
       const { data: created, error: insErr } = await (admin.from('expert_time_logs') as any).insert({
         expert_id: expertId,
         start_at: now,
@@ -136,20 +149,15 @@ export async function POST(request: NextRequest) {
         break_minutes: 0,
         hours_worked: 0,
         tins_completed: 0,
-        kind,
-        attributed_entity_ids: entity_id ? [entity_id] : [],
-        source_session_id: source_session_id || null,
-        last_activity_at: now,
-        notes: notes || null,
+        source: kind,
+        source_id: source_session_id || null,
+        notes: insertedNotes || null,
       } as any).select('id').single() as { data: any; error: any };
       if (insErr) return NextResponse.json({ error: 'Insert failed', detail: insErr.message }, { status: 500 });
       return NextResponse.json({ session_id: created.id, action: 'auto-started (first event)' });
     }
-    const newEntityList = mergeEntities(openSession.attributed_entity_ids, entity_id);
-    await (admin.from('expert_time_logs') as any).update({
-      last_activity_at: now,
-      attributed_entity_ids: newEntityList,
-    }).eq('id', openSession.id);
+    const newNotes = buildNotes(openSession.notes, entity_id);
+    await (admin.from('expert_time_logs') as any).update({ notes: newNotes }).eq('id', openSession.id);
     return NextResponse.json({ session_id: openSession.id, action: 'extended' });
   }
 
@@ -163,13 +171,7 @@ export async function POST(request: NextRequest) {
   await (admin.from('expert_time_logs') as any).update({
     end_at: now,
     hours_worked: hours,
-    auto_closed_reason: 'explicit_stop',
   }).eq('id', openSession.id);
   return NextResponse.json({ session_id: openSession.id, action: 'stopped', hours_worked: hours });
 }
 
-function mergeEntities(existing: string[] | null | undefined, add: string | undefined): string[] {
-  const list = new Set<string>(existing || []);
-  if (add) list.add(add);
-  return [...list];
-}

@@ -25,11 +25,27 @@ export async function GET(_request: NextRequest) {
 
   const admin = createAdminClient();
   const { data, error } = await admin.from('expert_time_logs')
-    .select('id, kind, start_at, last_activity_at, attributed_entity_ids, notes')
+    .select('id, source, start_at, notes, source_id')
     .eq('expert_id', user.id)
     .is('end_at', null)
     .order('start_at', { ascending: true }) as { data: any[] | null; error: any };
   if (error) return NextResponse.json({ error: 'Query failed', detail: error.message }, { status: 500 });
 
-  return NextResponse.json({ sessions: data || [] });
+  // Reshape into the kind/last_activity_at/attributed_entity_ids shape the
+  // widget expects. last_activity_at falls back to start_at; entity IDs are
+  // extracted from the notes "entities=[id1,id2]" tag we write on insert.
+  const sessions = (data || []).map((s: any) => {
+    const m = (s.notes || '').match(/entities=\[([^\]]*)\]/);
+    const entityIds = m ? (m[1] || '').split(',').map((x: string) => x.trim()).filter(Boolean) : [];
+    return {
+      id: s.id,
+      kind: s.source || 'manual',
+      start_at: s.start_at,
+      last_activity_at: s.start_at, // best-effort until migration adds the real column
+      attributed_entity_ids: entityIds,
+      notes: (s.notes || '').replace(/(^|;\s*)entities=\[[^\]]*\]/g, '').replace(/^[;\s]+/, '').trim() || null,
+    };
+  });
+
+  return NextResponse.json({ sessions });
 }

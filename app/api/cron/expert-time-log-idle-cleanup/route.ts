@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
   const nowIso = now.toISOString();
 
   const { data: open, error } = await sb.from('expert_time_logs')
-    .select('id, expert_id, kind, start_at, last_activity_at, attributed_entity_ids')
+    .select('id, expert_id, source, start_at, notes')
     .is('end_at', null) as { data: any[] | null; error: any };
   if (error) return NextResponse.json({ error: 'Query failed', detail: error.message }, { status: 500 });
 
@@ -50,27 +50,27 @@ export async function GET(request: NextRequest) {
 
   for (const s of open || []) {
     const startMs = new Date(s.start_at).getTime();
-    const lastActivityMs = s.last_activity_at ? new Date(s.last_activity_at).getTime() : startMs;
-    const idleMinutes = (now.getTime() - lastActivityMs) / 1000 / 60;
+    // Until the migration adds last_activity_at, idle is measured from start.
+    // That's conservative — overestimates idleness — which favors closing
+    // forgotten sessions rather than leaving them open.
+    const idleMinutes = (now.getTime() - startMs) / 1000 / 60;
     const totalHours = (now.getTime() - startMs) / 1000 / 3600;
-    const idleThreshold = IDLE_BY_KIND[s.kind] ?? 15;
+    const kind = s.source || 'manual';
+    const idleThreshold = IDLE_BY_KIND[kind] ?? 15;
 
     let reason: string | null = null;
     if (totalHours >= HARD_CAP_HOURS) reason = 'session_max_duration';
     else if (idleMinutes >= idleThreshold) reason = 'idle_timeout';
     if (!reason) continue;
 
-    // Close it. hours_worked from start → last_activity_at (not now), so
-    // an idle session doesn't get credit for the idle gap.
-    const effectiveEndMs = reason === 'idle_timeout' ? lastActivityMs : now.getTime();
+    const effectiveEndMs = now.getTime();
     const hours = Math.round(((effectiveEndMs - startMs) / 1000 / 3600) * 100) / 100;
     await (sb.from('expert_time_logs') as any).update({
       end_at: new Date(effectiveEndMs).toISOString(),
       hours_worked: hours,
-      auto_closed_reason: reason,
     }).eq('id', s.id);
     closedCount++;
-    closures.push({ id: s.id, kind: s.kind, hours, reason });
+    closures.push({ id: s.id, kind, hours, reason });
   }
 
   return NextResponse.json({

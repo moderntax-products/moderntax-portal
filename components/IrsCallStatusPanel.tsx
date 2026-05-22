@@ -134,8 +134,9 @@ export function IrsCallStatusPanel({ sessionId, onCallEnded }: IrsCallStatusPane
   // Cancel confirmation state — End Call is destructive (drops the IRS line),
   // so it requires an explicit confirmation step.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  // Audio refs retained for the disabled live-audio path (re-enabled on Bland
-  // plan upgrade). Safe to remove if we commit to no-audio permanently.
+  // Audio refs retained for the disabled live-audio path (re-enable later
+  // by restoring the connectAudio impl). Safe to remove if we commit to
+  // no-audio permanently.
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number | null>(null);

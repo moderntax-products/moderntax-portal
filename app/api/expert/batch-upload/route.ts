@@ -458,19 +458,26 @@ export async function POST(request: NextRequest) {
     try {
       const existing = await supabase
         .from('expert_time_logs')
-        .select('id, attributed_entity_ids, start_at')
+        .select('id, notes, start_at')
         .eq('expert_id', profile.id)
-        .eq('kind', 'sor_upload')
+        .eq('source', 'sor_upload')
         .is('end_at', null)
         .order('start_at', { ascending: false })
         .limit(1)
         .maybeSingle() as { data: any; error: any };
       const nowIso = new Date().toISOString();
+      // Append entity_id into a structured tag inside notes:
+      // "entities=[id1,id2,...]; user-text"
+      const updateEntityTag = (existingNotes: string | null) => {
+        const m = (existingNotes || '').match(/entities=\[([^\]]*)\]/);
+        const ids = new Set((m?.[1] || '').split(',').map(s => s.trim()).filter(Boolean));
+        ids.add(entityId);
+        const userPart = (existingNotes || '').replace(/(^|;\s*)entities=\[[^\]]*\]/g, '').replace(/^[;\s]+/, '').trim();
+        return [`entities=[${[...ids].join(',')}]`, userPart].filter(Boolean).join('; ');
+      };
       if (existing.data) {
-        const entIds = new Set<string>(existing.data.attributed_entity_ids || []);
-        entIds.add(entityId);
         await (supabase.from('expert_time_logs') as any)
-          .update({ last_activity_at: nowIso, attributed_entity_ids: [...entIds] })
+          .update({ notes: updateEntityTag(existing.data.notes) })
           .eq('id', existing.data.id);
       } else {
         await (supabase.from('expert_time_logs') as any).insert({
@@ -480,11 +487,9 @@ export async function POST(request: NextRequest) {
           break_minutes: 0,
           hours_worked: 0,
           tins_completed: 0,
-          kind: 'sor_upload',
-          attributed_entity_ids: [entityId],
-          source_session_id: null,
-          last_activity_at: nowIso,
-          notes: `Auto-opened by SOR bookmarklet upload of "${metadata.filename}"`,
+          source: 'sor_upload',
+          source_id: null,
+          notes: `entities=[${entityId}]; Auto-opened by SOR bookmarklet upload of "${metadata.filename}"`,
         });
       }
     } catch (timeErr) {
