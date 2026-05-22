@@ -41,16 +41,27 @@ export function parseTranscriptFilename(path: string): ParsedTranscriptFilename 
     .replace(/\.(html|pdf)$/i, '')
     .trim();
 
-  // Form: 1065 / 1065MEF / 1120 / 1120-S / 1120S / 1040 / 941
-  const formMatch = stem.match(/\b(1120-?S|1120|1065(?:MEF)?(?:\s*Series)?|1040|941)\b/i);
+  // Form: 1065 / 1065MEF / 1120 / 1120-S / 1120S / 1040 / 941, plus the
+  // IRS family-form fallbacks "1120 Series" / "1040 Series" / "1065 Series".
+  // The IRS only renders the family-form label when there's no specific
+  // return on file for that year — so a "1120 Series" filename is a
+  // no-record-found stub and needs to be recognized as its own form code
+  // (not collapsed to "1120") so the filter's stub-family branch in
+  // filterRequestedTranscripts() actually fires. Filed 2026-05-22 by
+  // Justin Kim (Centerstone loan 18037 — Jaygopal / Honey Hospitality
+  // / Jaykumar Patel 2025 transcripts hidden after first fix attempt).
+  const formMatch = stem.match(/\b(1120-?S|1120(?:\s*Series)?|1065(?:MEF)?(?:\s*Series)?|1040(?:\s*Series)?|941)\b/i);
   let form: string | null = null;
   if (formMatch) {
     const raw = formMatch[1].toUpperCase().replace(/\s|-/g, '');
-    if (raw.startsWith('1065')) form = '1065';
+    if (raw === '1065SERIES')      form = '1065SERIES';
+    else if (raw === '1120SERIES') form = '1120SERIES';
+    else if (raw === '1040SERIES') form = '1040SERIES';
+    else if (raw.startsWith('1065')) form = '1065';
     else if (raw.startsWith('1120S')) form = '1120S';
-    else if (raw === '1120') form = '1120';
-    else if (raw === '1040') form = '1040';
-    else if (raw === '941') form = '941';
+    else if (raw === '1120')       form = '1120';
+    else if (raw === '1040')       form = '1040';
+    else if (raw === '941')        form = '941';
   }
 
   // Year: 4 digits, prefer the LAST 4-digit run in the filename (avoids
