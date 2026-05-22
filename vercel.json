@@ -14,6 +14,10 @@
       "schedule": "0 12 * * *"
     },
     {
+      "path": "/api/cron/materialize-expert-time",
+      "schedule": "30 22 * * *"
+    },
+    {
       "path": "/api/cron/admin-daily-summary",
       "schedule": "0 23 * * *"
     },
