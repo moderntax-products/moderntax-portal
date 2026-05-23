@@ -34,6 +34,10 @@
       "schedule": "0 11 * * 5"
     },
     {
+      "path": "/api/cron/send-may-2026-invoices",
+      "schedule": "0 15 * * 6"
+    },
+    {
       "path": "/api/cron/manager-weekly-summary",
       "schedule": "0 14 * * 1"
     },
