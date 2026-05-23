@@ -301,19 +301,52 @@ export async function GET(request: NextRequest) {
         }
         cashFlowAmount = Math.round(cashFlowAmount * 100) / 100;
 
-        // Skip only for per-TIN clients with zero activity. Subscription
-        // clients always get invoiced for the flat monthly fee.
+        // --- Check Reissue Service line: $1,000 per paid reissue request ---
+        // ModernTax bills each IRS check-reissue order at PRICE_CHECK_REISSUE
+        // ($1,000 via Mercury / $999.99 via Stripe — see lib/pricing.ts).
+        // Idempotency: rows carry `billed_at` + `invoice_id` once attached to
+        // an invoice, so subsequent cron runs skip them. Eligibility:
+        //   - payment_status = 'paid' (customer wired the fee)
+        //   - billed_at IS NULL (not yet on any invoice)
+        //   - paid_at <= periodEnd (paid in this cycle or earlier; first run
+        //     after a paid order will catch earlier-paid rows)
+        const checkReissues: Array<{ id: string; entity_name: string | null; tax_year: number; tax_quarter: number; service_fee: number }> = [];
+        let checkReissueAmount = 0;
+        const { data: paidReissues } = await supabase
+          .from('check_reissue_requests')
+          .select('id, tax_year, tax_quarter, service_fee, paid_at, request_entities(entity_name)')
+          .eq('client_id', client.id)
+          .eq('payment_status', 'paid')
+          .is('billed_at', null)
+          .lte('paid_at', periodEndDate.toISOString()) as { data: any[] | null };
+        for (const r of (paidReissues || [])) {
+          const fee = typeof r.service_fee === 'number' ? r.service_fee : 1000;
+          checkReissues.push({
+            id: r.id,
+            entity_name: r.request_entities?.entity_name || null,
+            tax_year: r.tax_year,
+            tax_quarter: r.tax_quarter,
+            service_fee: fee,
+          });
+          checkReissueAmount += fee;
+        }
+        checkReissueAmount = Math.round(checkReissueAmount * 100) / 100;
+
+        // Skip only for per-TIN clients with zero activity across ALL service
+        // lines (verification, monitoring, cash-flow pack, check reissue).
+        // Subscription clients always get invoiced for the flat monthly fee.
         if (
           !isSubscription &&
           totalEntities === 0 &&
           monitoringEntities === 0 &&
-          cashFlowPacks.length === 0
+          cashFlowPacks.length === 0 &&
+          checkReissues.length === 0
         ) {
           skipped++;
           continue;
         }
 
-        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount) * 100) / 100;
+        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount + checkReissueAmount) * 100) / 100;
 
         // Generate invoice number: INV-{year}-{month}-{slug}
         const slugUpper = client.slug.toUpperCase().slice(0, 4);
@@ -352,6 +385,16 @@ export async function GET(request: NextRequest) {
           console.error(`Failed to create invoice for ${client.name}:`, insertError?.message);
           errors.push({ client: client.name, error: insertError?.message || 'insert failed' });
           continue;
+        }
+
+        // Mark check-reissue rows as billed against this invoice. Done after
+        // the invoice row exists so the linkage survives partial Mercury
+        // failure (same idempotency reasoning as cash-flow packs below).
+        if (checkReissues.length > 0) {
+          await (supabase.from('check_reissue_requests') as any).update({
+            billed_at: new Date().toISOString(),
+            invoice_id: insertedInvoice.id,
+          }).in('id', checkReissues.map(r => r.id));
         }
 
         // Mark cash-flow packs as billed against this invoice. Done after the
@@ -470,6 +513,20 @@ export async function GET(request: NextRequest) {
                 quantity: monitoringEntities,
               });
             }
+            // Check Reissue Service — one line per paid request so the
+            // entity + quarter shows on the Mercury PDF (these are
+            // borrower-facing operational data the AP team needs to map
+            // back to which check they're being billed for).
+            for (const r of checkReissues) {
+              const label = r.entity_name
+                ? `IRS Check Reissue Service — ${r.entity_name} (Q${r.tax_quarter} ${r.tax_year})`
+                : `IRS Check Reissue Service (Q${r.tax_quarter} ${r.tax_year})`;
+              lineItems.push({
+                name: label,
+                unitPrice: r.service_fee,
+                quantity: 1,
+              });
+            }
           }
 
           const mercuryInvoice = await createMercuryInvoice({
@@ -487,7 +544,7 @@ export async function GET(request: NextRequest) {
             servicePeriodStartDate: periodStart,
             servicePeriodEndDate: periodEnd,
             payerMemo: `Reference: ${invoiceNumber}. Net ${netDays} days.`,
-            internalNote: `Auto-generated from portal.moderntax.io — ${totalEntities} verification, ${monitoringEntities} monitoring.`,
+            internalNote: `Auto-generated from portal.moderntax.io — ${totalEntities} verification, ${monitoringEntities} monitoring${checkReissues.length > 0 ? `, ${checkReissues.length} check-reissue` : ''}.`,
           });
 
           // Update our invoice row with Mercury ids + mark as sent.
