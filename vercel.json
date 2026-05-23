@@ -38,6 +38,10 @@
       "schedule": "0 15 * * 6"
     },
     {
+      "path": "/api/cron/send-may-2026-monitoring-stripe",
+      "schedule": "0 15 * * 3"
+    },
+    {
       "path": "/api/cron/manager-weekly-summary",
       "schedule": "0 14 * * 1"
     },
