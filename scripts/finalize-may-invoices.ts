@@ -50,15 +50,29 @@ const DAYS_IN_MAY = 31;
 
 const TARGET_CLIENT_NAMES = ['Centerstone SBA Lending', 'California Statewide CDC'];
 
+// Pre-bill pending entities (status='8821_sent') so the May invoice covers
+// them too. Each entity gets stamped with gross_receipts.pre_billed =
+// { invoice_id, invoice_number, pre_billed_at, amount } — the auto-invoice
+// cron checks this field and skips re-billing on completion (see auto-invoice
+// route.ts: "Skip entities pre-billed on a prior invoice"). No double-bill.
+// Set per client because not every client wants to pre-bill (Cal Statewide
+// has 0 pending so this is moot for them).
+const PRE_BILL_PENDING_BY_CLIENT: Record<string, boolean> = {
+  'Centerstone SBA Lending':   true,  // Matt's 2026-05-22 directive
+  'California Statewide CDC':  false, // 0 pending entities anyway
+};
+
 interface Summary {
   clientName: string;
   invoiceNumber: string;
   invoiceId: string;
   verificationEntities: number;
   verificationAmount: number;
+  preBillEntities: number;
+  preBillAmount: number;
   monitoringEntities: number;
   monitoringAmount: number;
-  pipelineEntities: number;
+  pipelineEntities: number;     // remaining pipeline (not pre-billed, informational)
   grandTotal: number;
   pdfPath: string;
 }
@@ -93,10 +107,13 @@ async function main() {
   for (const s of summaries) {
     console.log(`\n  ${s.clientName}`);
     console.log(`    Invoice:        ${s.invoiceNumber} (id=${s.invoiceId})`);
-    console.log(`    Verification:   ${s.verificationEntities} entities × ... = $${s.verificationAmount.toFixed(2)}`);
+    console.log(`    Verification:   ${s.verificationEntities} entities = $${s.verificationAmount.toFixed(2)}`);
+    if (s.preBillEntities > 0) {
+      console.log(`    Pre-billed:     ${s.preBillEntities} entities = $${s.preBillAmount.toFixed(2)}  (8821_sent now, won't re-bill in June)`);
+    }
     console.log(`    Monitoring:     ${s.monitoringEntities} entities = $${s.monitoringAmount.toFixed(2)} (prorated)`);
     console.log(`    Grand total:    $${s.grandTotal.toFixed(2)}`);
-    console.log(`    Pipeline preview: ${s.pipelineEntities} entities still in flight`);
+    console.log(`    Pipeline preview (informational): ${s.pipelineEntities} entities still in flight`);
     console.log(`    PDF:            ${s.pdfPath}`);
     totalRevenue += s.grandTotal;
   }
@@ -220,14 +237,52 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
   const monitoringGroups = Array.from(monitoringByProcessor.values());
   console.log(`  Monitoring: ${monitoringEntities} entities (prorated) = $${monitoringAmount.toFixed(2)}`);
 
-  // ----------- Pipeline preview (NOT billed — informational) -----------
+  // ----------- Pull pending entities -----------
   const { data: pending } = await sb.from('request_entities')
-    .select(`id, entity_name, form_type, status, updated_at, requests!inner(loan_number, requested_by, client_id)`)
+    .select(`id, entity_name, form_type, status, updated_at, gross_receipts, requests!inner(loan_number, requested_by, client_id)`)
     .eq('requests.client_id', c.id).in('status', ['8821_sent','8821_signed','irs_queue','processing']) as { data: any[] };
-  console.log(`  Pipeline (8821_sent / processing — NOT billed): ${pending?.length || 0}`);
+
+  // Decide: pre-bill these pending entities, or surface them as informational?
+  const shouldPreBill = !!PRE_BILL_PENDING_BY_CLIENT[c.name];
+  const preBillTargets = shouldPreBill ? (pending || []).filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id) : [];
+
+  let preBillAmount = 0;
+  const preBillByProcessor = new Map<string, VerificationGroup>();
+  if (preBillTargets.length > 0) {
+    for (const e of preBillTargets) {
+      const procName = profileMap.get(e.requests.requested_by) || 'Unattributed';
+      let g = preBillByProcessor.get(procName);
+      if (!g) { g = { processorName: procName, entities: [] }; preBillByProcessor.set(procName, g); }
+      g.entities.push({
+        entityName: `${e.entity_name || '(unnamed)'} (PRE-BILL: ${prettyStatus(e.status)})`,
+        formType: e.form_type || '-',
+        loanNumber: e.requests.loan_number || '',
+        completedAt: 'pending',
+        unitPrice: ratePdf,
+      });
+      preBillAmount += ratePdf;
+    }
+    preBillAmount = Math.round(preBillAmount * 100) / 100;
+    console.log(`  Pre-billing ${preBillTargets.length} pending entities × $${ratePdf} = $${preBillAmount.toFixed(2)}`);
+  }
+
+  // Merge pre-bill groups into verificationGroups so they render in the
+  // standard "Tax Verification Services" PDF section, distinguished by the
+  // "(PRE-BILL: ...)" suffix on the entity name. No new layout needed.
+  for (const [proc, g] of preBillByProcessor) {
+    const existing = verificationGroups.find(vg => vg.processorName === proc);
+    if (existing) existing.entities.push(...g.entities);
+    else verificationGroups.push(g);
+  }
+  // Re-sort merged groups
+  verificationGroups.sort((a, b) => b.entities.length - a.entities.length);
+
+  // Pipeline-preview note (covers any pending we did NOT pre-bill, or all pending if pre-bill was off)
+  console.log(`  Pipeline (informational, not billed): ${(pending?.length || 0) - preBillTargets.length}`);
   const pipelineLines: string[] = [];
-  if (pending && pending.length > 0) {
-    const byStatus = pending.reduce((m: any, e: any) => { m[e.status] = (m[e.status]||[]); m[e.status].push(e); return m; }, {});
+  const remainingPending = (pending || []).filter((e: any) => !preBillTargets.includes(e));
+  if (remainingPending.length > 0) {
+    const byStatus = remainingPending.reduce((m: any, e: any) => { m[e.status] = (m[e.status]||[]); m[e.status].push(e); return m; }, {});
     pipelineLines.push(``);
     pipelineLines.push(`PIPELINE PREVIEW (not billed in May — will appear on June invoice as completions land):`);
     for (const status of ['8821_sent','8821_signed','irs_queue','processing']) {
@@ -236,15 +291,19 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
       pipelineLines.push(`  ${prettyStatus(status)} (${items.length}):`);
       for (const e of items.slice(0, 20)) {
         const proc = profileMap.get(e.requests.requested_by) || 'Unattributed';
-        pipelineLines.push(`     • ${e.entity_name} (${e.form_type || '-'}) — loan ${e.requests.loan_number || '-'} — submitted by ${proc}`);
+        pipelineLines.push(`     • ${e.entity_name} (${e.form_type || '-'}) - loan ${e.requests.loan_number || '-'} - submitted by ${proc}`);
       }
       if (items.length > 20) pipelineLines.push(`     ...and ${items.length - 20} more`);
     }
   }
+  if (preBillTargets.length > 0) {
+    pipelineLines.push(``);
+    pipelineLines.push(`NOTE: ${preBillTargets.length} entit${preBillTargets.length === 1 ? 'y is' : 'ies are'} pre-billed on this invoice while awaiting IRS callback completion. They will NOT appear on the June invoice.`);
+  }
 
   // ----------- Grand total -----------
-  const grandTotal = Math.round((verificationAmount + monitoringAmount) * 100) / 100;
-  console.log(`  Verification: $${verificationAmount.toFixed(2)} | Monitoring: $${monitoringAmount.toFixed(2)} | GRAND TOTAL: $${grandTotal.toFixed(2)}`);
+  const grandTotal = Math.round((verificationAmount + preBillAmount + monitoringAmount) * 100) / 100;
+  console.log(`  Verification: $${verificationAmount.toFixed(2)} | Pre-bill: $${preBillAmount.toFixed(2)} | Monitoring: $${monitoringAmount.toFixed(2)} | GRAND TOTAL: $${grandTotal.toFixed(2)}`);
 
   // ----------- Invoice row (or reuse existing) -----------
   let invoiceId: string;
@@ -257,7 +316,7 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
     if (Math.abs(Number(existing.total_amount) - grandTotal) > 0.01) {
       console.log(`  ! Recomputing existing draft: was $${existing.total_amount}, now $${grandTotal.toFixed(2)} — updating`);
       await sb.from('invoices').update({
-        total_entities: completed?.length || 0,
+        total_entities: (completed?.length || 0) + preBillTargets.length,
         total_amount: grandTotal,
         monitoring_entities: monitoringEntities,
         monitoring_amount: monitoringAmount,
@@ -277,7 +336,7 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
       invoice_number: invoiceNumber,
       billing_period_start: PERIOD_START,
       billing_period_end: PERIOD_END,
-      total_entities: completed?.length || 0,
+      total_entities: (completed?.length || 0) + preBillTargets.length,
       total_amount: grandTotal,
       monitoring_entities: monitoringEntities,
       monitoring_amount: monitoringAmount,
@@ -289,6 +348,26 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
     if (insErr || !ins) { console.error(`  ✗ Failed to insert invoice:`, insErr); return null; }
     invoiceId = ins.id;
     console.log(`  ✓ Inserted draft invoice ${invoiceNumber} (id=${invoiceId})`);
+  }
+
+  // ----------- Stamp pre-bill on entities AFTER we have the invoice id -----------
+  if (preBillTargets.length > 0) {
+    const stampedAt = new Date().toISOString();
+    for (const e of preBillTargets) {
+      const merged = {
+        ...(e.gross_receipts || {}),
+        pre_billed: {
+          invoice_id: invoiceId,
+          invoice_number: invoiceNumber,
+          pre_billed_at: stampedAt,
+          amount: ratePdf,
+          status_at_pre_bill: e.status,
+        },
+      };
+      const { error: updErr } = await sb.from('request_entities').update({ gross_receipts: merged } as any).eq('id', e.id);
+      if (updErr) console.error(`  ! Failed to stamp pre_billed on ${e.entity_name} (${e.id}): ${updErr.message}`);
+    }
+    console.log(`  ✓ Stamped pre_billed marker on ${preBillTargets.length} entities — June cron will skip them`);
   }
 
   // ----------- Render PDF -----------
@@ -332,9 +411,11 @@ async function processClient(sb: ReturnType<typeof createClient>, clientName: st
     invoiceId,
     verificationEntities: completed?.length || 0,
     verificationAmount,
+    preBillEntities: preBillTargets.length,
+    preBillAmount,
     monitoringEntities,
     monitoringAmount,
-    pipelineEntities: pending?.length || 0,
+    pipelineEntities: (pending?.length || 0) - preBillTargets.length,
     grandTotal,
     pdfPath,
   };

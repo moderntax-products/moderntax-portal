@@ -124,10 +124,13 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // Get all completed entities for this client (need all-time for free trial calc)
+        // Get all completed entities for this client (need all-time for free trial calc).
+        // Also pull gross_receipts so we can skip entities pre-billed on a prior
+        // invoice (8821_sent entities Matt invoiced in advance to close a month
+        // before the borrower signed — see prebill flow in scripts/finalize-may-invoices.ts).
         const { data: completedRequests } = await supabase
           .from('requests')
-          .select('id, intake_method, request_entities(id, status, completed_at)')
+          .select('id, intake_method, request_entities(id, status, completed_at, gross_receipts)')
           .eq('client_id', client.id) as { data: any[] | null; error: any };
 
         const ratePdf = client.billing_rate_pdf || 59.98;
@@ -179,6 +182,8 @@ export async function GET(request: NextRequest) {
         if (isSubscription) {
           // Subscription: flat monthly fee + per-entity overage above included cap.
           // Count ALL period entities (regardless of intake method) toward the cap.
+          // Exclude pre-billed entities — they were already charged on a prior
+          // invoice via the prebill flow.
           let periodEntities = 0;
           (completedRequests || []).forEach((req: any) => {
             const entities = req.request_entities || [];
@@ -186,6 +191,7 @@ export async function GET(request: NextRequest) {
               if (entity.status !== 'completed' || !entity.completed_at) return;
               const completedDate = new Date(entity.completed_at);
               if (completedDate < billableStart || completedDate > periodEndDate) return;
+              if (entity.gross_receipts?.pre_billed?.invoice_id) return;
               periodEntities += 1;
             });
           });
@@ -227,6 +233,12 @@ export async function GET(request: NextRequest) {
               const completedDate = new Date(entity.completed_at);
               if (completedDate < billableStart || completedDate > periodEndDate) return;
               if (freeEntityIds.has(entity.id)) return;
+              // Skip entities pre-billed on a prior invoice (e.g. 8821_sent
+              // entities Matt invoiced ahead-of-completion to close a month
+              // early). gross_receipts.pre_billed = { invoice_id, invoice_number,
+              // pre_billed_at, amount } is set by scripts/finalize-may-invoices.ts
+              // and any future ad-hoc pre-bill path.
+              if (entity.gross_receipts?.pre_billed?.invoice_id) return;
 
               totalEntities += 1;
               totalAmount += baseRate;
