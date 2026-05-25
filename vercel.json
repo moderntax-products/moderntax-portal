@@ -42,6 +42,10 @@
       "schedule": "0 14 * * *"
     },
     {
+      "path": "/api/cron/extract-pps-signals-backfill",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/send-may-2026-monitoring-stripe",
       "schedule": "0 15 * * 3"
     },
