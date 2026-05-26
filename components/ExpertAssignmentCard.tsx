@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { SlaCountdown } from './SlaCountdown';
 import { ExpertTranscriptUpload } from './ExpertTranscriptUpload';
 import { ExpertFlagIssue } from './ExpertFlagIssue';
+import { EntityNotesThread } from './EntityNotesThread';
 import { maskTid } from '@/lib/mask';
 
 interface AssignmentCardProps {
@@ -250,6 +251,11 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
             onComplete={() => { setShowFlag(false); onRefresh(); }}
           />
         )}
+
+        {/* Admin <-> expert ops thread for this entity. Replaces Gmail
+            ping-pong for per-entity instructions + status updates per
+            Joel Abernathy's 2026-05-26 feedback. */}
+        <EntityNotesThread entityId={entity.id} canPost viewerRole="expert" />
       </div>
     </div>
   );

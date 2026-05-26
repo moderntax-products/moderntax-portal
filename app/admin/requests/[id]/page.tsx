@@ -7,6 +7,7 @@ import { RequestStatusUpdate, EntityStatusUpdate } from '@/components/AdminReque
 import { AdminExpertAssign } from '@/components/AdminExpertAssign';
 import { Regenerate8821Button } from '@/components/Regenerate8821Button';
 import { Send8821ForSignatureButton } from '@/components/Send8821ForSignatureButton';
+import { EntityNotesThread } from '@/components/EntityNotesThread';
 import { Admin8821Upload } from '@/components/Admin8821Upload';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
@@ -668,6 +669,11 @@ export default async function AdminRequestManagePage({ params }: Props) {
                       </div>
                     )}
                   </div>
+
+                  {/* Admin <-> expert ops thread for this entity. Replaces
+                      the prior Gmail back-and-forth for instructions +
+                      status updates per Joel Abernathy's 2026-05-26 feedback. */}
+                  <EntityNotesThread entityId={entity.id} canPost viewerRole="admin" />
                 </div>
               ))}
             </div>
