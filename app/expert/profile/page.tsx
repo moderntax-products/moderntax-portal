@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
@@ -15,7 +15,16 @@ interface ExpertProfile {
   city: string;
   state: string;
   zip_code: string;
+  sor_id: string;
   voice_sample_url: string;
+}
+
+interface IrsCredentialsStatus {
+  hasSsn: boolean;
+  hasDob: boolean;
+  consentedAt: string | null;
+  updatedAt: string | null;
+  usedCount: number;
 }
 
 const US_STATES = [
@@ -27,7 +36,8 @@ const US_STATES = [
 
 export default function ExpertProfilePage() {
   const router = useRouter();
-  const supabase = createClient();
+  // Stable supabase client — see app/expert/page.tsx for the bug history.
+  const supabase = useMemo(() => createClient(), []);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -42,8 +52,20 @@ export default function ExpertProfilePage() {
     city: '',
     state: '',
     zip_code: '',
+    sor_id: '',
     voice_sample_url: '',
   });
+
+  // IRS Credentials (SSN/DOB) — separate from main profile form because
+  // those values are write-only via /api/expert/credentials and never
+  // returned in plaintext. Status is fetched on mount.
+  const [credStatus, setCredStatus] = useState<IrsCredentialsStatus | null>(null);
+  const [credsFormOpen, setCredsFormOpen] = useState(false);
+  const [credsSaving, setCredsSaving] = useState(false);
+  const [credsError, setCredsError] = useState<string | null>(null);
+  const [ssnInput, setSsnInput] = useState('');
+  const [dobInput, setDobInput] = useState('');
+  const [consentChecked, setConsentChecked] = useState(false);
 
   useEffect(() => {
     async function loadProfile() {
@@ -62,9 +84,9 @@ export default function ExpertProfilePage() {
       // whole page on environments where the column doesn't exist.
       const { data: profileData, error: profileFetchError } = await supabase
         .from('profiles')
-        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
+        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, sor_id')
         .eq('id', user.id)
-        .single();
+        .single() as { data: any; error: any };
 
       // Distinguish "we got data and the role is wrong" (real auth failure
       // → bounce) from "fetch errored" (network blip → show error and let
@@ -112,8 +134,16 @@ export default function ExpertProfilePage() {
         city: profileData.city || '',
         state: profileData.state || '',
         zip_code: profileData.zip_code || '',
+        sor_id: profileData.sor_id || '',
         voice_sample_url: voiceSampleUrl,
       });
+
+      // Fetch IRS credentials presence (NEVER returns the SSN/DOB plaintext)
+      try {
+        const res = await fetch('/api/expert/credentials', { cache: 'no-store' });
+        if (res.ok) setCredStatus(await res.json());
+      } catch { /* non-fatal — section just shows "load failed" */ }
+
       setLoading(false);
     }
 
@@ -124,6 +154,56 @@ export default function ExpertProfilePage() {
     setProfile((prev) => ({ ...prev, [field]: value }));
     setError('');
     setSuccess(false);
+  };
+
+  const saveCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCredsError(null);
+    if (!consentChecked) {
+      setCredsError('You must check the consent box to authorize use during IRS PPS calls.');
+      return;
+    }
+    if (!/^\d{3}-?\d{2}-?\d{4}$/.test(ssnInput.trim())) {
+      setCredsError('SSN must be 9 digits (with or without dashes).');
+      return;
+    }
+    if (!dobInput) {
+      setCredsError('Date of birth is required.');
+      return;
+    }
+    setCredsSaving(true);
+    try {
+      const res = await fetch('/api/expert/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssn: ssnInput.trim(), dob: dobInput, consent: true }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setCredsError(j.error || `Save failed (status ${res.status})`);
+      } else {
+        // Re-fetch status to reflect the new presence flags
+        const updated = await fetch('/api/expert/credentials', { cache: 'no-store' });
+        if (updated.ok) setCredStatus(await updated.json());
+        setSsnInput(''); setDobInput(''); setConsentChecked(false);
+        setCredsFormOpen(false);
+      }
+    } catch (err: any) {
+      setCredsError(err?.message || 'Save failed');
+    } finally {
+      setCredsSaving(false);
+    }
+  };
+
+  const deleteCredentials = async () => {
+    if (!confirm('Remove your stored SSN/DOB? You will not be eligible for new IRS PPS assignments until you re-enter them.')) return;
+    setCredsSaving(true);
+    setCredsError(null);
+    try {
+      await fetch('/api/expert/credentials', { method: 'DELETE' });
+      const updated = await fetch('/api/expert/credentials', { cache: 'no-store' });
+      if (updated.ok) setCredStatus(await updated.json());
+    } finally { setCredsSaving(false); }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -170,7 +250,7 @@ export default function ExpertProfilePage() {
         return;
       }
 
-      const { error: updateError } = await supabase
+      const { error: updateError } = await (supabase
         .from('profiles')
         .update({
           full_name: profile.full_name.trim(),
@@ -182,8 +262,9 @@ export default function ExpertProfilePage() {
           city: profile.city.trim(),
           state: profile.state.trim(),
           zip_code: profile.zip_code.trim(),
-        })
-        .eq('id', user.id);
+          sor_id: profile.sor_id.trim() || null,
+        } as any)
+        .eq('id', user.id) as any);
 
       if (updateError) {
         setError(updateError.message);
@@ -385,18 +466,121 @@ export default function ExpertProfilePage() {
                   type="tel"
                   value={profile.fax_number}
                   onChange={(e) => handleChange('fax_number', e.target.value)}
-                  placeholder="Optional"
+                  placeholder="Optional — leave blank if you do not have one"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
                 />
+                <p className="text-xs text-gray-400 mt-1">Optional. Not required to complete your profile.</p>
               </div>
+            </div>
+
+            {/* SOR ID — added 2026-05-23 per Joel Abernathy's request (was the
+                missing 4th field he couldn't enter through the form). */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">SOR Mailbox ID</label>
+              <input
+                type="text"
+                value={profile.sor_id}
+                onChange={(e) => handleChange('sor_id', e.target.value)}
+                placeholder="e.g. JOEL1971, MCA-R-31"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm font-mono"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Your IRS e-Services Secure Object Repository inbox short ID — where the IRS deposits transcripts after PPS calls.
+              </p>
             </div>
           </div>
 
-          {/* Voice Sample for IRS PPS Calls */}
-          <VoiceRecorder
-            existingUrl={profile.voice_sample_url || null}
-            onUploaded={(url) => setProfile((prev) => ({ ...prev, voice_sample_url: url }))}
-          />
+          {/* IRS Identity Verification (SSN + DOB) — separate section above
+              the optional voice sample so it's never blocked by mic issues
+              (see Joel Abernathy 2026-05-23 bug report). Posts to
+              /api/expert/credentials which encrypts and never returns the
+              plaintext back to the UI. */}
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">IRS Identity Verification (Required)</h3>
+            <p className="text-xs text-gray-500 mb-4">
+              The IRS rep verifies the practitioner&apos;s identity on every PPS call by asking for last 4 of SSN + date of birth.
+              We store these encrypted (AES-256-GCM) and decrypt only at call time. They&apos;re never displayed back to you or anyone else.
+            </p>
+
+            {credStatus?.hasSsn && credStatus?.hasDob ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center justify-between">
+                <div className="text-sm">
+                  <p className="font-semibold text-emerald-900">✓ SSN + DOB on file</p>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    Consent given {credStatus.consentedAt ? new Date(credStatus.consentedAt).toLocaleDateString() : '—'} ·
+                    used {credStatus.usedCount}× on IRS calls
+                  </p>
+                </div>
+                <button type="button" onClick={deleteCredentials} disabled={credsSaving}
+                  className="text-xs text-red-600 hover:text-red-800 underline disabled:opacity-50">
+                  Remove
+                </button>
+              </div>
+            ) : credsFormOpen ? (
+              <div className="bg-gray-50 border border-gray-300 rounded-lg p-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Social Security Number</label>
+                    <input type="text" inputMode="numeric" autoComplete="off"
+                      value={ssnInput} onChange={e => setSsnInput(e.target.value)}
+                      placeholder="123-45-6789"
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Date of Birth</label>
+                    <input type="date" autoComplete="off"
+                      value={dobInput} onChange={e => setDobInput(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm" />
+                  </div>
+                </div>
+                <label className="flex items-start gap-2 text-xs text-gray-700">
+                  <input type="checkbox" checked={consentChecked}
+                    onChange={e => setConsentChecked(e.target.checked)}
+                    className="mt-0.5 rounded border-gray-400" />
+                  <span>
+                    I authorize ModernTax to decrypt and use my SSN + DOB during automated IRS Practitioner Priority Service calls placed
+                    on my behalf, solely for identity verification with the IRS rep. Encrypted at rest; never displayed; revocable at any time.
+                  </span>
+                </label>
+                {credsError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2 rounded">{credsError}</div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={saveCredentials} disabled={credsSaving}
+                    className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-semibold rounded hover:bg-emerald-700 disabled:opacity-50">
+                    {credsSaving ? 'Saving…' : 'Save IRS Credentials'}
+                  </button>
+                  <button type="button" onClick={() => { setCredsFormOpen(false); setSsnInput(''); setDobInput(''); setConsentChecked(false); setCredsError(null); }}
+                    disabled={credsSaving}
+                    className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setCredsFormOpen(true)}
+                className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded hover:bg-indigo-700">
+                Add SSN + DOB
+              </button>
+            )}
+          </div>
+
+          {/* Voice Sample for IRS PPS Calls — EXPLICITLY OPTIONAL.
+              Joel Abernathy reported 2026-05-23 he thought this was a hard
+              prerequisite for the SSN/DOB section. It is not. Voice clone
+              improves call realism but the AI agent works with the default
+              voice if no sample is recorded. */}
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Voice Sample for IRS PPS Calls <span className="text-xs font-normal text-gray-500">(Optional — skip if your mic isn&apos;t available)</span></h3>
+            <p className="text-xs text-gray-500 mb-3">
+              When recorded, the AI agent uses a clone of your voice on PPS calls so the IRS rep hears you, not a stock TTS voice.
+              Skip this if your microphone is blocked or you&apos;d rather record later — you can still save the rest of your profile and take assignments.
+            </p>
+            <VoiceRecorder
+              existingUrl={profile.voice_sample_url || null}
+              onUploaded={(url) => setProfile((prev) => ({ ...prev, voice_sample_url: url }))}
+            />
+          </div>
 
           {/* Status */}
           {error && (
