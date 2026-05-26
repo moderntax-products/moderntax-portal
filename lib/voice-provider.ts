@@ -89,6 +89,15 @@ export interface UnifiedCallParams {
   // chain. The phone-pool picker excludes these so we rotate to a fresh
   // pool slot for each retry attempt.
   excludeFromNumbers?: string[];
+
+  /**
+   * Admin override to force routing through a specific timezone's pool
+   * entry (e.g., 'ET' / 'PT' / 'America/New_York'). Used by the
+   * admin "Fire PPS call" UI when the default picker's route is dead
+   * and we want to land in a different IRS regional queue. Falls back
+   * to default pool-wide selection if the forced TZ has no entries.
+   */
+  forceFromTz?: string | null;
 }
 
 export interface UnifiedCallResponse {
@@ -116,7 +125,7 @@ export async function initiateCall(params: UnifiedCallParams): Promise<UnifiedCa
     // hours. This stretches our callable window from a single timezone's
     // 12 hours (7am-7pm local) to 15 hours (4am PT → 7pm PT) by rotating
     // across ET/CT/MT/PT pool entries based on the current moment.
-    const picked = pickFromNumber(undefined, undefined, params.excludeFromNumbers || []);
+    const picked = pickFromNumber(undefined, undefined, params.excludeFromNumbers || [], params.forceFromTz || null);
     if (!picked) {
       throw new Error(
         'No from-number currently eligible for IRS PPS hours. ' +

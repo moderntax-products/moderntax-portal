@@ -131,16 +131,38 @@ export function pickFromNumber(
   pool: PhonePoolEntry[] = loadPhonePool(),
   at: Date = new Date(),
   excludeNumbers: string[] = [],
+  forceTz: string | null = null,
 ): PhonePoolEntry | null {
   if (pool.length === 0) return null;
+
+  // forceTz override (added 2026-05-26 for admin "Fire from ET" UI):
+  // when the admin wants to force routing through a specific timezone's
+  // pool entry (e.g., switch from PT to ET to land in a different IRS
+  // regional queue when the default PT route is overflow-rejecting),
+  // restrict the pool to entries matching that TZ. Supports either the
+  // full IANA name ("America/New_York") or the short code ("ET", "CT",
+  // "MT", "PT").
+  let workingPool = pool;
+  if (forceTz) {
+    const tzMap: Record<string, string> = {
+      ET: 'America/New_York',  CT: 'America/Chicago',
+      MT: 'America/Denver',    PT: 'America/Los_Angeles',
+    };
+    const fullTz = tzMap[forceTz.toUpperCase()] || forceTz;
+    workingPool = pool.filter(p => p.tz === fullTz);
+    if (workingPool.length === 0) {
+      console.warn(`[phone-pool] forceTz=${forceTz} matched no pool entries; falling back to full pool`);
+      workingPool = pool;
+    }
+  }
 
   // MOD-211: in a retry chain, callers pass the from-numbers already
   // tried for this entity so we rotate to a fresh one. If every number
   // has been tried, fall back to the entire pool (better to retry from
   // any open number than fail).
   const excluded = new Set(excludeNumbers);
-  const filtered = pool.filter(p => !excluded.has(p.phone));
-  const candidates = filtered.length > 0 ? filtered : pool;
+  const filtered = workingPool.filter(p => !excluded.has(p.phone));
+  const candidates = filtered.length > 0 ? filtered : workingPool;
 
   const eligible = candidates
     .map((entry, idx) => {

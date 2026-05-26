@@ -29,9 +29,19 @@ export interface FireResult {
   from_number?: string;
 }
 
+export interface FireOpts {
+  /**
+   * Admin override — force the call to route from a specific TZ pool
+   * entry. 'ET' / 'CT' / 'MT' / 'PT' or full IANA name. Used by the
+   * admin "Fire PPS call" UI when the default picker's pick is dead.
+   */
+  forceFromTz?: string | null;
+}
+
 export async function fireScheduledCall(
   supabase: SupabaseClient,
   sessionId: string,
+  opts: FireOpts = {},
 ): Promise<FireResult> {
   const now = new Date();
 
@@ -101,6 +111,7 @@ export async function fireScheduledCall(
         expertId: locked.expert_id,
         assignmentIds: callEntities.map((ce: any) => ce.assignment_id),
       },
+      forceFromTz: opts.forceFromTz || null,
     });
   } catch (err) {
     await rollbackToFailed(supabase, sessionId, err instanceof Error ? err.message : 'Provider call failed');
