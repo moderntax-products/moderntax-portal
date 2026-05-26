@@ -25,13 +25,13 @@ interface ExpertOption {
   id: string;
   full_name: string | null;
   email: string;
-  caf_number: string | null;
-  ptin: string | null;
-  phone_number: string | null;
-  city: string | null;
-  state: string | null;
-  // Quick gap-check so the picker can disable experts missing required fields
-  has_full_designee: boolean;
+  // The /api/admin/expert/list endpoint deliberately strips raw
+  // CAF/PTIN/address/phone from the response for privacy (smaller
+  // client payload, no PII leaking to admin UI). It returns these two
+  // pre-computed flags instead — single source of truth via the same
+  // validateExpertDesigneeCreds() the server uses on the actual send.
+  designee_creds_complete: boolean;
+  missing_designee_fields: string[];
 }
 
 interface Props {
@@ -66,16 +66,12 @@ export function Send8821ForSignatureButton(props: Props) {
           id: e.id,
           full_name: e.full_name,
           email: e.email,
-          caf_number: e.caf_number,
-          ptin: e.ptin,
-          phone_number: e.phone_number,
-          city: e.city,
-          state: e.state,
-          has_full_designee: !!(e.caf_number && e.ptin && e.phone_number && e.address && e.city && e.state && e.zip_code && e.full_name),
+          designee_creds_complete: !!e.designee_creds_complete,
+          missing_designee_fields: e.missing_designee_fields || [],
         }));
         setExperts(list);
         // Auto-select the first complete expert
-        const firstComplete = list.find((e) => e.has_full_designee);
+        const firstComplete = list.find((e) => e.designee_creds_complete);
         if (firstComplete) setSelectedExpertId(firstComplete.id);
       })
       .catch((err) => setError({ msg: `Couldn't load experts: ${err.message}` }))
@@ -169,16 +165,16 @@ export function Send8821ForSignatureButton(props: Props) {
             >
               <option value="">— Select expert —</option>
               {experts.map((e) => (
-                <option key={e.id} value={e.id} disabled={!e.has_full_designee}>
+                <option key={e.id} value={e.id} disabled={!e.designee_creds_complete}>
                   {e.full_name || e.email}
-                  {!e.has_full_designee ? ' (profile incomplete — cannot designate)' : e.caf_number ? ` — CAF ${e.caf_number}` : ''}
+                  {!e.designee_creds_complete ? ` (missing: ${e.missing_designee_fields.join(', ')})` : ' — ready'}
                 </option>
               ))}
             </select>
           )}
-          {chosen && chosen.has_full_designee && (
-            <div className="text-[11px] text-gray-500 mt-1 font-mono">
-              CAF: {chosen.caf_number} · PTIN: {chosen.ptin} · {chosen.city}, {chosen.state} · {chosen.phone_number}
+          {chosen && !chosen.designee_creds_complete && (
+            <div className="text-[11px] text-amber-700 mt-1">
+              Cannot designate — missing: {chosen.missing_designee_fields.join(', ')}. Have the expert complete their profile at /expert/profile.
             </div>
           )}
         </div>
