@@ -64,6 +64,11 @@ export function EntityNotesThread({ entityId, canPost = true, viewerRole = 'admi
   const [kind, setKind] = useState<Note['kind']>(viewerRole === 'admin' ? 'instruction' : 'status_update');
   const [submitting, setSubmitting] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // Per-client instruction template — only fetched for admin viewers (experts
+  // don't apply templates, they reply in their own framing). The button only
+  // shows when the client has a template AND the body is empty (so we don't
+  // clobber in-progress drafts).
+  const [template, setTemplate] = useState<{ body: string; clientName: string; key: string } | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -78,6 +83,20 @@ export function EntityNotesThread({ entityId, canPost = true, viewerRole = 'admi
   }, [entityId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Admin-only: fetch per-client template on mount so the "Apply default"
+  // button can show without a runtime click delay.
+  useEffect(() => {
+    if (viewerRole !== 'admin' || !canPost) return;
+    fetch(`/api/entity-notes/${entityId}/template`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d?.template && d?.client_name) {
+          setTemplate({ body: d.template, clientName: d.client_name, key: d.resolved_key || 'default' });
+        }
+      })
+      .catch(() => {/* silent — template is a nice-to-have */});
+  }, [entityId, viewerRole, canPost]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,7 +187,7 @@ export function EntityNotesThread({ entityId, canPost = true, viewerRole = 'admi
 
           {canPost && (
             <form onSubmit={submit} className="space-y-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <select
                   value={kind}
                   onChange={(e) => setKind(e.target.value as Note['kind'])}
@@ -179,6 +198,17 @@ export function EntityNotesThread({ entityId, canPost = true, viewerRole = 'admi
                     <option key={k.value} value={k.value}>{k.label}</option>
                   ))}
                 </select>
+                {template && body.trim().length === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setBody(template.body); setKind('instruction'); }}
+                    disabled={submitting}
+                    className="text-xs px-2 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded font-medium disabled:opacity-50"
+                    title={`Pre-fills with ${template.clientName}'s standard ${template.key} instruction template`}
+                  >
+                    📋 Apply {template.clientName} default
+                  </button>
+                )}
               </div>
               <textarea
                 value={body}
