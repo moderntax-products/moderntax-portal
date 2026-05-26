@@ -64,9 +64,18 @@ export async function sendSignatureRequest(entity: {
   state?: string;
   zip_code?: string;
   designee_key?: string;
+  /**
+   * If provided, this expert's profile is used as the Section 2 (Designee)
+   * source instead of the static DESIGNEES map. Added 2026-05-25 for the
+   * admin "Send 8821 for signature" flow — when admin picks a specific
+   * expert at send-time, their CAF/PTIN/phone/address get stamped on the
+   * 8821 the borrower signs. Means no regeneration is needed later (the
+   * signed PDF already names the correct designee).
+   */
+  expertDesignee?: import('./8821-pdf').DesigneeInfo;
 }, signerEmail: string): Promise<{ signatureRequestId: string }> {
   const api = getApi();
-  const designee = getDesignee(entity);
+  const designee = entity.expertDesignee || getDesignee(entity);
   const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
   const signerName = [entity.signer_first_name, entity.signer_last_name]
     .filter(Boolean)

@@ -58,7 +58,8 @@ export type AuditAction =
   | 'partner_monitoring_enrolled'
   | 'transcript_result_retrieved'
   | 'check_reissue_requested'
-  | 'check_reissue_status_changed';
+  | 'check_reissue_status_changed'
+  | '8821_sent_for_signature_by_admin';
 
 export interface AuditEvent {
   action: AuditAction;

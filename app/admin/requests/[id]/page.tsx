@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { RequestStatusUpdate, EntityStatusUpdate } from '@/components/AdminRequestActions';
 import { AdminExpertAssign } from '@/components/AdminExpertAssign';
 import { Regenerate8821Button } from '@/components/Regenerate8821Button';
+import { Send8821ForSignatureButton } from '@/components/Send8821ForSignatureButton';
 import { Admin8821Upload } from '@/components/Admin8821Upload';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
@@ -653,9 +654,18 @@ export default async function AdminRequestManagePage({ params }: Props) {
                         })()}
                       </>
                     ) : (
-                      <p className="text-xs text-amber-600">
-                        Upload a signed 8821 above before assigning to an expert
-                      </p>
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-600">
+                          No signed 8821 on file. Upload above, OR generate + send a new one for signature:
+                        </p>
+                        <Send8821ForSignatureButton
+                          entityId={entity.id}
+                          entityName={entity.entity_name}
+                          defaultSignerEmail={entity.signer_email}
+                          defaultSignerFirstName={entity.signer_first_name}
+                          defaultSignerLastName={entity.signer_last_name}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
