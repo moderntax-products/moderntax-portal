@@ -98,9 +98,28 @@ export function Send8821ForSignatureButton(props: Props) {
           signerLastName: signerLastName.trim() || undefined,
         }),
       });
-      const data = await res.json();
+      // Read as text first so we can produce a useful error when the
+      // server returns HTML (Next.js error page) instead of JSON. Naive
+      // res.json() throws "Unexpected token '<'" in that case which
+      // tells the user nothing.
+      const text = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(text); } catch {
+        // Server returned HTML (likely Next.js error page) — surface
+        // status + a snippet of the body so we can diagnose.
+        const snippet = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+        setError({
+          msg: `Server returned non-JSON (HTTP ${res.status}). Check Vercel logs for the throw.`,
+          hint: snippet || '(empty response body)',
+        });
+        return;
+      }
       if (!res.ok) {
-        setError({ msg: data.error || `Failed (status ${res.status})`, hint: data.admin_hint, missing: data.missing_fields });
+        setError({
+          msg: data?.error || `Failed (HTTP ${res.status})`,
+          hint: data?.detail || data?.admin_hint,
+          missing: data?.missing_fields,
+        });
         return;
       }
       setDone({

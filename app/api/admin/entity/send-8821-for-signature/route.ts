@@ -42,6 +42,27 @@ export const runtime = 'nodejs';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: NextRequest) {
+  // Top-level try/catch — guarantees we ALWAYS return JSON, even on
+  // unhandled exceptions. Without this, Next.js renders an HTML error
+  // page when something throws, which the client then tries to JSON.parse
+  // (producing the famously cryptic "Unexpected token '<'" error).
+  try {
+    return await handle(request);
+  } catch (err: any) {
+    console.error('[send-8821] Unhandled exception:', err);
+    return NextResponse.json(
+      {
+        error: 'Server error while generating + sending 8821',
+        detail: err?.message || String(err),
+        // stack only in non-prod to avoid leaking internals
+        ...(process.env.NODE_ENV !== 'production' ? { stack: err?.stack } : {}),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handle(request: NextRequest) {
   const cookieStore = await cookies();
   const supabase = createServerRouteClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();
