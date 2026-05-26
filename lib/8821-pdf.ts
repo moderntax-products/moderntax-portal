@@ -206,11 +206,23 @@ function getSection3Individual(years: string): Section3Row[] {
 }
 
 function getSection3Business(years: string): Section3Row[] {
+  // CRITICAL: column C (years) is a SINGLE-LINE field, 128pt wide ×
+  // 12pt tall. Anything past ~21 chars truncates and the IRS rejects
+  // the form because the year range is unclear (Joel Abernathy
+  // 2026-05-26 — j&j mechanical 8821 showed "2022-20" because we'd
+  // stuffed "1st, 2nd, 3rd, 4th quarters\n2022, 2023, 2024" into a
+  // single-line cell that can only render the first line).
+  //
+  // Fix: drop the quarters-prefix line entirely. IRS already knows
+  // 941 is quarterly from column B ("Form Number: 941/943/944/..."),
+  // so saying "1st, 2nd, 3rd, 4th quarters" in column C is redundant
+  // padding that breaks the years rendering. Now just the years list,
+  // which fits the cell at standard font size.
   return [
     {
       type: 'Withholding/Civil Penalty/\nExcise Tax',
       form: '941/943/944/945/6672/\n720/8804/CIV PEN',
-      years: `1st, 2nd, 3rd, 4th quarters\n${years}`,
+      years,
       specific: 'N/A',
     },
     { type: 'Unemployment/Heavy Use/\nCivil Penalty', form: '940/2290/CIV PEN', years, specific: 'N/A' },

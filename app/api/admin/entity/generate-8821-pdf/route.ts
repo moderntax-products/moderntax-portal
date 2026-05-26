@@ -97,6 +97,16 @@ async function handle(request: NextRequest) {
     .filter(Boolean).join(', ') || '';
   const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
 
+  // Years format: prefer compact contiguous range ("2022-2024") for
+  // contiguous year lists since it ALWAYS fits the 128pt single-line
+  // cell in Section 3 column C. Fall back to comma-separated list for
+  // non-contiguous years. NEVER use the prior multi-line format —
+  // pdf-lib truncates anything past the first line in single-line
+  // fields and IRS rejects forms with cut-off year ranges (Joel
+  // 2026-05-26 — j&j mechanical 8821 showed "2022-20").
+  const entityYears: number[] = (entity.years || []).map((y: any) => parseInt(String(y), 10)).filter(Number.isFinite);
+  const yearsString = formatYearsForSection3(entityYears);
+
   let pdfBuffer: Buffer;
   try {
     pdfBuffer = await generate8821PDF({
@@ -107,8 +117,8 @@ async function handle(request: NextRequest) {
       },
       designee,
       formType,
-      years: (entity.years || []).join(', '),
-    } as any);
+      years: yearsString,
+    });
   } catch (err: any) {
     return NextResponse.json({
       error: 'PDF generation failed',
@@ -146,4 +156,32 @@ async function handle(request: NextRequest) {
       'Cache-Control': 'no-store',
     },
   });
+}
+
+/**
+ * Format a year list for the IRS Form 8821 Section 3 column C cell.
+ * The cell is 128pt wide × 12pt tall — a single-line text field that
+ * truncates anything past ~21 chars at standard font size.
+ *
+ * Strategy:
+ *   - Empty / unknown → default "2022-2026" (longest safe historical range)
+ *   - Single year → "2024"
+ *   - Contiguous range (≥2 years, no gaps) → "2022-2024" (always fits)
+ *   - Non-contiguous → "2020, 2022, 2024" comma list (fits up to ~4 years)
+ *   - Non-contiguous with >4 years → fall back to min-max range ("2020-2025")
+ *     even though it implies years we didn't ask for, because it's better
+ *     than truncating and getting the form rejected
+ */
+function formatYearsForSection3(years: number[]): string {
+  if (!years || years.length === 0) return '2022-2026';
+  const sorted = [...new Set(years)].sort((a, b) => a - b);
+  if (sorted.length === 1) return String(sorted[0]);
+  const isContiguous = sorted.every((y, i) => i === 0 || y === sorted[i - 1] + 1);
+  if (isContiguous) return `${sorted[0]}-${sorted[sorted.length - 1]}`;
+  // Non-contiguous: try comma list if it fits the cell
+  const listForm = sorted.join(', ');
+  if (listForm.length <= 21) return listForm;
+  // Too long — fall back to min-max range (over-claims a few years but
+  // beats a truncated cell that the IRS rejects)
+  return `${sorted[0]}-${sorted[sorted.length - 1]}`;
 }
