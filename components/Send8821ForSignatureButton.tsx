@@ -157,7 +157,7 @@ export function Send8821ForSignatureButton(props: Props) {
         onClick={() => setOpen(true)}
         className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded hover:bg-indigo-700"
       >
-        ✉ Send 8821 for signature
+        Generate 8821 (download or send for signature)
       </button>
     );
   }
@@ -199,7 +199,9 @@ export function Send8821ForSignatureButton(props: Props) {
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1">Borrower signer email</label>
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Borrower signer email <span className="font-normal text-gray-400">(only needed for Dropbox Sign path)</span>
+          </label>
           <input
             type="email"
             value={signerEmail}
@@ -207,7 +209,7 @@ export function Send8821ForSignatureButton(props: Props) {
             placeholder="contact@borrower.com"
             className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
           />
-          <p className="text-[11px] text-gray-500 mt-0.5">Dropbox Sign will deliver the envelope here. CC: matt@moderntax.io.</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">Leave blank if you just want to download the PDF and send it manually.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -241,16 +243,39 @@ export function Send8821ForSignatureButton(props: Props) {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          <button onClick={submit} disabled={submitting || !selectedExpertId || !signerEmail.trim()}
-            className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded hover:bg-indigo-700 disabled:opacity-50">
-            {submitting ? 'Sending…' : 'Generate + send 8821'}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Primary action — works without Dropbox Sign. Just downloads the
+              filled PDF so admin can email/send for signature manually. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!selectedExpertId) { setError({ msg: 'Select an expert designee first.' }); return; }
+              const url = `/api/admin/entity/generate-8821-pdf?entityId=${encodeURIComponent(props.entityId)}&expertId=${encodeURIComponent(selectedExpertId)}`;
+              // Trigger download in current tab — Content-Disposition: attachment
+              // means the browser saves rather than navigates.
+              window.location.href = url;
+            }}
+            disabled={!selectedExpertId}
+            className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-semibold rounded hover:bg-emerald-700 disabled:opacity-50"
+          >
+            ⬇ Download 8821 PDF
           </button>
+
+          {/* Secondary action — Dropbox Sign envelope. Currently 502s on
+              long-running Dropbox calls, so labeled clearly as the alt path. */}
+          <button onClick={submit} disabled={submitting || !selectedExpertId || !signerEmail.trim()}
+            className="px-4 py-1.5 bg-white border border-indigo-600 text-indigo-700 text-sm font-semibold rounded hover:bg-indigo-50 disabled:opacity-50">
+            {submitting ? 'Sending…' : '✉ Send via Dropbox Sign (beta)'}
+          </button>
+
           <button onClick={() => { setOpen(false); setError(null); }} disabled={submitting}
             className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50">
             Cancel
           </button>
         </div>
+        <p className="text-[11px] text-gray-500 mt-1">
+          Tip: <strong>Download 8821 PDF</strong> generates the fully-filled form (Section 1 + 2 + 3) and saves it to your computer. Email it to the borrower manually, then upload the signed copy via the &ldquo;Upload 8821&rdquo; button above when it comes back.
+        </p>
       </div>
     </div>
   );
