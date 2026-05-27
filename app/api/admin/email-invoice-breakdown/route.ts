@@ -46,6 +46,13 @@ async function handle(request: NextRequest) {
   const clientSlug = url.searchParams.get('clientSlug');
   const periodArg = url.searchParams.get('period'); // "YYYY-MM"
   const dryRun = url.searchParams.get('dryRun') === '1';
+  // verificationOnly=1 strips self-signed 8821 surcharge, monitoring,
+  // entity transcripts, and cash-flow packs from the breakdown so it
+  // matches a verification-only Mercury invoice exactly. Use when
+  // Mercury was billed at flat-rate × completed_count only and
+  // everything else is on separate rails (Stripe monitoring, etc.).
+  // Driver: Mathew Paek 2026-05-26 reconciliation pushback.
+  const verificationOnly = url.searchParams.get('verificationOnly') === '1';
 
   const supabase = createAdminClient();
 
@@ -257,7 +264,7 @@ async function handle(request: NextRequest) {
   // catches the bulk of entities. Direct-uploaded pre-signed PDFs (no
   // signature_id) are excluded. Only applies under the new rate model;
   // pre-May invoices were billed without this surcharge.
-  const selfSigned8821 = useNewRateModel && selfSignedCount > 0
+  const selfSigned8821 = (!verificationOnly && useNewRateModel && selfSignedCount > 0)
     ? { count: selfSignedCount, unitPrice: 10, total: selfSignedCount * 10 }
     : null;
 
@@ -404,7 +411,7 @@ async function handle(request: NextRequest) {
     verificationGroups,
     entityTranscripts: [], // future: track entity-transcript opt-ins per entity
     selfSigned8821,
-    monitoringGroups,
+    monitoringGroups: verificationOnly ? [] : monitoringGroups,
     notes,
   };
 
