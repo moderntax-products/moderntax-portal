@@ -37,22 +37,33 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
     if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
     const { entityId } = await params;
-    const { data: profile } = await sb.from('profiles').select('role').eq('id', user.id).single() as { data: { role: string } | null };
+    const { data: profile } = await sb.from('profiles').select('role, client_id').eq('id', user.id).single() as { data: { role: string; client_id: string | null } | null };
     const role = profile?.role;
 
-    // Access gate: admin always OK; expert OK if they have an assignment on this entity
-    if (role !== 'admin' && role !== 'expert') {
-      return NextResponse.json({ error: 'Admin or expert only' }, { status: 403 });
+    // Access gate (2026-05-27 widened per Matt's "no admin back-and-forth"
+    // directive): admin OR assigned expert OR processor/manager on the
+    // entity's client. Same as the RLS policies.
+    const admin = createAdminClient();
+    if (role !== 'admin' && role !== 'expert' && role !== 'processor' && role !== 'manager') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     if (role === 'expert') {
-      const admin = createAdminClient();
       const { data: assn } = await admin.from('expert_assignments')
         .select('id').eq('entity_id', entityId).eq('expert_id', user.id).limit(1)
         .maybeSingle() as { data: any };
       if (!assn) return NextResponse.json({ error: 'No assignment on this entity' }, { status: 403 });
     }
+    if (role === 'processor' || role === 'manager') {
+      // Must belong to the entity's client
+      const { data: ent } = await admin.from('request_entities')
+        .select('requests!inner(client_id)')
+        .eq('id', entityId).single() as { data: any };
+      const entClient = ent?.requests?.client_id;
+      if (!entClient || entClient !== profile?.client_id) {
+        return NextResponse.json({ error: 'Entity does not belong to your organization' }, { status: 403 });
+      }
+    }
 
-    const admin = createAdminClient();
     const { data, error } = await (admin.from('entity_notes' as any) as any)
       .select('id, author_id, author_role, author_name, body, kind, created_at')
       .eq('entity_id', entityId)
@@ -80,9 +91,10 @@ export async function POST(request: NextRequest, { params }: PageProps) {
     if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
     const { entityId } = await params;
-    const { data: profile } = await sb.from('profiles').select('role, full_name, email').eq('id', user.id).single() as { data: { role: string; full_name: string | null; email: string } | null };
-    if (!profile || (profile.role !== 'admin' && profile.role !== 'expert')) {
-      return NextResponse.json({ error: 'Admin or expert only' }, { status: 403 });
+    const { data: profile } = await sb.from('profiles').select('role, full_name, email, client_id').eq('id', user.id).single() as { data: { role: string; full_name: string | null; email: string; client_id: string | null } | null };
+    const role = profile?.role;
+    if (!profile || !['admin', 'expert', 'processor', 'manager'].includes(role || '')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     let body: { body?: string; kind?: string };
@@ -94,12 +106,20 @@ export async function POST(request: NextRequest, { params }: PageProps) {
 
     const admin = createAdminClient();
 
-    // For experts: confirm they have an assignment on this entity
-    if (profile.role === 'expert') {
+    // Access checks per role
+    if (role === 'expert') {
       const { data: assn } = await admin.from('expert_assignments')
         .select('id').eq('entity_id', entityId).eq('expert_id', user.id).limit(1)
         .maybeSingle() as { data: any };
       if (!assn) return NextResponse.json({ error: 'No assignment on this entity' }, { status: 403 });
+    }
+    if (role === 'processor' || role === 'manager') {
+      const { data: ent } = await admin.from('request_entities')
+        .select('requests!inner(client_id)')
+        .eq('id', entityId).single() as { data: any };
+      if (ent?.requests?.client_id !== profile.client_id) {
+        return NextResponse.json({ error: 'Entity does not belong to your organization' }, { status: 403 });
+      }
     }
 
     const authorName = profile.full_name || profile.email;
@@ -107,7 +127,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
       .insert({
         entity_id: entityId,
         author_id: user.id,
-        author_role: profile.role,
+        author_role: role,
         author_name: authorName,
         body: noteBody,
         kind,
@@ -126,7 +146,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
     }
 
     // Fire-and-forget notification to the OTHER party
-    notifyOpposite(admin, entityId, profile.role, authorName, noteBody, kind).catch((e) =>
+    notifyOpposite(admin, entityId, role as 'admin' | 'expert' | 'processor' | 'manager', authorName, noteBody, kind).catch((e) =>
       console.warn('[entity-notes] notify failed:', e?.message || e),
     );
 
@@ -138,13 +158,22 @@ export async function POST(request: NextRequest, { params }: PageProps) {
 }
 
 /**
- * Email the opposite party — admin posts → assigned expert email;
- * expert posts → matt@moderntax.io (admin team).
+ * Email routing for note notifications — extended 2026-05-27 for the
+ * "no admin back-and-forth" directive:
+ *   - processor/manager posts → assigned expert (primary recipient).
+ *     If no expert assigned yet, route to matt@moderntax.io as fallback.
+ *     Always CC matt@moderntax.io for visibility.
+ *   - expert posts → the processor who submitted the original request
+ *     (primary recipient). Always CC matt@moderntax.io for visibility.
+ *   - admin posts → assigned expert (unchanged).
+ *
+ * This eliminates the prior "admin must relay" pattern: processor and
+ * expert can now exchange instructions + status updates directly.
  */
 async function notifyOpposite(
   admin: ReturnType<typeof createAdminClient>,
   entityId: string,
-  authorRole: 'admin' | 'expert',
+  authorRole: 'admin' | 'expert' | 'processor' | 'manager',
   authorName: string,
   body: string,
   kind: string,
@@ -154,9 +183,9 @@ async function notifyOpposite(
   if (!process.env.SENDGRID_API_KEY) return;
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-  // Resolve entity + assigned expert for context
+  // Resolve entity + assigned expert + originating processor for context
   const { data: ent } = await admin.from('request_entities')
-    .select('id, entity_name, form_type, requests(loan_number, client_id, clients(name))')
+    .select('id, entity_name, form_type, requests(id, loan_number, client_id, requested_by, profiles!requests_requested_by_fkey(full_name, email), clients(name))')
     .eq('id', entityId).single() as { data: any };
   if (!ent) return;
   const { data: assn } = await admin.from('expert_assignments')
@@ -164,24 +193,41 @@ async function notifyOpposite(
     .eq('entity_id', entityId).in('status', ['assigned', 'in_progress']).limit(1)
     .maybeSingle() as { data: any };
 
+  const expertEmail = assn?.profiles?.email || null;
+  const expertName  = assn?.profiles?.full_name || 'Expert';
+  const processorEmail = ent.requests?.profiles?.email || null;
+  const processorName  = ent.requests?.profiles?.full_name || 'Processor';
+
   let toEmail: string | null;
   let toName: string;
+  const ccEmails: string[] = [];
   if (authorRole === 'admin') {
-    toEmail = assn?.profiles?.email || null;
-    toName = assn?.profiles?.full_name || 'Expert';
+    toEmail = expertEmail;
+    toName = expertName;
+  } else if (authorRole === 'expert') {
+    // Expert reply → goes to the originating processor (so the
+    // processor sees the answer directly), CC admin for visibility.
+    toEmail = processorEmail || 'matt@moderntax.io';
+    toName = processorEmail ? processorName : 'Matt';
+    if (processorEmail) ccEmails.push('matt@moderntax.io');
   } else {
-    toEmail = 'matt@moderntax.io';
-    toName = 'Matt';
+    // Processor / manager → goes to the assigned expert (so they see the
+    // intake or clarification directly), CC admin for visibility.
+    toEmail = expertEmail || 'matt@moderntax.io';
+    toName = expertEmail ? expertName : 'Matt';
+    if (expertEmail) ccEmails.push('matt@moderntax.io');
   }
   if (!toEmail) return;
 
-  const portalLink = authorRole === 'admin'
+  // Portal link: deep-link to whichever surface the recipient uses
+  const portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager')
     ? 'https://portal.moderntax.io/expert'
-    : `https://portal.moderntax.io/admin/requests/${ent.requests?.id || ''}`;
+    : `https://portal.moderntax.io/request/${ent.requests?.id || ''}`;
   const subject = `[Note: ${ent.entity_name}] ${authorName} posted${kind !== 'note' ? ` (${kind})` : ''}`;
 
   await sgMail.send({
     to: toEmail,
+    cc: ccEmails.length > 0 ? ccEmails : undefined,
     from: { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' },
     subject,
     text:

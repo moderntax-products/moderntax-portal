@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { send8821WithFallback } from '@/lib/send-8821-with-fallback';
+import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
@@ -725,6 +726,36 @@ export async function POST(request: NextRequest) {
       } catch (signError) {
         console.error('[csv-upload] 8821 auto-send error:', signError);
       }
+    }
+
+    // Auto-post the intake instruction note on each created entity so
+    // the expert sees what was requested directly — no admin relay.
+    // Fire-and-forget per entity; failures logged but don't fail the
+    // intake. Driver: 2026-05-27 Matt "no admin back-and-forth" directive.
+    try {
+      const { data: allCreated } = await admin
+        .from('request_entities')
+        .select('id, entity_name, form_type, years')
+        .eq('request_id', req.id) as { data: any[] | null };
+      if (allCreated && allCreated.length > 0) {
+        const intakeRequesterName = profile.full_name || user.email || 'Processor';
+        await Promise.allSettled(allCreated.map((e: any) =>
+          autoPostIntakeNote(admin, {
+            entityId: e.id,
+            entityName: e.entity_name,
+            formType: e.form_type,
+            years: e.years,
+            requesterUserId: user.id,
+            requesterName: intakeRequesterName,
+            requesterRole: (profile.role === 'admin' || profile.role === 'expert' || profile.role === 'processor' || profile.role === 'manager')
+              ? profile.role : 'processor',
+            clientId: profile.client_id!,
+            freeTextNotes: notes,
+          }),
+        ));
+      }
+    } catch (noteErr) {
+      console.warn('[csv-upload] intake-note autopost failed (non-fatal):', noteErr);
     }
 
     // Notify all admins about the new request in real-time
