@@ -188,14 +188,22 @@ async function handle(request: NextRequest) {
       group = { processorName: procName, entities: [] };
       verificationByProcessor.set(procName, group);
     }
-    const intake = e.requests.intake_method || 'pdf';
     let unitPrice: number;
     if (isSubscription) {
       // Subscription model: entities are zero-priced in the listing; the flat
       // fee + overage are emitted separately below.
       unitPrice = 0;
     } else {
-      unitPrice = intake === 'csv' ? rateCsv : ratePdf;
+      // Per Matt 2026-05-01 + Mathew's 2026-05-26 reconciliation pushback:
+      // every per-TIN client uses a single flat rate (billing_rate_pdf)
+      // regardless of intake method. The CSV/PDF split was a pre-contract
+      // assumption that isn't in any signed SOW — Centerstone + TMC + Cal
+      // Statewide are all "$59.98 flat per Complete Verification". The
+      // auto-invoice cron and Mercury invoice both bill flat; this
+      // breakdown was the lone caller still using the old split and
+      // producing totals that didn't reconcile to Mercury. Now flat too.
+      unitPrice = ratePdf;
+      void rateCsv;  // intentionally unused — keep for legacy reference
     }
     group.entities.push({
       entityName: e.entity_name || '(unnamed)',
