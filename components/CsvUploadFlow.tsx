@@ -8,7 +8,7 @@
  * /api/upload/csv → success state with loan numbers + CTA to dashboard.
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
@@ -73,6 +73,31 @@ export function CsvUploadFlow() {
   const [error, setError] = useState<string | null>(null);
   const [showColumnRef, setShowColumnRef] = useState(false);
   const [previewEntities, setPreviewEntities] = useState<CsvPreviewEntity[] | null>(null);
+  // Per-client toggle (2026-05-27 — Centerstone flat-rate contract):
+  // when client.disable_monitoring = true, hide the "Enroll Monitoring"
+  // column from the preview table. Backend already strips any monitoring
+  // intent from this client's invoice via the auto-invoice cron toggle,
+  // but stripping it from the UI prevents processor confusion.
+  const [disableMonitoring, setDisableMonitoring] = useState(false);
+  const supabaseClient = useMemo(() => createClient(), []);
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabaseClient.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await supabaseClient
+        .from('profiles')
+        .select('client_id')
+        .eq('id', user.id)
+        .single() as { data: { client_id: string | null } | null };
+      if (!profile?.client_id) return;
+      const { data: client } = await supabaseClient
+        .from('clients')
+        .select('disable_monitoring')
+        .eq('id', profile.client_id)
+        .single() as { data: { disable_monitoring: boolean | null } | null };
+      if (client?.disable_monitoring) setDisableMonitoring(true);
+    })().catch(() => { /* silent — column missing pre-migration */ });
+  }, [supabaseClient]);
   const [result, setResult] = useState<{
     requests_created: number;
     entities_created: number;
@@ -611,11 +636,13 @@ export function CsvUploadFlow() {
                 className="font-medium text-indigo-600 hover:text-indigo-800 transition-colors whitespace-nowrap">
                 {cashFlowPackCount >= previewEntities.length ? 'Deselect all cash-flow' : `+ All ${previewEntities.length} cash-flow packs`}
               </button>
-              <button type="button" onClick={() => toggleAllEnrollMonitoring(monitoringSkipCount > 0)}
-                className="font-medium text-emerald-600 hover:text-emerald-800 transition-colors whitespace-nowrap"
-                title="Toggle monitoring auto-enroll for all entities">
-                {monitoringSkipCount === 0 ? 'Skip monitoring for all' : 'Re-enable monitoring'}
-              </button>
+              {!disableMonitoring && (
+                <button type="button" onClick={() => toggleAllEnrollMonitoring(monitoringSkipCount > 0)}
+                  className="font-medium text-emerald-600 hover:text-emerald-800 transition-colors whitespace-nowrap"
+                  title="Toggle monitoring auto-enroll for all entities">
+                  {monitoringSkipCount === 0 ? 'Skip monitoring for all' : 'Re-enable monitoring'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -637,10 +664,12 @@ export function CsvUploadFlow() {
                     Cash-Flow Pack
                     <span className="block text-indigo-400 font-normal normal-case">${CASH_FLOW_PACK_PRICE}/ea</span>
                   </th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-emerald-600 uppercase whitespace-nowrap">
-                    Monitor
-                    <span className="block text-emerald-500 font-normal normal-case">${MONITORING_MONTHLY_PRICE}/mo</span>
-                  </th>
+                  {!disableMonitoring && (
+                    <th className="text-center py-2 px-3 text-xs font-semibold text-emerald-600 uppercase whitespace-nowrap">
+                      Monitor
+                      <span className="block text-emerald-500 font-normal normal-case">${MONITORING_MONTHLY_PRICE}/mo</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -724,11 +753,13 @@ export function CsvUploadFlow() {
                         title="Generate the SBA Cash-Flow Pack after transcripts complete"
                         className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
                     </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <input type="checkbox" checked={entity.enrollMonitoring} onChange={() => toggleEnrollMonitoring(entity.rowIndex)}
-                        title="Auto-enroll in continuous monitoring after transcripts complete"
-                        className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
-                    </td>
+                    {!disableMonitoring && (
+                      <td className="py-2.5 px-3 text-center">
+                        <input type="checkbox" checked={entity.enrollMonitoring} onChange={() => toggleEnrollMonitoring(entity.rowIndex)}
+                          title="Auto-enroll in continuous monitoring after transcripts complete"
+                          className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

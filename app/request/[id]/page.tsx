@@ -58,6 +58,16 @@ export default async function RequestDetailPage({ params }: Props) {
   // ownership is still enforced for edit/cancel actions via /api/expert/cancel-request.
   if (profile.role !== 'admin' && profile.client_id !== request.client_id) redirect('/');
 
+  // Per-client flag: hide monitoring UI surfaces from processor experience
+  // when client.disable_monitoring = true (Centerstone post-2026-05-27).
+  // Their re-pulls go through a fresh full-price new request instead.
+  const { data: clientCfg } = await supabase
+    .from('clients')
+    .select('disable_monitoring')
+    .eq('id', request.client_id)
+    .single() as { data: { disable_monitoring: boolean | null } | null };
+  const hideMonitoringUi = !!clientCfg?.disable_monitoring;
+
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'submitted': case '8821_sent': return 'bg-blue-100 text-blue-800';
@@ -423,8 +433,10 @@ export default async function RequestDetailPage({ params }: Props) {
             )}
           </div>
 
-          {/* Transcript Monitoring */}
-          <MonitoringPanel
+          {/* Transcript Monitoring — hidden for clients with
+              disable_monitoring=true (Centerstone-style flat-rate
+              contracts where re-pulls go through full new requests). */}
+          {!hideMonitoringUi && <MonitoringPanel
             requestId={request.id}
             entities={(request.request_entities || []).map((e: RequestEntity) => ({
               id: e.id,
@@ -433,7 +445,7 @@ export default async function RequestDetailPage({ params }: Props) {
               form_type: e.form_type,
               signed_8821_url: e.signed_8821_url,
             }))}
-          />
+          />}
 
           {/* Notes */}
           {request.notes && (
