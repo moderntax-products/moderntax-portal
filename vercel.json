@@ -107,7 +107,7 @@
     },
     {
       "path": "/api/cron/auto-invoice",
-      "schedule": "0 6 1 * *"
+      "schedule": "0 23 28-31 * *"
     },
     {
       "path": "/api/admin/mercury-reconcile",

@@ -140,7 +140,8 @@ async function handle(request: NextRequest) {
   const { data: billingConfig } = await supabase
     .from('clients')
     .select('billing_model, subscription_monthly_amount, subscription_included_entities, ' +
-      'subscription_overage_rate, billing_rate_pdf, billing_rate_csv, billing_rate_monitoring')
+      'subscription_overage_rate, billing_rate_pdf, billing_rate_csv, billing_rate_monitoring, ' +
+      'disable_8821_surcharge, disable_monitoring')
     .eq('id', clientRow.id)
     .single() as { data: any };
   const isSubscription = billingConfig?.billing_model === 'subscription';
@@ -150,6 +151,11 @@ async function handle(request: NextRequest) {
   const ratePdf = billingConfig?.billing_rate_pdf || 59.98;
   const rateCsv = billingConfig?.billing_rate_csv || 69.98;
   const monthlyMonitoringRate = billingConfig?.billing_rate_monitoring || 25;
+  // Per-client toggles (2026-05-27 — Centerstone flat-rate contract).
+  // Either toggle OR the verificationOnly query flag suppresses the
+  // corresponding line item — whichever fires first.
+  const clientDisable8821 = !!billingConfig?.disable_8821_surcharge;
+  const clientDisableMonitoring = !!billingConfig?.disable_monitoring;
 
   // Centerstone-style override: when a client has billing_rate_monitoring
   // explicitly set (contracted $25/mo prorated), use the LEGACY monitoring
@@ -274,7 +280,7 @@ async function handle(request: NextRequest) {
   // catches the bulk of entities. Direct-uploaded pre-signed PDFs (no
   // signature_id) are excluded. Only applies under the new rate model;
   // pre-May invoices were billed without this surcharge.
-  const selfSigned8821 = (!verificationOnly && useNewRateModel && selfSignedCount > 0)
+  const selfSigned8821 = (!verificationOnly && !clientDisable8821 && useNewRateModel && selfSignedCount > 0)
     ? { count: selfSignedCount, unitPrice: 10, total: selfSignedCount * 10 }
     : null;
 
@@ -430,7 +436,7 @@ async function handle(request: NextRequest) {
     verificationGroups,
     entityTranscripts: [], // future: track entity-transcript opt-ins per entity
     selfSigned8821,
-    monitoringGroups: verificationOnly ? [] : monitoringGroups,
+    monitoringGroups: (verificationOnly || clientDisableMonitoring) ? [] : monitoringGroups,
     notes,
   };
 

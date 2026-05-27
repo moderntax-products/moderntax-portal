@@ -28,20 +28,35 @@ export async function GET(request: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Calculate previous month
+    // Schedule changed 2026-05-27 per Mathew Paek call: fire on the LAST
+    // DAY of the current month at EOD (vs the previous "1st of next month
+    // bills previous month" pattern). Per his preference: "the full bill,
+    // the final bill will come out on the 31st with all this discussed."
+    //
+    // The Vercel cron entry is `0 23 28-31 * *` (23:00 UTC = 4 PM PT each
+    // day 28-31). We only execute when today is the actual last day of
+    // the current month — handles Feb (28/29), 30-day months, and 31-day
+    // months without per-month cron tweaks. Other 28-30 days return early.
     const now = new Date();
-    let year = now.getUTCFullYear();
-    let month = now.getUTCMonth(); // 0-indexed: current month
-    // Previous month: if current month is January (0), go to December of previous year
-    if (month === 0) {
-      month = 12;
-      year -= 1;
+    const todayDay = now.getUTCDate();
+    const lastDayThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+    if (todayDay !== lastDayThisMonth) {
+      console.log(`[auto-invoice] today=${todayDay} is not last day of month (${lastDayThisMonth}) — skipping`);
+      return NextResponse.json({
+        skipped: true,
+        reason: `Today (${todayDay}) is not the last day of this month (${lastDayThisMonth}). Cron runs on days 28-31 and only fires when day == last day.`,
+      });
     }
-    // month is now 1-indexed for the previous month
 
+    // Bill CURRENT month (the one ending today)
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth() + 1; // 1-indexed
     const periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
-    const periodEnd = new Date(year, month, 0).toISOString().split('T')[0]; // last day of prev month
+    const periodEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDayThisMonth).padStart(2, '0')}`;
     const periodStartDate = new Date(periodStart);
+    // Period end = end of TODAY (the last day of the month). Captures
+    // every completion right up to the firing minute — gives Mathew his
+    // "up to the hour" requirement.
     const periodEndDate = new Date(periodEnd + 'T23:59:59.999Z');
 
     // Get all clients (including Mercury + Stripe integration fields).
@@ -56,6 +71,10 @@ export async function GET(request: NextRequest) {
         'billing_model, subscription_monthly_amount, subscription_included_entities, subscription_overage_rate, ' +
         'billing_effective_from, billing_notes, ' +
         'mercury_customer_id, ' +
+        // Per-client toggles (2026-05-27 — Centerstone-style flat-rate contracts):
+        //   disable_8821_surcharge = skip $10/entity self-signed 8821 fee
+        //   disable_monitoring     = strip all monitoring lines from invoice
+        'disable_8821_surcharge, disable_monitoring, ' +
         // Stripe payment-method-on-file fields. When stripe_payment_method_id
         // is set + status='active', the cron auto-charges via Stripe and
         // skips the Mercury invoice block.
@@ -82,6 +101,8 @@ export async function GET(request: NextRequest) {
           billing_effective_from: string | null;
           billing_notes: string | null;
           mercury_customer_id: string | null;
+          disable_8821_surcharge: boolean | null;
+          disable_monitoring: boolean | null;
           address_line1: string | null;
           address_line2: string | null;
           address_city: string | null;
@@ -257,28 +278,36 @@ export async function GET(request: NextRequest) {
         const monitoringRate = client.billing_rate_monitoring ?? 25;
         let monitoringEntities = 0;
         let monitoringAmount = 0;
-        const { data: activeMonitoring } = await supabase
-          .from('entity_monitoring')
-          .select('id, entity_id, enrolled_at, cancelled_at, status')
-          .eq('client_id', client.id)
-          .lte('enrolled_at', periodEndDate.toISOString())
-          .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: any[] | null };
+        // Per-client opt-out: when disable_monitoring=true (Centerstone
+        // post-2026-05-27), skip the entire monitoring computation +
+        // line item. Reorder requests for that client go through the
+        // full-price new-request path instead.
+        if (!client.disable_monitoring) {
+          const { data: activeMonitoring } = await supabase
+            .from('entity_monitoring')
+            .select('id, entity_id, enrolled_at, cancelled_at, status')
+            .eq('client_id', client.id)
+            .lte('enrolled_at', periodEndDate.toISOString())
+            .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: any[] | null };
 
-        const daysInMonth = new Date(year, month, 0).getDate();
-        for (const m of (activeMonitoring || [])) {
-          if (m.status === 'pending') continue;
-          const enrolled = new Date(m.enrolled_at).getTime();
-          const cancelled = m.cancelled_at ? new Date(m.cancelled_at).getTime() : Infinity;
-          const windowStart = Math.max(enrolled, periodStartDate.getTime());
-          const windowEnd   = Math.min(cancelled, periodEndDate.getTime() + 1);
-          if (windowEnd <= windowStart) continue;
-          const activeDays = Math.ceil((windowEnd - windowStart) / (24 * 3600 * 1000));
-          const prorated = (Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate;
-          monitoringEntities += 1;
-          monitoringAmount += prorated;
+          const daysInMonth = new Date(year, month, 0).getDate();
+          for (const m of (activeMonitoring || [])) {
+            if (m.status === 'pending') continue;
+            const enrolled = new Date(m.enrolled_at).getTime();
+            const cancelled = m.cancelled_at ? new Date(m.cancelled_at).getTime() : Infinity;
+            // Skip enrolled-and-cancelled within period (bulk-enroll mistakes)
+            if (enrolled >= periodStartDate.getTime() && cancelled <= periodEndDate.getTime() + 1) continue;
+            const windowStart = Math.max(enrolled, periodStartDate.getTime());
+            const windowEnd   = Math.min(cancelled, periodEndDate.getTime() + 1);
+            if (windowEnd <= windowStart) continue;
+            const activeDays = Math.ceil((windowEnd - windowStart) / (24 * 3600 * 1000));
+            const prorated = (Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate;
+            monitoringEntities += 1;
+            monitoringAmount += prorated;
+          }
+          // Round each subtotal to cents
+          monitoringAmount = Math.round(monitoringAmount * 100) / 100;
         }
-        // Round each subtotal to cents
-        monitoringAmount = Math.round(monitoringAmount * 100) / 100;
 
         // --- Cash-Flow Analysis Pack line: $49.99 × packs generated this period ---
         // Each cash_flow_pack lives on entity.gross_receipts.cash_flow_pack,
