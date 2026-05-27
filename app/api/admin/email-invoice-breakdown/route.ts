@@ -140,7 +140,7 @@ async function handle(request: NextRequest) {
   const { data: billingConfig } = await supabase
     .from('clients')
     .select('billing_model, subscription_monthly_amount, subscription_included_entities, ' +
-      'subscription_overage_rate, billing_rate_pdf, billing_rate_csv')
+      'subscription_overage_rate, billing_rate_pdf, billing_rate_csv, billing_rate_monitoring')
     .eq('id', clientRow.id)
     .single() as { data: any };
   const isSubscription = billingConfig?.billing_model === 'subscription';
@@ -149,6 +149,16 @@ async function handle(request: NextRequest) {
   const subscriptionOverageRate = billingConfig?.subscription_overage_rate || 0;
   const ratePdf = billingConfig?.billing_rate_pdf || 59.98;
   const rateCsv = billingConfig?.billing_rate_csv || 69.98;
+  const monthlyMonitoringRate = billingConfig?.billing_rate_monitoring || 25;
+
+  // Centerstone-style override: when a client has billing_rate_monitoring
+  // explicitly set (contracted $25/mo prorated), use the LEGACY monitoring
+  // math regardless of period date. The "new" $19.99 + $39.99 event-based
+  // model only applies to clients without a per-month contract. Without
+  // this gate, breakdown computed event-based ($19.99 × new enrollments)
+  // while Mercury billed prorated-monthly ($25 × active days), and the
+  // two never reconciled (Mathew Paek 2026-05-27).
+  const forceLegacyMonitoring = !!billingConfig?.billing_rate_monitoring;
 
   // Pull the period's completed entities, joined to processor + request meta.
   const periodEndExclusive = `${periodEnd}T23:59:59.999Z`;
@@ -276,7 +286,7 @@ async function handle(request: NextRequest) {
   //   billed in Mercury for March + April so the breakdown reconciles.
   const monitoringByProcessor = new Map<string, MonitoringGroup>();
 
-  if (useNewRateModel) {
+  if (useNewRateModel && !forceLegacyMonitoring) {
     // Event-based: enrollments (started in period) + repulls (completed in period)
     const { data: monitoringRows } = await supabase
       .from('entity_monitoring')
@@ -351,11 +361,20 @@ async function handle(request: NextRequest) {
       if (requester && !profileMap.has(requester)) profileMap.set(requester, procName);
       const enrolledMs = new Date(m.enrolled_at).getTime();
       const cancelledMs = m.cancelled_at ? new Date(m.cancelled_at).getTime() : Infinity;
+      // Skip "enrolled-and-cancelled within the same billing period" rows.
+      // These are bulk-enroll mistakes / test enrollments — billing for
+      // 4-12 days of an explicitly-cancelled subscription torches client
+      // relationships. Matches finalize-may-invoices.ts + R2 reconciliation
+      // endpoint logic so all three computations produce the same total.
+      if (enrolledMs >= periodStartMs && cancelledMs <= periodEndMs) continue;
       const windowStart = Math.max(enrolledMs, periodStartMs);
       const windowEnd = Math.min(cancelledMs, periodEndMs);
       if (windowEnd <= windowStart) continue;
       const activeDays = Math.ceil((windowEnd - windowStart) / 86400000);
-      const prorated = Math.round((Math.min(activeDays, daysInMonth) / daysInMonth) * 25 * 100) / 100;
+      // Use the client's contracted billing_rate_monitoring rather than
+      // hardcoded $25 — keeps the breakdown honest when per-client rates
+      // differ.
+      const prorated = Math.round((Math.min(activeDays, daysInMonth) / daysInMonth) * monthlyMonitoringRate * 100) / 100;
       let group = monitoringByProcessor.get(procName);
       if (!group) { group = { processorName: procName, items: [] }; monitoringByProcessor.set(procName, group); }
       const ent = m.request_entities?.entity_name || '(entity)';
