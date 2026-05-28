@@ -67,7 +67,10 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
     const { data, error } = await (admin.from('entity_notes' as any) as any)
       .select('id, author_id, author_role, author_name, body, kind, created_at')
       .eq('entity_id', entityId)
-      .order('created_at', { ascending: true });
+      // 2026-05-28 Matt — most recent at the top. Reverse-chrono matches
+      // how everyone scans the thread: the latest status_update / answer
+      // / question is what you care about, not the original intake note.
+      .order('created_at', { ascending: false });
 
     // Graceful degrade: if the table doesn't exist yet (migration not applied)
     // return an empty thread instead of 500ing the page.
