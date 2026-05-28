@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
     client_id: processorProfile.client_id,
     requested_by: processorId,
     loan_number: loanNumber,
-    intake_method: 'admin_reorder',
+    intake_method: 'reorder',
     status: 'submitted',
     source_request_id: sourceEntity.requests.id,
     notes: notes

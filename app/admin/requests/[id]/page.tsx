@@ -106,7 +106,13 @@ export default async function AdminRequestManagePage({ params }: Props) {
     });
 
   const intakeLabel = (m: string) => {
-    switch (m) { case 'csv': return 'CSV Upload'; case 'pdf': return 'PDF Upload'; case 'api': return 'API'; default: return 'Manual Entry'; }
+    switch (m) {
+      case 'csv': return 'CSV Upload';
+      case 'pdf': return 'PDF Upload';
+      case 'api': return 'API';
+      case 'reorder': return 'Reorder from history';
+      default: return 'Manual Entry';
+    }
   };
 
   const isEmployment = request.product_type === 'employment';
@@ -148,7 +154,7 @@ export default async function AdminRequestManagePage({ params }: Props) {
                       ↺ Reorder of loan {sourceRequestInfo.loan_number || sourceRequestInfo.id.slice(0, 8)}
                     </Link>
                   )}
-                  {request.intake_method === 'admin_reorder' && !sourceRequestInfo && (
+                  {request.intake_method === 'reorder' && !sourceRequestInfo && (
                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800" title="Created via the reorder-from-history flow.">
                       ↺ Reorder
                     </span>

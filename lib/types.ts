@@ -31,7 +31,7 @@ export enum FormType {
 
 export type TidKind = 'EIN' | 'SSN';
 
-export type IntakeMethod = 'csv' | 'pdf' | 'manual' | 'api';
+export type IntakeMethod = 'csv' | 'pdf' | 'manual' | 'api' | 'reorder';
 
 export type ProductType = 'transcript' | 'employment';
 

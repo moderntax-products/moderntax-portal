@@ -100,7 +100,12 @@ export default async function RequestDetailPage({ params }: Props) {
   const currentStepIndex = statusOrder[request.status] ?? -1;
 
   const intakeLabel = (m: string) => {
-    switch (m) { case 'csv': return 'CSV Upload'; case 'pdf': return 'PDF Upload'; default: return 'Manual Entry'; }
+    switch (m) {
+      case 'csv': return 'CSV Upload';
+      case 'pdf': return 'PDF Upload';
+      case 'reorder': return 'Reorder from history';
+      default: return 'Manual Entry';
+    }
   };
 
   return (
