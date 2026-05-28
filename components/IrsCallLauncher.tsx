@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface IrsCallLauncherProps {
   selectedAssignments: { id: string; entityName: string; entityId: string }[];
@@ -97,16 +97,69 @@ export function IrsCallLauncher({
     }
   };
 
-  // Generate next 5 weekdays for quick scheduling
+  // When the user selects Today and the existing scheduledTime is already in
+  // the past, auto-bump the time to the next available 30-min slot so the
+  // form doesn't show a clearly-invalid pre-selection.
+  useEffect(() => {
+    if (!scheduledDate) return;
+    const now = new Date();
+    const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    if (scheduledDate !== todayLocal) return;
+
+    const [hh, mm] = scheduledTime.split(':').map(Number);
+    const slotMinutes = hh * 60 + mm;
+    const minMinutes = now.getHours() * 60 + now.getMinutes() + 15;
+    if (slotMinutes >= minMinutes) return;
+
+    // Round up to the next :00 or :30 boundary that's at/past minMinutes,
+    // capped at 6:30 PM (the last slot before IRS PPS closes at 7 PM).
+    const candidate = Math.min(
+      Math.ceil(minMinutes / 30) * 30,
+      18 * 60 + 30,
+    );
+    const newH = Math.floor(candidate / 60);
+    const newM = candidate % 60;
+    setScheduledTime(`${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`);
+    // Don't include scheduledTime in deps — the bump should only fire when
+    // the date changes, not on every time edit (would create a feedback loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduledDate]);
+
+  // Generate up to 5 quick-pick weekdays. Includes TODAY as the first option
+  // when it's a weekday and the IRS PPS window (7 AM – 7 PM local) hasn't
+  // closed yet — leaves at least 30 minutes of runway so the user can pick a
+  // valid future time slot. The previous implementation always skipped today,
+  // which was confusing when a Wednesday-morning call needed scheduling later
+  // the same day.
   const getNextWeekdays = () => {
     const days: { label: string; value: string }[] = [];
-    const d = new Date();
+    const today = new Date();
+    const cursor = new Date(today);
+
+    // Format helper — generates the YYYY-MM-DD value in LOCAL time, not UTC,
+    // because toISOString().split('T')[0] silently shifts to UTC and produces
+    // the wrong date for users west of UTC late in the day.
+    const localDateValue = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    // Today gets a "Today" prefix in the label so it's visually distinct.
+    const todayDow = today.getDay();
+    const todayMinutes = today.getHours() * 60 + today.getMinutes();
+    const PPS_CLOSE_MINUTES = 19 * 60 - 30; // 6:30 PM local — last allowed time slot
+    const todayIsBookable = todayDow !== 0 && todayDow !== 6 && todayMinutes < PPS_CLOSE_MINUTES;
+    if (todayIsBookable) {
+      days.push({
+        label: `Today, ${today.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).split(', ').slice(1).join(', ')}`,
+        value: localDateValue(today),
+      });
+    }
+
     while (days.length < 5) {
-      d.setDate(d.getDate() + 1);
-      if (d.getDay() !== 0 && d.getDay() !== 6) {
+      cursor.setDate(cursor.getDate() + 1);
+      if (cursor.getDay() !== 0 && cursor.getDay() !== 6) {
         days.push({
-          label: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
-          value: d.toISOString().split('T')[0],
+          label: cursor.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+          value: localDateValue(cursor),
         });
       }
     }
@@ -332,19 +385,45 @@ export function IrsCallLauncher({
                     onChange={e => setScheduledTime(e.target.value)}
                     className="w-full text-xs border border-blue-200 rounded-md px-2 py-1.5 bg-white"
                   >
-                    {Array.from({ length: 12 }, (_, i) => {
-                      const hour = i + 7; // 7 AM to 6 PM (last slot before 7 PM)
-                      const ampm = hour < 12 ? 'AM' : 'PM';
-                      const displayHour = hour > 12 ? hour - 12 : hour;
-                      return [
-                        <option key={`${hour}:00`} value={`${String(hour).padStart(2, '0')}:00`}>
-                          {displayHour}:00 {ampm}
-                        </option>,
-                        <option key={`${hour}:30`} value={`${String(hour).padStart(2, '0')}:30`}>
-                          {displayHour}:30 {ampm}
-                        </option>,
-                      ];
-                    })}
+                    {(() => {
+                      // When the user picks Today, hide time slots already past
+                      // (and pad ~15 minutes so the chosen slot is at least
+                      // slightly in the future — the server enforces this too).
+                      // For other dates, show every slot 7 AM – 6:30 PM.
+                      const todayLocal = (() => {
+                        const t = new Date();
+                        return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+                      })();
+                      const isToday = scheduledDate === todayLocal;
+                      const now = new Date();
+                      const minMinutes = isToday ? now.getHours() * 60 + now.getMinutes() + 15 : 0;
+
+                      const slots: React.ReactNode[] = [];
+                      for (let i = 0; i < 12; i++) {
+                        const hour = i + 7; // 7 AM to 6 PM
+                        const ampm = hour < 12 ? 'AM' : 'PM';
+                        const displayHour = hour > 12 ? hour - 12 : hour;
+                        for (const minute of [0, 30]) {
+                          const slotMinutes = hour * 60 + minute;
+                          if (slotMinutes < minMinutes) continue;
+                          const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+                          slots.push(
+                            <option key={value} value={value}>
+                              {displayHour}:{String(minute).padStart(2, '0')} {ampm}
+                            </option>
+                          );
+                        }
+                      }
+                      // If "today" is so late we'd have no slots, surface a hint.
+                      if (slots.length === 0) {
+                        slots.push(
+                          <option key="none" value="" disabled>
+                            No slots remaining today — pick another date
+                          </option>
+                        );
+                      }
+                      return slots;
+                    })()}
                   </select>
                 </div>
                 <div className="flex-1">

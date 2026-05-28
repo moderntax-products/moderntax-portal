@@ -454,11 +454,14 @@ function drawVerificationDataRow(ctx: RenderCtx, rowNum: number, ent: Verificati
   // instead of "$0.00" so the line item reads cleanly.
   const priceLabel = ent.unitPrice === 0 ? 'Included' : formatCurrency(ent.unitPrice);
   const amountLabel = ent.unitPrice === 0 ? 'Included' : formatCurrency(ent.unitPrice);
+  // Loan numbers occasionally have entity-name fragments stuffed in (processor
+  // habit) — truncate hard so the column doesn't overflow into Completed.
+  const loanLabel = truncate(ent.loanNumber || '-', 10);
   const cols: [string, number][] = [
     [String(rowNum), 22],
     [truncate(ent.entityName, 38), 220],
     [ent.formType, 50],
-    [ent.loanNumber || '-', 60],
+    [loanLabel, 60],
     [ent.completedAt, 70],
     [priceLabel, 60],
     [amountLabel, 60],
@@ -486,7 +489,7 @@ function drawMonitoringDataRow(ctx: RenderCtx, rowNum: number, item: MonitoringI
   const cols: [string, number, PDFFont][] = [
     [String(rowNum), 22, ctx.helv],
     [truncate(item.description, 50), 240, ctx.helv],
-    [item.loanNumber || '-', 80, ctx.helv],
+    [truncate(item.loanNumber || '-', 12), 80, ctx.helv],
     [item.date, 70, ctx.helv],
     [formatCurrency(item.unitPrice), 60, ctx.helv],
     [formatCurrency(item.unitPrice), 60, ctx.helvB],

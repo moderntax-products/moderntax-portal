@@ -76,7 +76,43 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
     }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ notes: data || [] });
+    // Anonymize cross-org identities on the thread.
+    // Driver: 2026-05-28 Matt —
+    //   1. "Notes from experts should not include expert name on any
+    //      processor/manager-facing communications."
+    //   2. "Remove all processor tags on entity/expert notes."
+    // Rules:
+    //   - Processor / manager requester reads an EXPERT-authored note →
+    //     author shows as "ModernTax".
+    //   - Expert requester reads a PROCESSOR / MANAGER-authored note →
+    //     author shows as the client/org name (e.g. "Centerstone SBA
+    //     Lending"), so the expert knows which lender it's from without
+    //     seeing the individual processor's name.
+    //   - Admin sees real names everywhere.
+    //   - The requester's own posts are never masked (you always see
+    //     your own identity on the thread).
+    const isProcessorLike = role === 'processor' || role === 'manager';
+    const isExpert = role === 'expert';
+    let clientNameForMask = 'Client';
+    if (isExpert) {
+      const { data: ctxRow } = await admin.from('request_entities')
+        .select('requests!inner(clients(name))')
+        .eq('id', entityId).single() as { data: any };
+      clientNameForMask = ctxRow?.requests?.clients?.name || 'Client';
+    }
+    const notes = (data || []).map((n: any) => {
+      // Never mask the requester's own posts.
+      if (n.author_id === user.id) return n;
+      if (isProcessorLike && n.author_role === 'expert') {
+        return { ...n, author_name: 'ModernTax', author_id: null };
+      }
+      if (isExpert && (n.author_role === 'processor' || n.author_role === 'manager')) {
+        return { ...n, author_name: clientNameForMask, author_id: null };
+      }
+      return n;
+    });
+
+    return NextResponse.json({ notes });
   } catch (err: any) {
     console.error('[entity-notes GET]', err);
     return NextResponse.json({ error: err?.message || 'Server error' }, { status: 500 });
@@ -223,7 +259,36 @@ async function notifyOpposite(
   const portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager')
     ? 'https://portal.moderntax.io/expert'
     : `https://portal.moderntax.io/request/${ent.requests?.id || ''}`;
-  const subject = `[Note: ${ent.entity_name}] ${authorName} posted${kind !== 'note' ? ` (${kind})` : ''}`;
+
+  // Anonymize cross-org identities for note notifications.
+  // Driver: 2026-05-28 Matt —
+  //   1. "Notes from experts should not include expert name on any
+  //      processor/manager-facing communications. Should be from general
+  //      ModernTax organization."
+  //   2. "Remove all processor tags on entity/expert notes."
+  // Rules in the email subject + body:
+  //   - Expert author → "ModernTax" (drop role parenthetical).
+  //   - Processor / manager author → client name (e.g.
+  //     "Centerstone SBA Lending"), drop role parenthetical. Expert sees
+  //     which lender sent the message without seeing the individual.
+  //   - Admin author → real name + role unchanged.
+  // Because one body goes to both the primary recipient and the admin
+  // CC, we mask uniformly. Matt can still see the real identity on the
+  // entity record in the portal.
+  const clientName = ent.requests?.clients?.name || 'Client';
+  let displayAuthorName: string;
+  let displayRoleSuffix: string;
+  if (authorRole === 'expert') {
+    displayAuthorName = 'ModernTax';
+    displayRoleSuffix = '';
+  } else if (authorRole === 'processor' || authorRole === 'manager') {
+    displayAuthorName = clientName;
+    displayRoleSuffix = '';
+  } else {
+    displayAuthorName = authorName;
+    displayRoleSuffix = ` (${authorRole})`;
+  }
+  const subject = `[Note: ${ent.entity_name}] ${displayAuthorName} posted${kind !== 'note' ? ` (${kind})` : ''}`;
 
   await sgMail.send({
     to: toEmail,
@@ -231,7 +296,7 @@ async function notifyOpposite(
     from: { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' },
     subject,
     text:
-`${authorName} (${authorRole}) just added a note to ${ent.entity_name}${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:
+`${displayAuthorName}${displayRoleSuffix} just added a note to ${ent.entity_name}${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:
 
 ${body}
 
@@ -242,7 +307,7 @@ Reply on the entity record: ${portalLink}
     html: `
 <div style="font-family:-apple-system,sans-serif;max-width:600px;line-height:1.5;color:#1a2845;">
   <p>Hi ${toName.split(' ')[0]},</p>
-  <p><strong>${authorName}</strong> just added a ${kind === 'note' ? 'note' : `<em>${kind}</em>`} to <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:</p>
+  <p><strong>${displayAuthorName}</strong> just added a ${kind === 'note' ? 'note' : `<em>${kind}</em>`} to <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:</p>
   <blockquote style="margin:12px 0;padding:12px 16px;background:#f3f4f6;border-left:3px solid #295c9e;color:#1f2937;white-space:pre-wrap;">${body.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]!))}</blockquote>
   <p><a href="${portalLink}" style="color:#295c9e;font-weight:600;">Reply on the entity record →</a></p>
 </div>`,

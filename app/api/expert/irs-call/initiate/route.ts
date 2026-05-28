@@ -64,14 +64,20 @@ export async function POST(request: NextRequest) {
 
     const adminSupabase = createAdminClient();
 
-    // Check no active call exists for this expert
-    const { data: activeCall } = await adminSupabase
+    // Check no active call exists for this expert.
+    // .single() crashes when 2+ rows exist (PGRST116) — was previously
+    // swallowed by the catch above, leaving the 409 logic dead. Use a
+    // limit-1 select so we get the most recent active call cleanly even
+    // when state cleanup left orphans.
+    const { data: activeCalls } = await adminSupabase
       .from('irs_call_sessions' as any)
-      .select('id, status')
+      .select('id, status, initiated_at')
       .eq('expert_id', user.id)
       .in('status', ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'])
-      .single() as { data: any; error: any };
+      .order('initiated_at', { ascending: false })
+      .limit(1) as { data: any[] | null; error: any };
 
+    const activeCall = activeCalls?.[0];
     if (activeCall) {
       return NextResponse.json({
         error: 'You already have an active IRS call',
@@ -150,10 +156,15 @@ export async function POST(request: NextRequest) {
       if (scheduledDate <= new Date()) {
         return NextResponse.json({ error: 'Scheduled time must be in the future' }, { status: 400 });
       }
-      // Check day of week (Mon-Fri only, IRS is closed weekends)
-      const dayOfWeek = scheduledDate.getUTCDay();
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        return NextResponse.json({ error: 'IRS PPS is closed on weekends. Select a weekday.' }, { status: 400 });
+      // Day-of-week check uses the SCHEDULED TIMEZONE (e.g., America/New_York)
+      // not UTC. The previous getUTCDay() check rejected Friday 6pm PT calls
+      // because they convert to Saturday 1am UTC — false positive.
+      const tz = body.timezone || 'America/New_York';
+      const dowName = scheduledDate.toLocaleString('en-US', { timeZone: tz, weekday: 'short' });
+      if (dowName === 'Sat' || dowName === 'Sun') {
+        return NextResponse.json({
+          error: `IRS PPS is closed on weekends. Selected time is ${dowName} in ${tz}. Pick a weekday.`,
+        }, { status: 400 });
       }
     }
 
@@ -234,12 +245,120 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Calendar invite — send a .ics meeting invitation to the expert so the
+      // scheduled call lands on their primary calendar with reminders + RSVP
+      // buttons. Best-effort: scheduling shouldn't fail just because email did.
+      // The same UID is reused across REQUEST/CANCEL/UPDATE so the calendar
+      // event tracks updates instead of duplicating.
+      try {
+        const { buildIcsInvite, callSessionUid } = await import('@/lib/calendar-invite');
+        const { sendCalendarInvite } = await import('@/lib/sendgrid');
+        const startsAt = new Date(scheduledFor);
+        const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000); // 60 min default
+        const modeLabel =
+          resolvedCallMode === 'ai_full' ? 'AI Full (no expert action needed)'
+          : resolvedCallMode === 'irs_callback' ? 'IRS Callback (system bridges to your phone)'
+          : 'Hold & Transfer (system holds, transfers to your phone when agent answers)';
+        const consoleUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io'}/expert/call/${session.id}`;
+        const entityList = entities.map(e =>
+          `  • ${e.entity_name} — ${e.tid_kind} ${e.tid} — Form ${e.form_type} — Years ${(e.years || []).join(', ')}`,
+        ).join('\n');
+        const description = [
+          `IRS Practitioner Priority Service call for ${entities.length} ${entities.length === 1 ? 'entity' : 'entities'}.`,
+          '',
+          `Mode: ${modeLabel}`,
+          resolvedCallbackPhone ? `Your phone: ${resolvedCallbackPhone}` : '',
+          `CAF: ${profile.caf_number}`,
+          '',
+          'Entities on this call:',
+          entityList,
+          '',
+          `Open the call console when it's time:`,
+          consoleUrl,
+        ].filter(Boolean).join('\n');
+
+        const expertEmail = user.email;
+        if (expertEmail) {
+          const ics = buildIcsInvite({
+            uid: callSessionUid(session.id),
+            sequence: 0,
+            method: 'REQUEST',
+            startsAt,
+            endsAt,
+            summary: `IRS PPS Call — ${entities.length} ${entities.length === 1 ? 'entity' : 'entities'}`,
+            description,
+            location: resolvedCallMode === 'ai_full' ? consoleUrl : (resolvedCallbackPhone || consoleUrl),
+            organizer: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
+            attendee: { email: expertEmail, name: profile.full_name || undefined },
+            url: consoleUrl,
+          });
+
+          // Plain HTML preamble — gives Gmail something to show even before
+          // the inline calendar card renders. Keep short — the calendar
+          // event itself carries the detail.
+          const htmlPreamble = `
+<div style="font-family: system-ui, -apple-system, sans-serif; color: #13213e;">
+  <h2 style="color:#13213e;margin:0 0 8px;">IRS PPS Call scheduled</h2>
+  <p style="margin:4px 0;">${startsAt.toLocaleString('en-US', { timeZone: timezone || 'America/Los_Angeles', dateStyle: 'full', timeStyle: 'short' })} (${timezone || 'America/Los_Angeles'})</p>
+  <p style="margin:4px 0;color:#666;">${entities.length} ${entities.length === 1 ? 'entity' : 'entities'} · Mode: ${modeLabel}</p>
+  <p style="margin:12px 0;"><a href="${consoleUrl}" style="color:#00C48C;font-weight:600;">Open the call console →</a></p>
+  <p style="margin:4px 0;color:#888;font-size:12px;">Add this to your calendar by accepting the invite below. We'll send a 15-minute reminder.</p>
+</div>`;
+
+          await sendCalendarInvite({
+            to: { email: expertEmail, name: profile.full_name || undefined },
+            subject: `IRS PPS Call — ${entities.length} ${entities.length === 1 ? 'entity' : 'entities'} on ${startsAt.toLocaleDateString('en-US', { timeZone: timezone || 'America/Los_Angeles', dateStyle: 'medium' })}`,
+            htmlPreamble,
+            ics,
+            method: 'REQUEST',
+            cc: ['matt@moderntax.io'],
+          });
+          console.log(`[irs-call/initiate] Calendar invite sent to ${expertEmail} for session ${session.id}`);
+        }
+      } catch (inviteErr) {
+        // Best-effort — never block the schedule on email failures.
+        console.error('[irs-call/initiate] Failed to send calendar invite:', inviteErr);
+      }
+
+      // INLINE-FIRE optimization: when the expert schedules a call within the
+      // next 5 minutes (e.g., "fire in 2 min"), don't wait for the next cron
+      // sweep — fire it immediately and update the response so the UI shows
+      // status='ringing' instead of 'scheduled'. Cron + inline-fire are race-
+      // safe because fireScheduledCall does an atomic status='scheduled'→
+      // 'initiating' lock before doing anything else.
+      const gapMs = new Date(scheduledFor).getTime() - Date.now();
+      const INLINE_THRESHOLD_MS = 5 * 60 * 1000;
+      if (gapMs <= INLINE_THRESHOLD_MS) {
+        try {
+          const { fireScheduledCall } = await import('@/lib/fire-call');
+          const r = await fireScheduledCall(adminSupabase as any, session.id);
+          console.log(`[irs-call/initiate] Inline-fired session ${session.id} (${Math.round(gapMs / 1000)}s gap) via ${r.provider}: ${r.call_id}`);
+          return NextResponse.json({
+            success: true,
+            sessionId: session.id,
+            entityCount: entities.length,
+            status: 'ringing',
+            firedInline: true,
+            callId: r.call_id,
+            provider: r.provider,
+            scheduledFor,
+            calendarInviteSent: !!user.email,
+          });
+        } catch (fireErr) {
+          // If inline fire fails, fall through to the normal scheduled response —
+          // the cron will retry on next sweep. This way an inline fire failure
+          // doesn't break the schedule confirmation.
+          console.error(`[irs-call/initiate] Inline fire failed, falling back to cron: ${fireErr instanceof Error ? fireErr.message : fireErr}`);
+        }
+      }
+
       return NextResponse.json({
         success: true,
         sessionId: session.id,
         entityCount: entities.length,
         status: 'scheduled',
         scheduledFor,
+        calendarInviteSent: !!user.email,
       });
     }
 
@@ -276,16 +395,19 @@ export async function POST(request: NextRequest) {
 
       console.log(`[irs-call/initiate] provider=${blandResponse.provider} call_id=${blandResponse.call_id}`);
 
-      // Update session with call ID. We still use the `bland_call_id` column
-      // for both providers — it's just a text field storing whichever id the
-      // active provider returned. Retell call_ids start with "call_" so we
-      // can detect provider downstream without a schema migration.
+      // Update session with call ID + from_number (MOD-211 retry chain).
+      // We still use the `bland_call_id` column for both providers — it's
+      // just a text field storing whichever id the active provider
+      // returned. Retell call_ids start with "call_" so we can detect
+      // provider downstream without a schema migration.
+      const sessionPatch: Record<string, unknown> = {
+        bland_call_id: blandResponse.call_id,
+        status: 'ringing',
+      };
+      if (blandResponse.from_number) sessionPatch.from_number = blandResponse.from_number;
       await adminSupabase
         .from('irs_call_sessions' as any)
-        .update({
-          bland_call_id: blandResponse.call_id,
-          status: 'ringing',
-        })
+        .update(sessionPatch)
         .eq('id', session.id);
 
       // Transition assignments to in_progress

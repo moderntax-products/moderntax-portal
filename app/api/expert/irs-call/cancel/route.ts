@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
 
     const { data: session } = await adminSupabase
       .from('irs_call_sessions' as any)
-      .select('id, expert_id, bland_call_id, status, initiated_at, cost_per_minute')
+      .select('id, expert_id, expert_name, bland_call_id, status, initiated_at, scheduled_for, scheduled_timezone, cost_per_minute')
       .eq('id', sessionId)
       .single() as { data: any; error: any };
 
@@ -50,9 +50,80 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
+    // Cancellable states fall into two buckets:
+    //   1. ACTIVE calls   — must stop the provider call, fetch transcript/recording.
+    //   2. SCHEDULED calls — no provider call yet, just mark cancelled + send
+    //                        CANCEL ics to release the expert's calendar block.
     const activeStatuses = ['initiating', 'ringing', 'navigating_ivr', 'on_hold', 'speaking_to_agent'];
-    if (!activeStatuses.includes(session.status)) {
-      return NextResponse.json({ error: 'Call is not active' }, { status: 400 });
+    const scheduledStatuses = ['scheduled'];
+    const isScheduledCancel = scheduledStatuses.includes(session.status);
+    if (!activeStatuses.includes(session.status) && !isScheduledCancel) {
+      return NextResponse.json({ error: 'Call is not active or scheduled' }, { status: 400 });
+    }
+
+    // Scheduled-call short-circuit: no Bland call to stop, no transcript to fetch.
+    // Just flip status + send the calendar cancellation, then return.
+    if (isScheduledCancel) {
+      await adminSupabase
+        .from('irs_call_sessions' as any)
+        .update({ status: 'cancelled', ended_at: new Date().toISOString() })
+        .eq('id', sessionId);
+
+      await adminSupabase
+        .from('irs_call_entities' as any)
+        .update({ outcome: 'skipped', outcome_notes: 'Scheduled call cancelled before firing' })
+        .eq('call_session_id', sessionId)
+        .is('outcome', null);
+
+      // Send CANCEL .ics so the expert's calendar event clears. Best-effort.
+      try {
+        const { buildIcsInvite, callSessionUid } = await import('@/lib/calendar-invite');
+        const { sendCalendarInvite } = await import('@/lib/sendgrid');
+        const { data: expert } = await adminSupabase
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', session.expert_id)
+          .single() as { data: { email: string; full_name: string | null } | null };
+
+        if (expert?.email && session.scheduled_for) {
+          const startsAt = new Date(session.scheduled_for);
+          const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000);
+          const ics = buildIcsInvite({
+            uid: callSessionUid(sessionId),
+            sequence: 1, // bump from the original REQUEST so clients honor the cancel
+            method: 'CANCEL',
+            startsAt,
+            endsAt,
+            summary: `[CANCELLED] IRS PPS Call`,
+            description: `This IRS PPS call was cancelled by ${session.expert_name || 'the expert'}. The calendar block has been released.`,
+            organizer: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
+            attendee: { email: expert.email, name: expert.full_name || undefined },
+          });
+
+          await sendCalendarInvite({
+            to: { email: expert.email, name: expert.full_name || undefined },
+            subject: `Cancelled — IRS PPS Call on ${startsAt.toLocaleDateString('en-US', { timeZone: session.scheduled_timezone || 'America/Los_Angeles', dateStyle: 'medium' })}`,
+            htmlPreamble: `<p>The IRS PPS call originally scheduled for ${startsAt.toLocaleString('en-US', { timeZone: session.scheduled_timezone || 'America/Los_Angeles', dateStyle: 'full', timeStyle: 'short' })} has been <strong>cancelled</strong>. Your calendar block has been released.</p>`,
+            ics,
+            method: 'CANCEL',
+            cc: ['matt@moderntax.io'],
+          });
+          console.log(`[irs-call/cancel] Sent CANCEL invite for session ${sessionId} to ${expert.email}`);
+        }
+      } catch (cancelInviteErr) {
+        console.error('[irs-call/cancel] Failed to send CANCEL invite:', cancelInviteErr);
+      }
+
+      await logAuditFromRequest(adminSupabase, request, {
+        action: 'irs_call_cancelled',
+        userId: user.id,
+        userEmail: user.email || '',
+        resourceType: 'irs_call_session',
+        resourceId: sessionId,
+        details: { kind: 'scheduled_cancel', scheduled_for: session.scheduled_for },
+      });
+
+      return NextResponse.json({ success: true, kind: 'scheduled_cancel' });
     }
 
     // Stop the AI call via whichever provider owns it (Bland or Retell).

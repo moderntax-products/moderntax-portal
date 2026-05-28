@@ -39,22 +39,28 @@ export async function GET(request: NextRequest) {
   if (!entityId) return NextResponse.json({ error: 'entityId required' }, { status: 400 });
 
   const kindParam = (request.nextUrl.searchParams.get('kind') || 'signed').toLowerCase();
-  const kind: 'signed' | 'expert_regenerated' = kindParam === 'expert_regenerated' ? 'expert_regenerated' : 'signed';
+  type Kind = 'signed' | 'expert_regenerated' | 'admin_uploaded';
+  const kind: Kind = kindParam === 'expert_regenerated'
+    ? 'expert_regenerated'
+    : kindParam === 'admin_uploaded'
+      ? 'admin_uploaded'
+      : 'signed';
 
   const admin = createAdminClient();
 
   // Two-phase select so this works even if expert_regenerated_8821_url
-  // column doesn't exist yet in older envs.
+  // and/or admin_uploaded_8821_url columns don't exist yet in older envs.
+  // Both columns share the same migration-pending fallback shape.
   const baseSelect = 'signed_8821_url, entity_name';
-  const fullSelect = `${baseSelect}, expert_regenerated_8821_url`;
+  const fullSelect = `${baseSelect}, expert_regenerated_8821_url, admin_uploaded_8821_url`;
 
   let entity: any = null;
   let lookupErr: any = null;
   {
     const r = await admin.from('request_entities').select(fullSelect).eq('id', entityId).single() as { data: any; error: any };
-    if (r.error && /expert_regenerated_8821_url|column .* does not exist|PGRST204/i.test(r.error.message || '')) {
+    if (r.error && /expert_regenerated_8821_url|admin_uploaded_8821_url|column .* does not exist|PGRST204/i.test(r.error.message || '')) {
       const r2 = await admin.from('request_entities').select(baseSelect).eq('id', entityId).single() as { data: any; error: any };
-      entity = r2.data ? { ...r2.data, expert_regenerated_8821_url: null } : null;
+      entity = r2.data ? { ...r2.data, expert_regenerated_8821_url: null, admin_uploaded_8821_url: null } : null;
       lookupErr = r2.error;
     } else {
       entity = r.data;
@@ -67,14 +73,18 @@ export async function GET(request: NextRequest) {
 
   const storagePath = kind === 'expert_regenerated'
     ? entity.expert_regenerated_8821_url
-    : entity.signed_8821_url;
+    : kind === 'admin_uploaded'
+      ? entity.admin_uploaded_8821_url
+      : entity.signed_8821_url;
 
   if (!storagePath) {
     return NextResponse.json(
       {
         error: kind === 'expert_regenerated'
           ? 'No expert-regenerated 8821 on this entity. Use the "Regenerate 8821 w/ expert creds" button first.'
-          : 'No signed 8821 uploaded yet.',
+          : kind === 'admin_uploaded'
+            ? 'No admin upload on this entity — the processor\'s original is the only PDF on file.'
+            : 'No signed 8821 uploaded yet.',
       },
       { status: 404 },
     );

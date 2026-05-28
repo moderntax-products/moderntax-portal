@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import type { ExpertPerformanceStats } from '@/lib/types';
@@ -13,7 +13,8 @@ export default function AdminExpertsPage() {
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
+  // Stable supabase client — see components/Header.tsx for bug history.
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const checkAuthAndFetch = async () => {

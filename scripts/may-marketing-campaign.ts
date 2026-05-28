@@ -37,7 +37,10 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
 const FROM_EMAIL = 'hello@moderntax.io';
 const FROM_NAME = 'Matt at ModernTax';
-const REPLY_TO = 'hello@moderntax.io';
+// Reply-to switched May 7 from hello@ to matt@ — week-1 results showed strong
+// engagement (54% open, 32% click) but 0 inbound replies. Goal: route engaged
+// readers to the founder's inbox directly so the conversation actually happens.
+const REPLY_TO = 'matt@moderntax.io';
 const PORTAL_SIGNUP = 'https://portal.moderntax.io/signup?utm_source=may2026&utm_medium=email&utm_campaign=lender_reactivation';
 const SUBSTACK_URL = 'https://moderntax.substack.com';
 const HUBSPOT_BOOKING = 'https://meetings.hubspot.com/matt-moderntax/moderntax-intro?uuid=d9ba5ab4-c3c0-4cf5-ac96-bffcf71e2d26';

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase';
 import type { Profile } from '@/lib/types';
@@ -14,7 +14,11 @@ export function Header({ clientName }: HeaderProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isExpert, setIsExpert] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const supabase = createClient();
+  // CRITICAL: stabilize the Supabase client across renders. createClient()
+  // returns a new object every call → unstable reference in [supabase] deps
+  // → useEffect re-fires every render → infinite re-fetch loop. Header is
+  // on every authenticated page so this bug FROZE every dashboard.
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     const fetchProfile = async () => {

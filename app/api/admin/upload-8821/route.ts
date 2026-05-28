@@ -176,9 +176,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Determine which column this PDF lands in. Driver: 2026-05-28 Matt —
+    // "system should never overwrite or replace uploaded 8821 from the
+    // processor with other additions from admin." Behavior:
+    //   - No 8821 on file at all → write to signed_8821_url (this becomes
+    //     the canonical / processor-visible PDF).
+    //   - signed_8821_url already populated (from processor CSV, processor
+    //     PDF intake, processor Processor8821Panel, or a prior admin upload
+    //     before a processor came in) → land in admin_uploaded_8821_url
+    //     instead. The original is preserved as-is.
+    // The processor-facing surfaces (Processor8821Panel, request page,
+    // CSV preview) only read signed_8821_url, so the admin replacement
+    // never leaks across the org boundary.
+    const writesAdminOverride = !!entity.signed_8821_url;
+
     // Upload file to Supabase storage
     const buffer = Buffer.from(await file.arrayBuffer());
-    const filePath = `8821/${entityId}/${Date.now()}-signed-8821.pdf`;
+    const suffix = writesAdminOverride ? 'admin-override.pdf' : 'signed-8821.pdf';
+    const filePath = `8821/${entityId}/${Date.now()}-${suffix}`;
 
     const { error: uploadError } = await adminSupabase.storage
       .from('uploads')
@@ -209,15 +224,22 @@ export async function POST(request: NextRequest) {
       .join(' ') || null;
     const extracted = await extractEmailsFrom8821(buffer, signerName);
 
-    // Update entity with signed_8821_url, years, form_type, and auto-advance status
-    const updateFields: Record<string, unknown> = {
-      signed_8821_url: filePath,
-      years,
-    };
-    if (formType) updateFields.form_type = formType;
-    if (['pending', 'submitted', '8821_sent'].includes(entity.status)) {
-      updateFields.status = '8821_signed';
+    // Update entity. File-pointer routing per the "never overwrite the
+    // processor's 8821" rule:
+    //   - writesAdminOverride = true → admin_uploaded_8821_url, keep
+    //     signed_8821_url + status untouched.
+    //   - else → signed_8821_url (first 8821 on file), advance status if
+    //     it's still in a pre-signature state.
+    const updateFields: Record<string, unknown> = { years };
+    if (writesAdminOverride) {
+      updateFields.admin_uploaded_8821_url = filePath;
+    } else {
+      updateFields.signed_8821_url = filePath;
+      if (['pending', 'submitted', '8821_sent'].includes(entity.status)) {
+        updateFields.status = '8821_signed';
+      }
     }
+    if (formType) updateFields.form_type = formType;
 
     // signer_email precedence (highest → lowest):
     //   1. Manually-entered borrowerEmail (always wins — processor visibility)
@@ -240,10 +262,27 @@ export async function POST(request: NextRequest) {
       signerEmailSource = 'extraction';
     }
 
-    const { error: updateError } = await adminSupabase
-      .from('request_entities')
-      .update(updateFields)
+    // Two-phase update to graceful-degrade if admin_uploaded_8821_url
+    // hasn't been migrated yet — first attempt includes the new column;
+    // on a "column does not exist" Postgrest error we retry without it
+    // and surface a clear message so the admin knows the migration is
+    // pending. Same pattern as expert_regenerated_8821_url.
+    let { error: updateError } = await (adminSupabase
+      .from('request_entities') as any)
+      .update(updateFields as any)
       .eq('id', entityId);
+
+    if (updateError && writesAdminOverride
+      && /admin_uploaded_8821_url|column .* does not exist|PGRST204/i.test(updateError.message || '')) {
+      console.warn('[upload-8821] admin_uploaded_8821_url column missing — migration pending. Falling back to NOT overwriting signed_8821_url.');
+      // Strip the new column from the payload + return a clear error so
+      // we never silently fall back to overwriting the processor's file.
+      delete (updateFields as any).admin_uploaded_8821_url;
+      return NextResponse.json({
+        error: 'Admin upload column not yet migrated. Run supabase/migration-admin-uploaded-8821.sql before uploading. The processor\'s original 8821 was not modified.',
+        migration_pending: true,
+      }, { status: 503 });
+    }
 
     if (updateError) {
       console.error('Failed to update entity:', updateError);
@@ -289,6 +328,11 @@ export async function POST(request: NextRequest) {
       success: true,
       filePath,
       entityName: entity.entity_name,
+      // True when this upload landed in admin_uploaded_8821_url instead of
+      // overwriting the processor's signed_8821_url. Surfaces in the UI so
+      // admin understands the original is preserved.
+      wroteAdminOverride: writesAdminOverride,
+      preservedOriginalSigned8821Url: writesAdminOverride ? entity.signed_8821_url : null,
       emailExtraction: {
         signerEmail: extracted.signerEmail,
         source: extracted.source,

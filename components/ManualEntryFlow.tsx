@@ -142,6 +142,21 @@ export function ManualEntryFlow() {
       const { error: entError } = await supabase.from('request_entities').insert(entitiesData);
       if (entError) { setError('Failed to create entities'); return; }
 
+      // Fire the intake-note autopost so the expert sees the per-entity
+      // instructions without admin relay. Server-side endpoint looks up
+      // the entities, applies the client's instruction template, and
+      // writes one note per entity authored by the current processor.
+      // Fire-and-forget — failures shouldn't block the intake.
+      try {
+        await fetch('/api/intake/post-intake-notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ request_id: req.id, notes: notes || null }),
+        });
+      } catch (noteErr) {
+        console.warn('[manual-entry] intake-note autopost failed (non-fatal):', noteErr);
+      }
+
       const etCount = entities.filter(ent => ent.entityTranscript).length;
       if (etCount > 0) {
         try {

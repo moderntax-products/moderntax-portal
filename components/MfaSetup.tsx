@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase';
 
 interface MfaSetupProps {
@@ -20,7 +20,8 @@ export function MfaSetup({ initialState, factorId }: MfaSetupProps) {
   const [loading, setLoading] = useState(false);
   const [enrolled, setEnrolled] = useState(initialState === 'enrolled');
 
-  const supabase = createClient();
+  // Stable supabase client — see components/Header.tsx for bug history.
+  const supabase = useMemo(() => createClient(), []);
 
   // Step 1: Enroll — generate QR code
   const handleEnroll = useCallback(async () => {

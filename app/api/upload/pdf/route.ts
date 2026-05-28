@@ -5,6 +5,7 @@ import { logAuditFromRequest } from '@/lib/audit';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { resolveFormType } from '@/lib/form-type-validation';
+import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 
 export async function POST(request: NextRequest) {
   try {
@@ -199,6 +200,39 @@ export async function POST(request: NextRequest) {
       } else {
         entityCount++;
       }
+    }
+
+    // Auto-post the intake instruction note on each created entity so
+    // the expert sees what was requested directly — no admin relay.
+    // Driver: 2026-05-27 Matt "no admin back-and-forth" directive. PDF
+    // intake usually creates a single entity per upload, but the helper
+    // is per-entity so iterating handles the multi-PDF case too.
+    try {
+      const noteAdmin = createAdminClient();
+      const { data: createdForNotes } = await noteAdmin
+        .from('request_entities')
+        .select('id, entity_name, form_type, years')
+        .eq('request_id', req.id) as { data: any[] | null };
+      if (createdForNotes && createdForNotes.length > 0) {
+        const requesterName = profile.full_name || user.email || 'Processor';
+        const requesterRole = (['admin', 'expert', 'processor', 'manager'] as const)
+          .includes((profile.role as any)) ? (profile.role as any) : 'processor';
+        await Promise.allSettled(createdForNotes.map((e: any) =>
+          autoPostIntakeNote(noteAdmin, {
+            entityId: e.id,
+            entityName: e.entity_name,
+            formType: e.form_type,
+            years: e.years,
+            requesterUserId: user.id,
+            requesterName,
+            requesterRole,
+            clientId: profile.client_id!,
+            freeTextNotes: notes,
+          }),
+        ));
+      }
+    } catch (noteErr) {
+      console.warn('[pdf-upload] intake-note autopost failed (non-fatal):', noteErr);
     }
 
     // Notify all admins about the new request in real-time

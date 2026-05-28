@@ -33,6 +33,11 @@ interface ExpertSummary {
     grossPay: number;
   };
   sla_met_pct: number | null;
+  /** Number of currently-open clock-in sessions (no end_at). Admin should
+   *  prompt the expert to close them before period-close so the hours
+   *  actually count. Auto-closer cron handles >12h leftovers. */
+  open_session_count?: number;
+  open_session_oldest_start?: string | null;
   existing_period: {
     id: string;
     status: string;
@@ -217,6 +222,21 @@ export function AdminPayrollClient() {
                   <Stat label="SLA met" value={fmtPct(ex.sla_met_pct)} accent={(ex.sla_met_pct ?? 100) >= 90 ? 'emerald' : 'amber'} />
                   <Stat label="Gross" value={fmt$(ex.live_totals.grossPay)} accent="emerald" />
                 </div>
+
+                {/* Open-session warning. Admin should ping the expert to clock
+                    out before close-period; otherwise those hours go unpaid. */}
+                {(ex.open_session_count || 0) > 0 && (
+                  <div className="mb-3 rounded-md bg-amber-50 border border-amber-300 px-3 py-2 text-xs text-amber-900 flex items-start gap-2">
+                    <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>
+                      <strong>{ex.open_session_count} open clock-in{ex.open_session_count === 1 ? '' : 's'}</strong> — these hours won&rsquo;t count until the expert clocks out
+                      {ex.open_session_oldest_start && ` (oldest: ${new Date(ex.open_session_oldest_start).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })})`}.
+                      Auto-closer fires daily at 7 AM PT for sessions &gt;12h.
+                    </span>
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex flex-wrap items-center gap-3 border-t border-gray-100 pt-3">

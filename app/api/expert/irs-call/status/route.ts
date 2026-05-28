@@ -70,6 +70,8 @@ export async function GET(request: NextRequest) {
         };
 
         // Completion fallback — webhook SHOULD handle this, but it's unreliable.
+        // Also: this path is the ONLY completion handler for Retell calls
+        // (Retell webhooks aren't wired in this codebase yet — see MOD-211).
         if (blandStatus.completed && session.status !== 'completed') {
           const elapsedMinutes = blandStatus.call_length || 0;
           await adminSupabase
@@ -84,6 +86,23 @@ export async function GET(request: NextRequest) {
             })
             .eq('id', session.id);
           session.status = 'completed';
+
+          // MOD-211: fire the auto-retry coordinator just like the Bland
+          // webhook does. This is the Retell completion path. Wrapped in
+          // try/catch so a coordinator failure doesn't break the status
+          // poll. Idempotency: handleCompletedCall is safe to call on a
+          // session whose chain already has a terminal_state — it'll
+          // return 'not_retryable' or 'terminal_success' without re-firing.
+          try {
+            const { handleCompletedCall } = await import('@/lib/irs-call-retry');
+            const retryResult = await handleCompletedCall(session.id);
+            console.log(
+              `[irs-call/status] retry coordinator (Retell path): outcome=${retryResult.outcome} action=${retryResult.action}` +
+              (retryResult.newSessionId ? ` newSession=${retryResult.newSessionId}` : ''),
+            );
+          } catch (retryErr) {
+            console.error('[irs-call/status] auto-retry coordinator failed (non-blocking):', retryErr);
+          }
         }
 
         // Intermediate-status reconciliation — infer live state from transcript

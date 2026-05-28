@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase';
 import Link from 'next/link';
 
@@ -11,7 +11,8 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const supabase = createClient();
+  // Stable supabase client — see components/Header.tsx for bug history.
+  const supabase = useMemo(() => createClient(), []);
 
   const verifyToken = useCallback(async () => {
     const searchParams = new URLSearchParams(window.location.search);

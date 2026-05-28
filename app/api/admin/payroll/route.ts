@@ -136,9 +136,19 @@ export async function GET(request: NextRequest) {
 
     let totalHours = 0;
     let totalTins = 0;
+    let openSessionCount = 0;
+    let openSessionOldestStart: string | null = null;
     for (const l of expertLogs) {
-      const h = l.end_at ? Number(l.hours_worked) || 0 : 0; // open sessions skipped — admin closes after expert clocks out
-      totalHours += h;
+      if (!l.end_at) {
+        // Open session — counted in a separate "needs attention" bucket so
+        // the admin sees them before close-period, instead of silently zero.
+        openSessionCount++;
+        if (!openSessionOldestStart || l.start_at < openSessionOldestStart) {
+          openSessionOldestStart = l.start_at;
+        }
+        continue;
+      }
+      totalHours += Number(l.hours_worked) || 0;
       totalTins += Number(l.tins_completed) || 0;
     }
     const totals = computeSessionTotals(totalHours, totalTins, hourlyRate, targetRate);
@@ -156,6 +166,12 @@ export async function GET(request: NextRequest) {
       log_count: expertLogs.length,
       live_totals: totals,
       sla_met_pct: slaMetPct,
+      // Open-session warning fields — admin should resolve these before
+      // closing the period, otherwise the hours go uncounted. The
+      // expert-stale-session-cleanup cron auto-closes anything >12h;
+      // anything still open is a same-day shift in progress.
+      open_session_count: openSessionCount,
+      open_session_oldest_start: openSessionOldestStart,
       existing_period: existingPeriod
         ? {
             id: existingPeriod.id,

@@ -79,8 +79,29 @@ export function CsvUploadFlow() {
   // intent from this client's invoice via the auto-invoice cron toggle,
   // but stripping it from the UI prevents processor confusion.
   const [disableMonitoring, setDisableMonitoring] = useState(false);
+  // Per-client toggle (2026-05-27 — Centerstone flat-rate contract):
+  // when client.disable_8821_surcharge = true, the processor MUST bundle
+  // a pre-signed 8821 PDF for every entity (max 15 per loan). Drives both
+  // the "required" badge on the PDF dropzone and the client-side enforce.
+  const [require8821Pdfs, setRequire8821Pdfs] = useState(false);
+  // Up to 15 pre-signed 8821 PDFs bundled with the CSV. Posted as
+  // signed_8821_0..14 form fields; server vision-extracts the TIN and
+  // matches each PDF to the entity in this submission.
+  const [presigned8821Pdfs, setPresigned8821Pdfs] = useState<File[]>([]);
+  const pdfRef = useRef<HTMLInputElement>(null);
   const supabaseClient = useMemo(() => createClient(), []);
   useEffect(() => {
+    // Dev-only preview override: ?demo=1 forces the "required 8821 PDF"
+    // amber styling so we can show the Centerstone flat-rate flow without
+    // having a Centerstone processor login. Guarded behind NODE_ENV !==
+    // 'production' so it can't be triggered by a partner against prod.
+    if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('demo') === '1') {
+        setRequire8821Pdfs(true);
+        setDisableMonitoring(true);
+      }
+    }
     (async () => {
       const { data: { user } } = await supabaseClient.auth.getUser();
       if (!user) return;
@@ -92,10 +113,11 @@ export function CsvUploadFlow() {
       if (!profile?.client_id) return;
       const { data: client } = await supabaseClient
         .from('clients')
-        .select('disable_monitoring')
+        .select('disable_monitoring, disable_8821_surcharge')
         .eq('id', profile.client_id)
-        .single() as { data: { disable_monitoring: boolean | null } | null };
+        .single() as { data: { disable_monitoring: boolean | null; disable_8821_surcharge: boolean | null } | null };
       if (client?.disable_monitoring) setDisableMonitoring(true);
+      if (client?.disable_8821_surcharge) setRequire8821Pdfs(true);
     })().catch(() => { /* silent — column missing pre-migration */ });
   }, [supabaseClient]);
   const [result, setResult] = useState<{
@@ -116,6 +138,13 @@ export function CsvUploadFlow() {
       corrected_form: string;
       reason: string;
     }>;
+    // Pre-signed 8821 bulk-attach summary (Centerstone flat-rate flow).
+    bulk_8821?: {
+      attached: Array<{ entityId: string; entityName: string; filename: string; storagePath: string }>;
+      unmatched_pdfs: Array<{ filename: string; extractedTid: string | null; reason: string }>;
+      unmatched_entities: Array<{ id: string; name: string; tid: string | null }>;
+      errors: Array<{ filename?: string; entityId?: string; error: string }>;
+    };
   } | null>(null);
 
   const normalizeHeader = (h: string) => h.trim().toLowerCase().replace(/\s+/g, '_');
@@ -332,6 +361,18 @@ export function CsvUploadFlow() {
     if (!file) { setError('Please select a file'); return; }
     if (!loanNumber.trim()) { setError('Loan number is required'); return; }
 
+    // Flat-rate clients (Centerstone): a pre-signed 8821 PDF is required
+    // per non-pre-signed-from-CSV entity. The server enforces this too
+    // — we mirror it here so the processor doesn't waste an upload.
+    if (require8821Pdfs && presigned8821Pdfs.length === 0) {
+      setError('This client requires a pre-signed 8821 PDF per entity. Attach at least one PDF below.');
+      return;
+    }
+    if (presigned8821Pdfs.length > 15) {
+      setError('Maximum 15 pre-signed 8821 PDFs per upload.');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
@@ -340,6 +381,12 @@ export function CsvUploadFlow() {
       formData.append('file', file);
       formData.append('loan_number', loanNumber.trim());
       if (notes) formData.append('notes', notes);
+
+      // Pre-signed 8821 PDFs — server reads signed_8821_0..14 and runs
+      // vision extraction to match each PDF to the right entity.
+      presigned8821Pdfs.slice(0, 15).forEach((pdf, i) => {
+        formData.append(`signed_8821_${i}`, pdf, pdf.name);
+      });
 
       if (previewEntities) {
         // Three add-on selection arrays — server stores them as flags on each
@@ -367,7 +414,15 @@ export function CsvUploadFlow() {
         formData.append('form_type_overrides', JSON.stringify(formTypeOverrides));
       }
 
-      const res = await fetch('/api/upload/csv', { method: 'POST', body: formData });
+      // Dev-only demo mode: ?demo=1 routes to a dry-run endpoint that
+      // mocks the vision call (TIN read from filename), skips DB writes,
+      // and returns the same JSON shape. Used to show the full UI flow
+      // without burning Anthropic spend or polluting prod data.
+      const isDemo = process.env.NODE_ENV !== 'production'
+        && typeof window !== 'undefined'
+        && new URLSearchParams(window.location.search).get('demo') === '1';
+      const endpoint = isDemo ? '/api/dev/demo-csv-upload' : '/api/upload/csv';
+      const res = await fetch(endpoint, { method: 'POST', body: formData });
       const data = await res.json();
 
       if (!res.ok) {
@@ -413,6 +468,53 @@ export function CsvUploadFlow() {
           </ul>
         </div>
 
+        {/* Bulk 8821 pre-signed PDF summary — Centerstone flat-rate flow.
+            Server vision-matched each PDF to an entity by extracted TIN.
+            Shows attached count, plus any unmatched PDFs/entities so the
+            processor can chase down a fix (re-upload missing PDF, etc). */}
+        {result.bulk_8821 && (
+          <div className={`rounded-lg p-4 mb-6 text-left max-w-2xl mx-auto border ${
+            (result.bulk_8821.unmatched_entities.length === 0 && result.bulk_8821.unmatched_pdfs.length === 0)
+              ? 'bg-emerald-50 border-emerald-200'
+              : 'bg-amber-50 border-amber-200'
+          }`}>
+            <p className="text-sm font-semibold text-emerald-900 mb-2">
+              Pre-signed 8821s attached: <strong>{result.bulk_8821.attached.length}</strong>
+            </p>
+            {result.bulk_8821.attached.length > 0 && (
+              <ul className="text-xs text-emerald-900 space-y-0.5 mb-3 max-h-40 overflow-y-auto pr-1">
+                {result.bulk_8821.attached.slice(0, 15).map((a, i) => (
+                  <li key={i} className="font-mono">{a.entityName} ← {a.filename}</li>
+                ))}
+              </ul>
+            )}
+            {result.bulk_8821.unmatched_pdfs.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-amber-900 mb-1">
+                  PDFs that didn&rsquo;t match any entity ({result.bulk_8821.unmatched_pdfs.length}):
+                </p>
+                <ul className="text-xs text-amber-900 space-y-0.5 mb-3 max-h-32 overflow-y-auto pr-1">
+                  {result.bulk_8821.unmatched_pdfs.map((u, i) => (
+                    <li key={i} className="font-mono">{u.filename} — {u.reason}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {result.bulk_8821.unmatched_entities.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-amber-900 mb-1">
+                  Entities still missing a signed 8821 ({result.bulk_8821.unmatched_entities.length}):
+                </p>
+                <ul className="text-xs text-amber-900 space-y-0.5 max-h-32 overflow-y-auto pr-1">
+                  {result.bulk_8821.unmatched_entities.map((e, i) => (
+                    <li key={i} className="font-mono">{e.name}{e.tid ? ` (TID ${e.tid})` : ''}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Form-type auto-correction warning — surfaces server-side fixes for the
             "1040 on EIN" bug class. The upload still succeeded; we just want the
             processor to see what we changed so they can fix their CSV mapping
@@ -455,7 +557,9 @@ export function CsvUploadFlow() {
               setLoanNumber('');
               setNotes('');
               setPreviewEntities(null);
+              setPresigned8821Pdfs([]);
               if (fileRef.current) fileRef.current.value = '';
+              if (pdfRef.current) pdfRef.current.value = '';
             }}
             className="px-6 py-3 border border-gray-300 rounded-lg font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
           >
@@ -564,6 +668,67 @@ export function CsvUploadFlow() {
             </div>
           )}
         </label>
+
+        {/* Pre-signed 8821 PDFs — flat-rate client flow (Centerstone).
+            Required for clients with disable_8821_surcharge=true; optional
+            otherwise. Server vision-extracts the TIN from each PDF and
+            matches it to the right entity. Max 15 per loan. */}
+        <div className="mt-6">
+          <label htmlFor="bulk-8821-input"
+            className={`block border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+              presigned8821Pdfs.length > 0
+                ? 'border-mt-green bg-green-50'
+                : require8821Pdfs
+                  ? 'border-amber-400 bg-amber-50 hover:border-amber-500'
+                  : 'border-gray-300 hover:border-gray-400'
+            }`}>
+            <input
+              id="bulk-8821-input"
+              ref={pdfRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              multiple
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+                setPresigned8821Pdfs(files.slice(0, 15));
+              }}
+              className="hidden"
+            />
+            {presigned8821Pdfs.length > 0 ? (
+              <div>
+                <svg className="w-10 h-10 text-mt-green mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="text-mt-dark font-semibold text-sm">
+                  {presigned8821Pdfs.length} pre-signed 8821 PDF{presigned8821Pdfs.length === 1 ? '' : 's'} selected
+                </p>
+                <p className="text-gray-500 text-xs mt-1">Click to change</p>
+                <ul className="text-xs text-gray-700 mt-3 text-left inline-block max-h-24 overflow-y-auto pr-1">
+                  {presigned8821Pdfs.map((f, i) => (
+                    <li key={i} className="font-mono">{f.name} <span className="text-gray-400">({(f.size / 1024).toFixed(0)} KB)</span></li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div>
+                <svg className="w-10 h-10 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className={`font-medium text-sm ${require8821Pdfs ? 'text-amber-900' : 'text-gray-600'}`}>
+                  {require8821Pdfs
+                    ? 'Attach pre-signed 8821 PDFs (required) — one per entity, up to 15'
+                    : 'Attach pre-signed 8821 PDFs (optional) — bypass e-signature for ready signatures'}
+                </p>
+                <p className="text-gray-400 text-xs mt-1">PDF only. We&rsquo;ll match each PDF to the right entity by extracted TIN.</p>
+              </div>
+            )}
+          </label>
+          {require8821Pdfs && (
+            <p className="text-xs text-amber-800 mt-2">
+              Your client&rsquo;s contract requires a pre-signed 8821 for every entity (no e-signature surcharge). If a PDF or entity is missing, the upload will be rejected.
+            </p>
+          )}
+        </div>
 
         <div className="mt-6">
           <label className="block text-sm font-semibold text-mt-dark mb-2">

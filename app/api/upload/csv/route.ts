@@ -4,6 +4,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { send8821WithFallback } from '@/lib/send-8821-with-fallback';
 import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
+import { bulkAttachPresigned8821s, type BulkPdf } from '@/lib/bulk-8821-attach';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
@@ -198,13 +199,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No client associated' }, { status: 400 });
     }
 
-    // Get client name for notifications
+    // Get client name + 8821 surcharge toggle for notifications + bulk
+    // 8821 enforcement (Centerstone-style flat-rate contracts REQUIRE
+    // a pre-signed 8821 per entity in the CSV upload — see below).
     const { data: clientRecord } = await supabase
       .from('clients')
-      .select('name')
+      .select('name, disable_8821_surcharge')
       .eq('id', profile.client_id)
-      .single() as { data: { name: string } | null; error: any };
+      .single() as { data: { name: string; disable_8821_surcharge: boolean | null } | null; error: any };
     const clientName = clientRecord?.name || 'Unknown';
+    const requirePresigned8821 = !!clientRecord?.disable_8821_surcharge;
 
     // Order gate — block CSV intake if the client has used up their 3 free
     // trial pulls AND has no payment method on file. Returns 402 Payment
@@ -225,6 +229,20 @@ export async function POST(request: NextRequest) {
     const cashFlowPackIndicesRaw = formData.get('cash_flow_pack_indices') as string | null;
     const skipMonitoringIndicesRaw = formData.get('skip_monitoring_indices') as string | null;
     const formTypeOverridesRaw = formData.get('form_type_overrides') as string | null;
+
+    // Pre-signed 8821 PDFs bundled with the CSV. Field names:
+    //   signed_8821_0, signed_8821_1, ... signed_8821_14 (max 15 per
+    //   loan per Matt 2026-05-27 directive). Buffered here so we can
+    //   bulk-match by TID after entity creation. Driver: Centerstone
+    //   flat-rate contract — they upload pre-signed 8821s themselves
+    //   instead of going through Dropbox Sign + the $10 surcharge.
+    const presigned8821Pdfs: BulkPdf[] = [];
+    for (let i = 0; i < 15; i++) {
+      const f = formData.get(`signed_8821_${i}`) as File | null;
+      if (!f) continue;
+      const buf = Buffer.from(await f.arrayBuffer());
+      presigned8821Pdfs.push({ filename: f.name, buffer: buf });
+    }
 
     // Parse the three add-on selection arrays. Each is a JSON array of row
     // indices (0-based, matching the CSV preview). Server stores per-entity
@@ -675,21 +693,89 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ------------------------------------------------------------------
+    // Bulk-attach pre-signed 8821 PDFs (Centerstone flat-rate flow).
+    //
+    // Driver: 2026-05-27 Matt + Mathew Paek — Centerstone is going
+    // back to flat-rate-only by uploading pre-signed 8821s themselves
+    // (no Dropbox Sign surcharge). Processor uploads CSV + up to 15
+    // signed 8821 PDFs; we vision-extract the TIN from each PDF and
+    // attach it to the matching entity. For clients with
+    // disable_8821_surcharge = true we ENFORCE that every non-completed
+    // entity has a matching PDF (all-or-nothing); other clients can
+    // mix pre-signed + Dropbox Sign at will.
+    // ------------------------------------------------------------------
+    let bulkAttachReport: Awaited<ReturnType<typeof bulkAttachPresigned8821s>> | null = null;
+    if (presigned8821Pdfs.length > 0) {
+      try {
+        const { data: entitiesForBulk } = await admin
+          .from('request_entities')
+          .select('id, entity_name, tid, tid_kind, status, signed_8821_url')
+          .eq('request_id', req.id) as { data: any[] | null };
+
+        if (entitiesForBulk && entitiesForBulk.length > 0) {
+          bulkAttachReport = await bulkAttachPresigned8821s(
+            admin,
+            entitiesForBulk as any,
+            presigned8821Pdfs,
+          );
+          console.log(`[csv-upload] bulk-8821: attached=${bulkAttachReport.attached.length} unmatchedPdfs=${bulkAttachReport.unmatchedPdfs.length} unmatchedEntities=${bulkAttachReport.unmatchedEntities.length} errors=${bulkAttachReport.errors.length}`);
+
+          // Hard-fail Centerstone-style flat-rate clients if anything
+          // is missing — keeps the contract guarantee that processors
+          // can't accidentally trigger Dropbox Sign + the $10 surcharge.
+          if (requirePresigned8821) {
+            const stillNeedSignature = bulkAttachReport.unmatchedEntities;
+            if (stillNeedSignature.length > 0 || bulkAttachReport.unmatchedPdfs.length > 0) {
+              return NextResponse.json({
+                error: 'Pre-signed 8821 required for every entity (flat-rate client).',
+                missing_entities: stillNeedSignature.map((e) => ({ id: e.id, name: e.entity_name, tid: e.tid })),
+                unmatched_pdfs: bulkAttachReport.unmatchedPdfs,
+                attached: bulkAttachReport.attached,
+                bulk_errors: bulkAttachReport.errors,
+                request_id: req.id,
+              }, { status: 400 });
+            }
+          }
+        }
+      } catch (bulkErr) {
+        console.error('[csv-upload] bulk-8821 attach error:', bulkErr);
+        if (requirePresigned8821) {
+          return NextResponse.json({
+            error: 'Pre-signed 8821 processing failed for flat-rate client.',
+            detail: (bulkErr as any)?.message || String(bulkErr),
+            request_id: req.id,
+          }, { status: 500 });
+        }
+      }
+    } else if (requirePresigned8821) {
+      // Flat-rate client uploaded a CSV with no PDFs at all.
+      return NextResponse.json({
+        error: 'Pre-signed 8821 PDFs required for this client. Attach one signed 8821 per entity (max 15).',
+        request_id: req.id,
+      }, { status: 400 });
+    }
+
     // Auto-send 8821 via Dropbox Sign for entities with signer email (and no existing signature)
     // Skip entities that were auto-completed via repeat entity intelligence
+    // OR that already have a signed_8821_url from the bulk-attach pass above.
     if (!entError) {
       try {
         const { data: createdEntities } = await admin
           .from('request_entities')
-          .select('id, entity_name, form_type, tid, tid_kind, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, signature_id, status')
+          .select('id, entity_name, form_type, tid, tid_kind, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, signature_id, signed_8821_url, status')
           .eq('request_id', req.id) as { data: any[] | null; error: any };
 
         if (createdEntities) {
           for (const entity of createdEntities) {
             // Skip if already has a signature_id (pre-signed from CSV)
             if (entity.signature_id) continue;
+            // Skip if a pre-signed PDF was just attached (bulk-attach pass)
+            if (entity.signed_8821_url) continue;
             // Skip if already completed (repeat entity auto-attached transcripts)
             if (entity.status === 'completed') continue;
+            // Skip already-signed (defensive)
+            if (entity.status === '8821_signed') continue;
             // Skip employment entities
             if (entity.form_type === 'W2_INCOME') continue;
             // Must have signer email
@@ -842,6 +928,18 @@ export async function POST(request: NextRequest) {
       entity_transcripts_ordered: entityTranscriptIndices.length || undefined,
       cash_flow_packs_ordered: cashFlowPackIndices.length || undefined,
       monitoring_enrollments_skipped: skipMonitoringIndices.length || undefined,
+      // Pre-signed 8821 bulk-attach summary (Centerstone flat-rate flow).
+      // Present when the processor uploaded one or more PDFs alongside
+      // the CSV — surfaces matches + any unmatched PDFs/entities so the
+      // success screen can call them out for follow-up.
+      bulk_8821: bulkAttachReport ? {
+        attached: bulkAttachReport.attached,
+        unmatched_pdfs: bulkAttachReport.unmatchedPdfs,
+        unmatched_entities: bulkAttachReport.unmatchedEntities.map((e) => ({
+          id: e.id, name: e.entity_name, tid: e.tid,
+        })),
+        errors: bulkAttachReport.errors,
+      } : undefined,
     });
   } catch (err) {
     console.error('CSV upload error:', err);

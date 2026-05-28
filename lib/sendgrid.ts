@@ -1787,7 +1787,15 @@ export async function sendProcessorBacklogNotification(
     const ageColor = req.ageDays >= 7 ? '#dc2626' : req.ageDays >= 3 ? '#d97706' : '#059669';
     const entityLines = req.entities.map((e) => {
       const blockerColor = blockerColors[e.blocker] || '#6b7280';
-      const expertLabel = e.expertName || '<span style="color: #dc2626; font-weight: 600;">Unassigned</span>';
+      // Processor-facing email: anonymize the individual expert. The
+      // processor only sees the ModernTax org as a single counterparty.
+      // Driver: 2026-05-28 Matt — "Notes from experts should not include
+      // expert name on any processor/manager-facing communications."
+      // We still distinguish assigned vs unassigned because that's a
+      // meaningful state for the processor to know about.
+      const expertLabel = e.expertName
+        ? 'ModernTax'
+        : '<span style="color: #dc2626; font-weight: 600;">Unassigned</span>';
       return `<tr style="border-bottom: 1px solid #f3f4f6;">
         <td style="padding: 6px 12px; font-size: 13px;">${e.name}</td>
         <td style="padding: 6px 12px; font-size: 12px;"><span style="background: ${blockerColor}15; color: ${blockerColor}; padding: 2px 8px; border-radius: 12px; font-weight: 600;">${statusLabels[e.status] || e.status}</span></td>
