@@ -44,11 +44,38 @@ export default function EmailIntakePage() {
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<File | null>(null);
 
-  // Mode: 'csv' (existing) | 'manual' (no CSV, entities entered inline + free-form
-  // attachments like loan notes or third-party 8821s). Driver: Enterprise Bank
-  // 2026-05-20 — first trial request arrived as a secure email with the loan
-  // note + a pre-signed 8821 for another vendor; no CSV in sight.
-  const [mode, setMode] = useState<'csv' | 'manual'>('csv');
+  // Mode:
+  //   'csv'     - existing CSV / Excel upload path
+  //   'manual'  - entities entered inline + free-form attachments
+  //               (Enterprise Bank 2026-05-20: secure email + 3rd-party 8821)
+  //   'reorder' - clone a prior entity into a fresh request reusing the
+  //               existing 8821 (2026-05-28: Soobin's Peter Geyen email — admin
+  //               shouldn't need a new CSV + 8821 just to re-pull years)
+  const [mode, setMode] = useState<'csv' | 'manual' | 'reorder'>('csv');
+
+  // Reorder-mode state
+  interface HistoryItem {
+    entity_id: string;
+    entity_name: string;
+    tid: string;
+    tid_masked: string;
+    tid_kind: string;
+    form_type: string;
+    latest_loan_number: string | null;
+    latest_status: string;
+    latest_created_at: string;
+    years_previously_pulled: string[];
+    prior_request_count: number;
+    transcript_count: number;
+    signed_8821_url: string | null;
+    signature_age_days: number | null;
+    signature_still_valid: boolean;
+    signed_8821_valid_window_days: number;
+  }
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [reorderEntityId, setReorderEntityId] = useState('');
+  const [reorderYears, setReorderYears] = useState<string[]>([]);
 
   // Manual-mode entity rows
   type ManualEntity = {
@@ -148,6 +175,37 @@ export default function EmailIntakePage() {
     init();
   }, [router]);
 
+  // Reorder mode: when admin picks a processor (selectedEmail) and we're
+  // in reorder mode, fetch that processor's historical entities so the
+  // dropdown can populate. Re-fires on processor change. Clears the
+  // current reorder selection so we don't end up with a stale entity id
+  // pointing at the wrong processor.
+  useEffect(() => {
+    if (mode !== 'reorder') return;
+    setReorderEntityId('');
+    setReorderYears([]);
+    setHistoryItems([]);
+    if (!selectedEmail) return;
+    const processor = users.find(u => u.email === selectedEmail);
+    if (!processor) return;
+    setHistoryLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/processor-entity-history?processor_id=${encodeURIComponent(processor.id)}`, { credentials: 'include' });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'Failed to load entity history');
+          return;
+        }
+        setHistoryItems(data.items || []);
+      } catch (err: any) {
+        setError(err?.message || 'Network error loading history');
+      } finally {
+        setHistoryLoading(false);
+      }
+    })();
+  }, [mode, selectedEmail, users]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
@@ -199,8 +257,58 @@ export default function EmailIntakePage() {
         return;
       }
     }
+    if (mode === 'reorder') {
+      if (!reorderEntityId) { setError('Pick an entity from the history dropdown'); return; }
+      if (reorderYears.length === 0) { setError('Pick at least one year to re-pull'); return; }
+    }
 
     setSubmitting(true);
+
+    // Reorder mode short-circuits the normal email-intake JSON shape and
+    // hits its own endpoint. Driver: 2026-05-28 Matt — reorder lets us
+    // satisfy a "re-pull 2024 for Peter Geyen" email in one click without
+    // making the processor re-upload a CSV + new 8821.
+    if (mode === 'reorder') {
+      try {
+        const processor = users.find(u => u.email === selectedEmail);
+        if (!processor) { setError('Selected user not found in profile cache'); setSubmitting(false); return; }
+        const res = await fetch('/api/admin/reorder-from-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            processor_id: processor.id,
+            source_entity_id: reorderEntityId,
+            new_years: reorderYears,
+            loan_number: loanNumber.trim(),
+            notes: notes.trim() || undefined,
+            reuse_8821: true,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setError(data.error || 'Reorder failed'); return; }
+        const head = historyItems.find(h => h.entity_id === reorderEntityId);
+        setResult({
+          success: true,
+          request_id: data.request_id,
+          batch_id: '',
+          entities_created: 1,
+          loan_number: data.loan_number,
+          on_behalf_of: {
+            email: processor.email,
+            name: processor.full_name,
+            role: processor.role,
+            client: processor.client_name,
+          },
+          message: `Reorder created for ${head?.entity_name || 'entity'} — years ${data.new_years.join(', ')}. ${data.reused_8821 ? 'Existing 8821 reused (no new signature needed).' : '8821 still needed — entity is in pending state.'}`,
+        });
+      } catch (err: any) {
+        setError(err?.message || 'Reorder failed');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     try {
       const formData = new FormData();
@@ -376,6 +484,18 @@ export default function EmailIntakePage() {
                   }`}
                 >
                   Manual entry (no CSV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('reorder')}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    mode === 'reorder'
+                      ? 'border-[#00C48C] text-[#0A1929]'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                  title="Re-pull an existing entity for new years. Reuses the prior 8821 if it's still within the 120-day validity window — no CSV or new signature needed."
+                >
+                  Reorder from history
                 </button>
               </div>
 
@@ -616,6 +736,84 @@ export default function EmailIntakePage() {
                       </div>
                     </div>
                   ))}
+                </div>
+                )}
+
+                {/* Reorder-from-history mode */}
+                {mode === 'reorder' && (
+                <div className="space-y-4 border border-gray-200 rounded-lg p-4 bg-gray-50/30">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                      Historical entity <span className="text-red-500">*</span>
+                    </label>
+                    {!selectedEmail ? (
+                      <p className="text-xs text-gray-500 italic">Pick a processor above to load their history.</p>
+                    ) : historyLoading ? (
+                      <p className="text-xs text-gray-500 italic">Loading history…</p>
+                    ) : historyItems.length === 0 ? (
+                      <p className="text-xs text-amber-700">No prior entities found for this processor.</p>
+                    ) : (
+                      <select
+                        value={reorderEntityId}
+                        onChange={(e) => setReorderEntityId(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#00C48C] focus:border-[#00C48C] outline-none"
+                      >
+                        <option value="">Pick a prior entity to reorder…</option>
+                        {historyItems.map((h) => (
+                          <option key={h.entity_id} value={h.entity_id}>
+                            {h.entity_name} · {h.form_type} · TIN {h.tid_masked} · prior years {h.years_previously_pulled.join(', ') || '—'} · loan {h.latest_loan_number || '—'}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Selected entity card — shows context so admin knows what they're cloning */}
+                  {reorderEntityId && (() => {
+                    const h = historyItems.find(x => x.entity_id === reorderEntityId);
+                    if (!h) return null;
+                    return (
+                      <div className="border border-gray-200 bg-white rounded-lg p-3 text-xs space-y-1">
+                        <div className="font-semibold text-mt-dark">{h.entity_name} <span className="text-gray-500 font-normal">({h.form_type}, TIN {h.tid_masked})</span></div>
+                        <div className="text-gray-600">Previously pulled years: <span className="font-mono">{h.years_previously_pulled.join(', ') || '—'}</span> · {h.transcript_count} transcript{h.transcript_count === 1 ? '' : 's'} on file across {h.prior_request_count} prior request{h.prior_request_count === 1 ? '' : 's'}</div>
+                        <div className={h.signature_still_valid ? 'text-emerald-700' : 'text-amber-700'}>
+                          {h.signed_8821_url
+                            ? h.signature_still_valid
+                              ? `✓ Signed 8821 on file (${h.signature_age_days}d old, within ${h.signed_8821_valid_window_days}d window) — will be reused, no new signature needed.`
+                              : `⚠ Signed 8821 on file but ${h.signature_age_days}d old (>${h.signed_8821_valid_window_days}d window) — a fresh 8821 will be required.`
+                            : '⚠ No 8821 on file — a fresh one will be required.'}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                      New year(s) to pull <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {TAX_YEARS.map((y) => {
+                        const checked = reorderYears.includes(y);
+                        return (
+                          <button
+                            type="button"
+                            key={y}
+                            onClick={() =>
+                              setReorderYears((prev) => prev.includes(y) ? prev.filter(z => z !== y) : [...prev, y].sort())
+                            }
+                            className={`px-3 py-1.5 rounded text-sm font-mono border transition-colors ${
+                              checked
+                                ? 'bg-[#00C48C] text-white border-[#00C48C]'
+                                : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400'
+                            }`}
+                          >
+                            {y}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-1.5">Pick the years for the new pull. Existing years stay on the prior entity record — this creates a brand-new request.</p>
+                  </div>
                 </div>
                 )}
 
