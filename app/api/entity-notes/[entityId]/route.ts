@@ -76,21 +76,25 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
     }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Anonymize cross-org identities on the thread.
-    // Driver: 2026-05-28 Matt —
-    //   1. "Notes from experts should not include expert name on any
-    //      processor/manager-facing communications."
-    //   2. "Remove all processor tags on entity/expert notes."
-    // Rules:
-    //   - Processor / manager requester reads an EXPERT-authored note →
-    //     author shows as "ModernTax".
-    //   - Expert requester reads a PROCESSOR / MANAGER-authored note →
-    //     author shows as the client/org name (e.g. "Centerstone SBA
-    //     Lending"), so the expert knows which lender it's from without
-    //     seeing the individual processor's name.
-    //   - Admin sees real names everywhere.
-    //   - The requester's own posts are never masked (you always see
-    //     your own identity on the thread).
+    // Anonymize + filter cross-org notes on the thread.
+    // Driver: 2026-05-28 Matt — note-by-note evolution:
+    //   1. Expert-authored notes were originally masked to "ModernTax"
+    //      for processor/manager viewers.
+    //   2. Processor/manager-authored notes were masked to client name
+    //      for expert viewers.
+    //   3. Final directive: "No expert to processor communication
+    //      allowed in the system." Expert notes are now HIDDEN entirely
+    //      from processor/manager viewers — they don't see them in the
+    //      portal thread, and they don't get emailed about them either.
+    //      Admin reviews them via /admin/expert-notes-queue.
+    // Current rules:
+    //   - Processor / manager requester → expert-authored notes are
+    //     filtered out of the response entirely.
+    //   - Expert requester → processor / manager-authored notes show
+    //     the client name (e.g. "Centerstone SBA Lending") instead of
+    //     the individual.
+    //   - Admin sees everything with real names.
+    //   - The requester's own posts are never masked.
     const isProcessorLike = role === 'processor' || role === 'manager';
     const isExpert = role === 'expert';
     let clientNameForMask = 'Client';
@@ -100,17 +104,17 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
         .eq('id', entityId).single() as { data: any };
       clientNameForMask = ctxRow?.requests?.clients?.name || 'Client';
     }
-    const notes = (data || []).map((n: any) => {
-      // Never mask the requester's own posts.
-      if (n.author_id === user.id) return n;
-      if (isProcessorLike && n.author_role === 'expert') {
-        return { ...n, author_name: 'ModernTax', author_id: null };
-      }
-      if (isExpert && (n.author_role === 'processor' || n.author_role === 'manager')) {
-        return { ...n, author_name: clientNameForMask, author_id: null };
-      }
-      return n;
-    });
+    const notes = (data || [])
+      // Filter: processors/managers don't see expert notes at all.
+      .filter((n: any) => !(isProcessorLike && n.author_role === 'expert'))
+      .map((n: any) => {
+        // Never mask the requester's own posts.
+        if (n.author_id === user.id) return n;
+        if (isExpert && (n.author_role === 'processor' || n.author_role === 'manager')) {
+          return { ...n, author_name: clientNameForMask, author_id: null };
+        }
+        return n;
+      });
 
     return NextResponse.json({ notes });
   } catch (err: any) {
@@ -231,8 +235,14 @@ async function notifyOpposite(
 
   const expertEmail = assn?.profiles?.email || null;
   const expertName  = assn?.profiles?.full_name || 'Expert';
-  const processorEmail = ent.requests?.profiles?.email || null;
-  const processorName  = ent.requests?.profiles?.full_name || 'Processor';
+  // Originating processor identity is still computed for context but no
+  // longer used as a recipient — 2026-05-28 directive sends expert notes
+  // only to admin, and processor/manager notes still route directly to
+  // the expert (no processor recipient needed in that direction either).
+  // Kept commented for documentation; remove the lookup once we're sure
+  // no future routing needs it.
+  // const processorEmail = ent.requests?.profiles?.email || null;
+  // const processorName  = ent.requests?.profiles?.full_name || 'Processor';
 
   let toEmail: string | null;
   let toName: string;
@@ -241,11 +251,14 @@ async function notifyOpposite(
     toEmail = expertEmail;
     toName = expertName;
   } else if (authorRole === 'expert') {
-    // Expert reply → goes to the originating processor (so the
-    // processor sees the answer directly), CC admin for visibility.
-    toEmail = processorEmail || 'matt@moderntax.io';
-    toName = processorEmail ? processorName : 'Matt';
-    if (processorEmail) ccEmails.push('matt@moderntax.io');
+    // 2026-05-28 Matt — "No expert to processor communication allowed
+    // in the system. There should just be a queue in the admin portal
+    // for this communications." Expert notes go ONLY to admin; the
+    // processor never sees the email (and the GET handler hides
+    // expert-authored notes from the processor's portal thread too).
+    // Admin reviews everything via /admin/expert-notes-queue.
+    toEmail = 'matt@moderntax.io';
+    toName = 'Matt';
   } else {
     // Processor / manager → goes to the assigned expert (so they see the
     // intake or clarification directly), CC admin for visibility.
@@ -261,27 +274,21 @@ async function notifyOpposite(
     : `https://portal.moderntax.io/request/${ent.requests?.id || ''}`;
 
   // Anonymize cross-org identities for note notifications.
-  // Driver: 2026-05-28 Matt —
+  // Driver: 2026-05-28 Matt — note-by-note evolution:
   //   1. "Notes from experts should not include expert name on any
-  //      processor/manager-facing communications. Should be from general
-  //      ModernTax organization."
+  //      processor/manager-facing communications."
   //   2. "Remove all processor tags on entity/expert notes."
-  // Rules in the email subject + body:
-  //   - Expert author → "ModernTax" (drop role parenthetical).
-  //   - Processor / manager author → client name (e.g.
-  //     "Centerstone SBA Lending"), drop role parenthetical. Expert sees
-  //     which lender sent the message without seeing the individual.
-  //   - Admin author → real name + role unchanged.
-  // Because one body goes to both the primary recipient and the admin
-  // CC, we mask uniformly. Matt can still see the real identity on the
-  // entity record in the portal.
+  //   3. "No expert to processor communication allowed in the system —
+  //      queue in the admin portal."
+  // After #3 the expert-author email goes only to admin, so we can
+  // safely show the real expert name (admin should know which expert
+  // posted). Processor/manager-author emails still go to expert + CC
+  // admin, so we mask the processor identity to the client name.
+  // Admin-author emails go to expert, real name shown.
   const clientName = ent.requests?.clients?.name || 'Client';
   let displayAuthorName: string;
   let displayRoleSuffix: string;
-  if (authorRole === 'expert') {
-    displayAuthorName = 'ModernTax';
-    displayRoleSuffix = '';
-  } else if (authorRole === 'processor' || authorRole === 'manager') {
+  if (authorRole === 'processor' || authorRole === 'manager') {
     displayAuthorName = clientName;
     displayRoleSuffix = '';
   } else {
