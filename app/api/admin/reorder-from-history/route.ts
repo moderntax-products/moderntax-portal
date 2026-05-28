@@ -137,17 +137,30 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // 3. Create the new parent request row.
-  const { data: newRequest, error: reqErr } = await (admin.from('requests') as any).insert({
+  // 3. Create the new parent request row. We populate source_request_id
+  //    so /admin/requests/[id] can render a "Reorder of loan #..." badge
+  //    and ops can trace the chain for billing audits without grepping
+  //    notes. Two-phase insert handles older envs where the column hasn't
+  //    been migrated yet — same fallback pattern as Admin8821Upload.
+  const requestRow: Record<string, unknown> = {
     client_id: processorProfile.client_id,
     requested_by: processorId,
     loan_number: loanNumber,
     intake_method: 'admin_reorder',
     status: 'submitted',
+    source_request_id: sourceEntity.requests.id,
     notes: notes
       ? `Reorder from history (source entity ${sourceEntity.id.slice(0, 8)}, source loan ${sourceEntity.requests.loan_number || '-'}). ${notes}`
       : `Reorder from history (source entity ${sourceEntity.id.slice(0, 8)}, source loan ${sourceEntity.requests.loan_number || '-'}).`,
-  }).select('id').single() as { data: { id: string } | null; error: any };
+  };
+  let { data: newRequest, error: reqErr } = await (admin.from('requests') as any)
+    .insert(requestRow).select('id').single() as { data: { id: string } | null; error: any };
+  if (reqErr && /source_request_id|column .* does not exist|PGRST204/i.test(reqErr.message || '')) {
+    console.warn('[reorder-from-history] source_request_id column missing — falling back without lineage. Paste supabase/migration-request-source-lineage.sql in Studio to enable.');
+    delete (requestRow as any).source_request_id;
+    ({ data: newRequest, error: reqErr } = await (admin.from('requests') as any)
+      .insert(requestRow).select('id').single() as { data: { id: string } | null; error: any });
+  }
 
   if (reqErr || !newRequest) {
     console.error('[reorder-from-history] failed to create request:', reqErr);

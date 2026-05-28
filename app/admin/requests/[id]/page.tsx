@@ -72,6 +72,20 @@ export default async function AdminRequestManagePage({ params }: Props) {
     .eq('id', request.requested_by)
     .single() as { data: { full_name: string | null; email: string } | null; error: any };
 
+  // Reorder lineage — if this request was cloned from a prior one via
+  // /admin/email-intake "Reorder from history", fetch the source's loan
+  // number so we can render a "Reorder of #X" badge in the header. Pre-
+  // migration envs return null for source_request_id, which short-circuits.
+  let sourceRequestInfo: { id: string; loan_number: string | null } | null = null;
+  if (request.source_request_id) {
+    const { data: src } = await supabase
+      .from('requests')
+      .select('id, loan_number')
+      .eq('id', request.source_request_id)
+      .single() as { data: { id: string; loan_number: string | null } | null; error: any };
+    if (src) sourceRequestInfo = src;
+  }
+
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'submitted': case '8821_sent': return 'bg-blue-100 text-blue-800';
@@ -115,11 +129,29 @@ export default async function AdminRequestManagePage({ params }: Props) {
                 </svg>
               </Link>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-2xl font-bold text-mt-dark">Manage Request</h1>
                   <span className="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">Admin</span>
                   {isEmployment && (
                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">Employment</span>
+                  )}
+                  {/* Reorder lineage — surfaces when this request was cloned
+                      from a prior one via /admin/email-intake "Reorder from
+                      history". Click to jump to the source request for billing
+                      audits + ops sanity checks. */}
+                  {sourceRequestInfo && (
+                    <Link
+                      href={`/admin/requests/${sourceRequestInfo.id}`}
+                      className="px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800 hover:bg-violet-200 transition-colors"
+                      title="This request was created via the reorder-from-history flow. Click to jump to the source request."
+                    >
+                      ↺ Reorder of loan {sourceRequestInfo.loan_number || sourceRequestInfo.id.slice(0, 8)}
+                    </Link>
+                  )}
+                  {request.intake_method === 'admin_reorder' && !sourceRequestInfo && (
+                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800" title="Created via the reorder-from-history flow.">
+                      ↺ Reorder
+                    </span>
                   )}
                 </div>
                 <p className="text-gray-600 mt-1">
