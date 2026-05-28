@@ -142,6 +142,14 @@ export async function POST(request: NextRequest) {
   //    and ops can trace the chain for billing audits without grepping
   //    notes. Two-phase insert handles older envs where the column hasn't
   //    been migrated yet — same fallback pattern as Admin8821Upload.
+  // intake_method: try 'reorder' first (the semantically-correct value
+  // added by migration-reorder.sql); fall back to 'manual' if the CHECK
+  // constraint on prod is still on the original strict set
+  // ('csv' | 'pdf' | 'manual'). We identify reorders via source_request_id
+  // + the [Reorder from history] marker in notes regardless of which
+  // intake_method actually lands, so downstream queries stay consistent.
+  const REORDER_NOTE_PREFIX = '[Reorder from history]';
+  const baseNotes = `${REORDER_NOTE_PREFIX} source entity ${sourceEntity.id.slice(0, 8)}, source loan ${sourceEntity.requests.loan_number || '-'}.`;
   const requestRow: Record<string, unknown> = {
     client_id: processorProfile.client_id,
     requested_by: processorId,
@@ -149,15 +157,25 @@ export async function POST(request: NextRequest) {
     intake_method: 'reorder',
     status: 'submitted',
     source_request_id: sourceEntity.requests.id,
-    notes: notes
-      ? `Reorder from history (source entity ${sourceEntity.id.slice(0, 8)}, source loan ${sourceEntity.requests.loan_number || '-'}). ${notes}`
-      : `Reorder from history (source entity ${sourceEntity.id.slice(0, 8)}, source loan ${sourceEntity.requests.loan_number || '-'}).`,
+    notes: notes ? `${baseNotes} ${notes}` : baseNotes,
   };
+
   let { data: newRequest, error: reqErr } = await (admin.from('requests') as any)
     .insert(requestRow).select('id').single() as { data: { id: string } | null; error: any };
+
+  // Fallback 1: source_request_id column missing — strip + retry.
   if (reqErr && /source_request_id|column .* does not exist|PGRST204/i.test(reqErr.message || '')) {
     console.warn('[reorder-from-history] source_request_id column missing — falling back without lineage. Paste supabase/migration-request-source-lineage.sql in Studio to enable.');
     delete (requestRow as any).source_request_id;
+    ({ data: newRequest, error: reqErr } = await (admin.from('requests') as any)
+      .insert(requestRow).select('id').single() as { data: { id: string } | null; error: any });
+  }
+  // Fallback 2: intake_method='reorder' rejected by CHECK constraint —
+  // drop to 'manual' and re-attempt. The [Reorder from history] note
+  // prefix + source_request_id still mark the row as a reorder.
+  if (reqErr && /intake_method_check|requests_intake_method_check/i.test(reqErr.message || '')) {
+    console.warn('[reorder-from-history] intake_method="reorder" rejected by CHECK constraint — falling back to "manual". Paste supabase/migration-reorder.sql in Studio to enable the proper value.');
+    requestRow.intake_method = 'manual';
     ({ data: newRequest, error: reqErr } = await (admin.from('requests') as any)
       .insert(requestRow).select('id').single() as { data: { id: string } | null; error: any });
   }

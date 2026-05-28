@@ -154,7 +154,12 @@ export default async function AdminRequestManagePage({ params }: Props) {
                       ↺ Reorder of loan {sourceRequestInfo.loan_number || sourceRequestInfo.id.slice(0, 8)}
                     </Link>
                   )}
-                  {request.intake_method === 'reorder' && !sourceRequestInfo && (
+                  {/* Last-resort badge for envs where source_request_id
+                      hasn't been migrated AND intake_method='reorder' was
+                      rejected by the CHECK constraint — sniff the notes
+                      prefix the route writes unconditionally. */}
+                  {!sourceRequestInfo
+                    && (request.intake_method === 'reorder' || (typeof request.notes === 'string' && request.notes.startsWith('[Reorder from history]'))) && (
                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800" title="Created via the reorder-from-history flow.">
                       ↺ Reorder
                     </span>
