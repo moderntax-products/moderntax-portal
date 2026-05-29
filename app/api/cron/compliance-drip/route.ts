@@ -108,7 +108,11 @@ export async function GET(req: NextRequest) {
       }
 
       const classification = classifyFlags(entity.gross_receipts);
-      const success = await sendDripEmail(drip.drip_stage, drip, classification.allFlags);
+      // Pass the admin client so the borrower-email guard can profile-lookup
+      // and suppress sends to lender processors / internal accounts. Driver:
+      // 2026-05-28 dashboard read — 60% of enrollments were targeting wrong
+      // audience, killing sender reputation.
+      const success = await sendDripEmail(drip.drip_stage, drip, classification.allFlags, supabase);
 
       if (success) {
         const stageField = `email_${drip.drip_stage}_sent_at`;

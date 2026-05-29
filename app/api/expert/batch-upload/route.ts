@@ -557,7 +557,17 @@ export async function POST(request: NextRequest) {
             .eq('id', entityId)
             .single() as { data: any; error: any };
 
-          if (fullEntity?.signer_email) {
+          // Borrower-email guard at the ENROLL boundary so we never
+          // create a drip row for a lender processor / internal user.
+          // Driver: 2026-05-28 compliance dashboard — 0 opens on 61
+          // sends, 60% to lender processor addresses.
+          const { isBorrowerEmail } = require('@/lib/compliance-drip');
+          const borrowerCheck = fullEntity?.signer_email
+            ? await isBorrowerEmail(supabase, fullEntity.signer_email)
+            : { ok: false, reason: 'no signer_email on entity' };
+          if (!borrowerCheck.ok) {
+            console.warn(`[batch-upload] skipping compliance enrollment for ${fullEntity?.entity_name || entityId}: ${borrowerCheck.reason}`);
+          } else if (fullEntity?.signer_email) {
             const classification = classifyFlags(fullEntity.gross_receipts || updatedCompliance);
 
             // Check if already enrolled
@@ -589,8 +599,11 @@ export async function POST(request: NextRequest) {
                 .single()) as { data: any; error: any };
 
               if (drip) {
-                // Send Stage 0 email immediately
-                const sent = await sendDripEmail(0, drip, classification.allFlags);
+                // Send Stage 0 email immediately. Pass `supabase` so the
+                // borrower-email guard runs (suppresses sends to lender
+                // processors / internal accounts). Driver: 2026-05-28
+                // compliance dashboard, 0 opens on 61 sends.
+                const sent = await sendDripEmail(0, drip, classification.allFlags, supabase);
                 if (sent) {
                   const nextDue = new Date();
                   nextDue.setDate(nextDue.getDate() + 3); // Next email in 3 days

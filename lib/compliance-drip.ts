@@ -291,11 +291,87 @@ export function buildDripEmail(
   }
 }
 
+/**
+ * Reject signer_email values that belong to a lender/internal user
+ * rather than the borrower. The compliance drip is a borrower-facing
+ * nurture sequence — emailing it to a Centerstone processor or to a
+ * ModernTax expert is at best ignored and at worst triggers spam reports
+ * (which is what's been killing our sender reputation — see 2026-05-28
+ * dashboard: 0 opens, 2 unsubs across 61 sends).
+ *
+ * Mechanism: look the email up in `profiles`. If a row exists, the
+ * address belongs to someone with a portal account — that's never a
+ * borrower. Hardcoded suffix denylist as a safety net for addresses that
+ * happen to not have a profile yet (e.g. a new Centerstone employee
+ * whose account isn't provisioned).
+ */
+const CLIENT_DOMAIN_DENYLIST = [
+  'teamcenterstone.com',
+  'statewidecdc.com',
+  'moderntax.io',
+  'moderntax.com',
+];
+
+export async function isBorrowerEmail(
+  supabase: { from: (t: string) => any },
+  email: string | null | undefined,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!email) return { ok: false, reason: 'missing email' };
+  const normalized = email.trim().toLowerCase();
+  if (!normalized.includes('@')) return { ok: false, reason: 'malformed email' };
+
+  // Suffix denylist — known lender/internal domains, no DB roundtrip needed.
+  const domain = normalized.split('@')[1];
+  if (CLIENT_DOMAIN_DENYLIST.some((d) => domain === d || domain.endsWith(`.${d}`))) {
+    return { ok: false, reason: `domain ${domain} is denylisted (internal/lender)` };
+  }
+
+  // Profile match — if the email belongs to a portal user (any role),
+  // it's not a borrower regardless of domain.
+  try {
+    const { data: profile } = await supabase.from('profiles')
+      .select('id, role').eq('email', normalized).maybeSingle();
+    if (profile?.role && ['processor', 'manager', 'admin', 'expert'].includes(profile.role)) {
+      return { ok: false, reason: `email is a portal ${profile.role} account` };
+    }
+  } catch {
+    // If the lookup errors, fail-open — better to send than miss a real
+    // borrower because Supabase had a hiccup. The denylist still catches
+    // the bulk of accidental sends.
+  }
+  return { ok: true };
+}
+
 export async function sendDripEmail(
   stage: number,
   drip: ComplianceDripRecord,
-  flags: { message: string; severity: string }[]
+  flags: { message: string; severity: string }[],
+  /**
+   * Optional supabase client for the borrower-email check. When omitted,
+   * only the static domain denylist applies (back-compat for older
+   * callers). New code should always pass it.
+   */
+  supabase?: { from: (t: string) => any },
 ): Promise<boolean> {
+  // Borrower-email guard. Driver: 2026-05-28 Matt — dashboard showed
+  // 60% of compliance enrollments were going to lender processor
+  // addresses, producing 0 opens + 2 unsubs. Block at the send boundary
+  // so even legacy enrollments that slipped through pre-filter don't ship.
+  if (supabase) {
+    const check = await isBorrowerEmail(supabase, drip.signer_email);
+    if (!check.ok) {
+      console.warn(`[compliance-drip] suppressed stage ${stage} for ${drip.entity_name} (drip ${drip.id?.slice(0, 8) || '?'}): ${check.reason}`);
+      return false;
+    }
+  } else {
+    // Lightweight denylist-only path for callers that didn't pass a client.
+    const domain = (drip.signer_email || '').trim().toLowerCase().split('@')[1] || '';
+    if (CLIENT_DOMAIN_DENYLIST.some((d) => domain === d || domain.endsWith(`.${d}`))) {
+      console.warn(`[compliance-drip] suppressed stage ${stage} for ${drip.entity_name} — domain ${domain} on denylist`);
+      return false;
+    }
+  }
+
   const { subject, html } = buildDripEmail(stage, drip, flags);
 
   try {
