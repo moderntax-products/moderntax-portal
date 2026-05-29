@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { BillingSettingsForm } from '@/components/BillingSettingsForm';
 import { PayNowButton } from '@/components/PayNowButton';
+import { InvoiceBreakdownTable } from '@/components/InvoiceBreakdownTable';
 
 // Free trial: each new client gets 3 free entities — surfaced as
 // "$239.94 trial credit" so managers see the dollar value of what
@@ -690,7 +691,7 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                          {(invoices || []).map((inv: any) => (
+                          {(invoices || []).flatMap((inv: any) => [
                             <tr key={inv.id} className="hover:bg-gray-50">
                               <td className="px-6 py-4 text-sm font-mono text-mt-dark">{inv.invoice_number}</td>
                               <td className="px-6 py-4 text-sm text-gray-600">
@@ -746,8 +747,18 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                                   )}
                                 </div>
                               </td>
-                            </tr>
-                          ))}
+                            </tr>,
+                            // Itemized breakdown — collapsible, only rendered
+                            // when the invoice has the new JSONB breakdown
+                            // populated. Spans all 8 columns of the parent row.
+                            inv.breakdown ? (
+                              <tr key={`${inv.id}-breakdown`}>
+                                <td colSpan={8} className="p-0">
+                                  <InvoiceBreakdownTable breakdown={inv.breakdown} />
+                                </td>
+                              </tr>
+                            ) : null,
+                          ].filter(Boolean))}
                         </tbody>
                       </table>
                     </div>

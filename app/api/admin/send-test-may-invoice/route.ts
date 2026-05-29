@@ -86,6 +86,14 @@ export async function POST(request: NextRequest) {
     entities_completed_after?: string;
     monitoring_active_after?: string;
     catchup_line?: { amount: number; memo: string };
+    /**
+     * When true, write the invoice row + breakdown to the local `invoices`
+     * table with notes prefixed [TEST] so the manager portal can render
+     * the breakdown for verification. The row gets the test Mercury IDs
+     * and is filterable from the dashboard later if needed. Default false
+     * (test invoices don't pollute the customer's invoice history).
+     */
+    persist_for_portal_preview?: boolean;
   };
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
@@ -103,6 +111,7 @@ export async function POST(request: NextRequest) {
   const catchupLine = (body.catchup_line && typeof body.catchup_line.amount === 'number' && body.catchup_line.memo)
     ? body.catchup_line
     : null;
+  const persistForPortal = body.persist_for_portal_preview === true;
 
   const admin = createAdminClient();
   const log: string[] = [];
@@ -448,6 +457,59 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // --- Optional: persist to invoices table for portal preview ---
+  let portalInvoiceId: string | null = null;
+  if (persistForPortal && mode === 'send_now') {
+    const breakdown = {
+      processor_groups: processorGroups,
+      monitoring_details: monitorDetails,
+      catchup_line: catchupLine,
+    };
+    const { data: ins, error: persistErr } = await (admin.from('invoices') as any).insert({
+      client_id: client.id,
+      invoice_number: invoiceNumber,
+      billing_period_start: periodStart,
+      billing_period_end: periodEnd,
+      total_entities: standardCount + reorderCount,
+      total_amount: grandTotal,
+      monitoring_entities: monitoringEntities,
+      monitoring_amount: monitoringAmount,
+      status: 'sent',
+      payment_method: 'ach',
+      due_date: dueDate.toISOString().split('T')[0],
+      mercury_invoice_id: mercuryInvoice.id,
+      mercury_pay_url: payUrl,
+      breakdown,
+      notes: `[TEST PORTAL PREVIEW] ${invoiceNumber}. Routed to ${testEmail} via the send-test-may-invoice endpoint. Not the real customer invoice.`,
+    }).select('id').single();
+    if (persistErr && /breakdown|column .* does not exist|PGRST204/i.test(persistErr?.message || '')) {
+      L(`! breakdown column missing — retrying without it. Paste supabase/migration-invoices-breakdown.sql to enable portal rendering.`);
+      const { data: ins2, error: persistErr2 } = await (admin.from('invoices') as any).insert({
+        client_id: client.id,
+        invoice_number: invoiceNumber,
+        billing_period_start: periodStart,
+        billing_period_end: periodEnd,
+        total_entities: standardCount + reorderCount,
+        total_amount: grandTotal,
+        monitoring_entities: monitoringEntities,
+        monitoring_amount: monitoringAmount,
+        status: 'sent',
+        payment_method: 'ach',
+        due_date: dueDate.toISOString().split('T')[0],
+        mercury_invoice_id: mercuryInvoice.id,
+        mercury_pay_url: payUrl,
+        notes: `[TEST PORTAL PREVIEW — breakdown not persisted, migration pending] ${invoiceNumber}.`,
+      }).select('id').single();
+      if (persistErr2) { L(`! local invoices insert failed: ${persistErr2.message}`); }
+      else { portalInvoiceId = ins2?.id || null; L(`✓ persisted invoice row ${portalInvoiceId} (no breakdown)`); }
+    } else if (persistErr) {
+      L(`! local invoices insert failed: ${persistErr.message}`);
+    } else {
+      portalInvoiceId = ins?.id || null;
+      L(`✓ persisted invoice row ${portalInvoiceId} with breakdown`);
+    }
+  }
+
   return NextResponse.json({
     success: true,
     mode,
@@ -474,6 +536,7 @@ export async function POST(request: NextRequest) {
       pdf_url: pdfUrl,
       pay_url: payUrl,
     },
+    portal_invoice_id: portalInvoiceId,
     log,
   });
 }
