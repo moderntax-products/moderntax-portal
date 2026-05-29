@@ -62,6 +62,7 @@ import {
   getMercuryInvoicePdfUrl,
   getMercuryPayUrl,
 } from '@/lib/mercury';
+import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -443,15 +444,45 @@ export async function POST(request: NextRequest) {
   </div>
 </div>`;
 
+    // Generate the itemized PDF attachment — same content as the HTML body
+    // so the AP team can file it alongside the Mercury PDF without logging
+    // into the portal.
+    let breakdownPdfBuffer: Buffer | null = null;
     try {
+      breakdownPdfBuffer = await generateInvoiceBreakdownPdf({
+        clientName: client.name,
+        invoiceNumber,
+        periodStart,
+        periodEnd,
+        grandTotal,
+        payUrl,
+        isTest: invoiceNumber.startsWith('TEST'),
+        processorGroups,
+        monitoringDetails: monitorDetails,
+        catchupLine: catchupLine || null,
+      });
+      L(`✓ Breakdown PDF generated (${breakdownPdfBuffer.length} bytes)`);
+    } catch (pdfErr: any) {
+      L(`! Breakdown PDF generation failed: ${pdfErr?.message || pdfErr}`);
+    }
+
+    try {
+      const attachments = breakdownPdfBuffer ? [{
+        content: breakdownPdfBuffer.toString('base64'),
+        filename: `${invoiceNumber}-breakdown.pdf`,
+        type: 'application/pdf',
+        disposition: 'attachment' as const,
+      }] : undefined;
+
       await sgMail.send({
         to: testEmail,
         from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
         subject: `${invoiceNumber} — ${client.name} — ${fmt(grandTotal)} due`,
         html,
-        text: `${client.name} May 2026 invoice ${invoiceNumber}. Total due: ${fmt(grandTotal)}. Pay: ${payUrl}. Detailed per-processor breakdown is in the HTML version of this email; also at https://portal.moderntax.io/invoicing.`,
+        text: `${client.name} May 2026 invoice ${invoiceNumber}. Total due: ${fmt(grandTotal)}. Pay: ${payUrl}. Detailed per-processor breakdown attached as PDF; also viewable at https://portal.moderntax.io/invoicing.`,
+        attachments,
       });
-      L(`✓ SendGrid breakdown email sent to ${testEmail}`);
+      L(`✓ SendGrid breakdown email sent to ${testEmail}${breakdownPdfBuffer ? ` with PDF attachment` : ''}`);
     } catch (err: any) {
       L(`! SendGrid send failed: ${err?.message || err}`);
     }
