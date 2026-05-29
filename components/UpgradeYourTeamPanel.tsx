@@ -9,7 +9,7 @@
  * doc-hub etc.).
  *
  * Toggles bulk-apply across the whole client:
- *   • Continuous monitoring (default-on at completion) — $19.99/entity/mo
+ *   • Continuous monitoring (default-on at completion) — $29/entity/mo (catalog)
  *     The toggle flips clients.monitoring_default_enabled; existing
  *     enrollments are NOT cancelled when set false (only future
  *     auto-enrolls stop). Manager can also bulk-enroll any
@@ -28,6 +28,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { TierUpgradeButton } from './TierUpgradeButton';
+import { PRICE_POST_CLOSE_MONITORING_MONTHLY, PRICE_CASH_FLOW_PACK } from '@/lib/pricing';
 
 interface UpgradeYourTeamPanelProps {
   clientId: string;
@@ -37,8 +38,12 @@ interface UpgradeYourTeamPanelProps {
   unmonitoredCompletedCount: number;
 }
 
-const MONITORING_RATE = 19.99;     // per entity per month
-const CASH_FLOW_PACK_PRICE = 49.99; // per pack
+// 2026-05-29 — was hardcoded to legacy $19.99. Now reads from
+// INVOICE_SKU_CATALOG so the manager dashboard, the per-intake forecast
+// widget, the auto-invoice cron, and the Stripe registry all show the
+// same number ($29.00/entity/mo).
+const MONITORING_RATE = PRICE_POST_CLOSE_MONITORING_MONTHLY;
+const CASH_FLOW_PACK_PRICE = PRICE_CASH_FLOW_PACK;
 
 export function UpgradeYourTeamPanel({
   clientId,
