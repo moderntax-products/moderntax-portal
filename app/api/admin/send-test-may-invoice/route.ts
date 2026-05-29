@@ -51,6 +51,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import sgMail from '@sendgrid/mail';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
 import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
@@ -145,56 +146,74 @@ export async function POST(request: NextRequest) {
 
   const ratePdf = Number(client.billing_rate_pdf || 59.98);
 
-  // 2026-05-29 — Matt: "Both need detailed itemized invoices with billing
-  // by processor, by entity, with specifics for monitoring." Switch from
-  // one summary line per category to ONE LINE PER ENTITY, sorted by
-  // processor name then entity name. Each line shows
-  //   "Verification — <Processor> — <Entity Name> (<form_type>, completed <date>)"
-  // Reorders are clearly distinguished with a "(Reorder)" suffix and the
-  // $29.99 rate. This is what the customer's AP team will see line-for-line
-  // on the Mercury invoice PDF.
+  // 2026-05-29 (revised) — Matt: "the itemized breakdown of all entities
+  // per processor is what needs to accompany each Mercury invoice link
+  // it needs to be sent through SendGrid and live in the managers
+  // portal." So: Mercury invoice carries SUMMARY lines (one per category
+  // — verification, monitoring, catchup). The per-entity / per-enrollment
+  // breakdown goes out as an itemized HTML email via SendGrid alongside
+  // the Mercury pay link, and is persisted on the invoice for the
+  // /invoicing portal to render.
   const lineItems: LineItem[] = [];
 
-  // Sort entities by processor name, then by completed_at
+  // Sort entities by processor name, then by completed_at — needed for the
+  // breakdown payload (groups by processor in display order).
   const sortedBillable = [...billable].sort((a, b) => {
     const pa = ((a.requests || {}).profiles || {}).full_name || 'Unattributed';
     const pb = ((b.requests || {}).profiles || {}).full_name || 'Unattributed';
     if (pa !== pb) return pa.localeCompare(pb);
-    const ca = a.completed_at || '';
-    const cb = b.completed_at || '';
-    return ca.localeCompare(cb);
+    return (a.completed_at || '').localeCompare(b.completed_at || '');
   });
 
+  // Build the per-processor / per-entity breakdown (for the email + portal).
+  type EntityDetail = { entity_name: string; form_type: string | null; completed_at: string | null; loan_number: string | null; unit_price: number; is_reorder: boolean };
+  type ProcessorGroup = { processor: string; entities: EntityDetail[]; subtotal: number };
+  const byProcessor: Record<string, ProcessorGroup> = {};
   let reorderCount = 0;
   let standardCount = 0;
   for (const e of sortedBillable) {
     const processorName = ((e.requests || {}).profiles || {}).full_name || 'Unattributed';
     const isReorder = e?.gross_receipts?.reorder?.sku === 'reorder-from-history';
-    const completedDate = (e.completed_at || '').slice(0, 10);
-    const formType = e.form_type || ''; // present in newer rows; ignored if missing
-    const formSuffix = formType ? ` (${formType})` : '';
-    if (isReorder) {
-      reorderCount += 1;
-      lineItems.push({
-        name: `Verification (Reorder) — ${processorName} — ${e.entity_name}${formSuffix}, completed ${completedDate}`,
-        unitPrice: 29.99,
-        quantity: 1,
-      });
-    } else {
-      standardCount += 1;
-      lineItems.push({
-        name: `Verification — ${processorName} — ${e.entity_name}${formSuffix}, completed ${completedDate}`,
-        unitPrice: ratePdf,
-        quantity: 1,
-      });
-    }
+    const unitPrice = isReorder ? 29.99 : ratePdf;
+    if (isReorder) reorderCount += 1; else standardCount += 1;
+    if (!byProcessor[processorName]) byProcessor[processorName] = { processor: processorName, entities: [], subtotal: 0 };
+    byProcessor[processorName].entities.push({
+      entity_name: e.entity_name,
+      form_type: e.form_type || null,
+      completed_at: e.completed_at,
+      loan_number: ((e.requests || {}).loan_number) || null,
+      unit_price: unitPrice,
+      is_reorder: isReorder,
+    });
+    byProcessor[processorName].subtotal = Math.round((byProcessor[processorName].subtotal + unitPrice) * 100) / 100;
+  }
+  const processorGroups: ProcessorGroup[] = Object.values(byProcessor).sort((a, b) => a.processor.localeCompare(b.processor));
+
+  // Mercury SUMMARY lines (one per category).
+  if (standardCount > 0) {
+    const verifLabel = entitiesCutoff
+      ? `Tax Verification — ${client.name} (completed after ${entitiesCutoff.slice(0, 10)})`
+      : `Tax Verification — ${client.name} (May 2026)`;
+    lineItems.push({
+      name: verifLabel,
+      unitPrice: ratePdf,
+      quantity: standardCount,
+    });
+  }
+  if (reorderCount > 0) {
+    lineItems.push({
+      name: 'Tax Verification — Reorder (May 2026)',
+      unitPrice: 29.99,
+      quantity: reorderCount,
+    });
   }
 
   // --- Monitoring line (if enabled for this client) ---
   let monitoringAmount = 0;
   let monitoringEntities = 0;
+  type MonitorDetail = { entity_name: string; processor: string; window_start: string; window_end: string; active_days: number; prorated: number };
+  const monitorDetails: MonitorDetail[] = [];
   if (!client.disable_monitoring) {
-    // Join monitor rows with their entity_name for per-enrollment line items.
     const { data: monitors } = await admin.from('entity_monitoring')
       .select('id, enrolled_at, cancelled_at, status, entity_id, request_entities!inner(entity_name, requests!inner(loan_number, profiles!requests_requested_by_fkey(full_name)))')
       .eq('client_id', client.id)
@@ -207,9 +226,6 @@ export async function POST(request: NextRequest) {
       : Date.parse(`${periodStart}T00:00:00Z`);
     const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
     L(`  Monitoring window: ${new Date(monitoringLowerMs).toISOString()} → ${new Date(periodEndMs).toISOString()}`);
-
-    type MonitorLine = { entityName: string; processor: string; windowStartIso: string; windowEndIso: string; activeDays: number; prorated: number };
-    const monitorLines: MonitorLine[] = [];
     for (const m of (monitors || [])) {
       if (m.status === 'pending') continue;
       const enrolled = Date.parse(m.enrolled_at);
@@ -221,31 +237,29 @@ export async function POST(request: NextRequest) {
       const activeDays = Math.ceil((windowEnd - windowStart) / (24 * 3600 * 1000));
       const prorated = Math.round(((Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate) * 100) / 100;
       const re = (m.request_entities || {});
-      const entityName = re.entity_name || '(unknown entity)';
-      const proc = ((re.requests || {}).profiles || {}).full_name || 'Unattributed';
-      monitorLines.push({
-        entityName,
-        processor: proc,
-        windowStartIso: new Date(windowStart).toISOString().slice(0, 10),
-        windowEndIso: new Date(windowEnd - 1).toISOString().slice(0, 10),
-        activeDays,
+      monitorDetails.push({
+        entity_name: re.entity_name || '(unknown entity)',
+        processor: ((re.requests || {}).profiles || {}).full_name || 'Unattributed',
+        window_start: new Date(windowStart).toISOString().slice(0, 10),
+        window_end: new Date(windowEnd - 1).toISOString().slice(0, 10),
+        active_days: activeDays,
         prorated,
       });
-      monitoringEntities += 1;
       monitoringAmount += prorated;
+      monitoringEntities += 1;
     }
     monitoringAmount = Math.round(monitoringAmount * 100) / 100;
+    monitorDetails.sort((a, b) => a.processor.localeCompare(b.processor) || a.entity_name.localeCompare(b.entity_name));
 
-    // Sort by processor, then entity name
-    monitorLines.sort((a, b) => {
-      if (a.processor !== b.processor) return a.processor.localeCompare(b.processor);
-      return a.entityName.localeCompare(b.entityName);
-    });
-    for (const ml of monitorLines) {
+    // SUMMARY line on Mercury — per-enrollment detail goes in the email.
+    if (monitoringEntities > 0) {
+      const monLabel = monitoringCutoff
+        ? `Account Monitoring (${monitoringCutoff.slice(0, 10)} → ${periodEnd}, net new since prior invoice)`
+        : `Account Monitoring (${periodStart} → ${periodEnd})`;
       lineItems.push({
-        name: `Monitoring — ${ml.processor} — ${ml.entityName} (${ml.windowStartIso} → ${ml.windowEndIso}, ${ml.activeDays}/31 days at $${monitoringRate.toFixed(2)}/mo)`,
-        unitPrice: ml.prorated,
-        quantity: 1,
+        name: monLabel,
+        unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100,
+        quantity: monitoringEntities,
       });
     }
   }
@@ -290,6 +304,10 @@ export async function POST(request: NextRequest) {
   dueDate.setUTCDate(dueDate.getUTCDate() + 5);
   const invoiceNumber = `TEST-INV-2026-05-${mapping.slug}-${Math.floor(Date.now() / 1000)}`;
 
+  // Mercury invoice: always DontSend. The customer-facing email is now
+  // composed by us via SendGrid (below) so the per-processor / per-entity
+  // breakdown + Mercury pay link land together in one rich email. Mercury's
+  // default email would only show the summary line items.
   const mercuryInvoice = await createMercuryInvoice({
     customerId: testCustomer.id,
     destinationAccountId: getDestinationAccountId(),
@@ -301,18 +319,134 @@ export async function POST(request: NextRequest) {
     creditCardEnabled: false,
     achDebitEnabled: true,
     useRealAccountNumber: false,
-    sendEmailOption: mode === 'send_now' ? 'SendNow' : 'DontSend',
+    sendEmailOption: 'DontSend',
     servicePeriodStartDate: periodStart,
     servicePeriodEndDate: periodEnd,
-    payerMemo: `*** TEST INVOICE *** — Preview of the May 2026 ${client.name} invoice routed to ${testEmail}. Reference: ${invoiceNumber}. Not for payment.`,
+    payerMemo: `*** TEST INVOICE *** — Preview of the May 2026 ${client.name} invoice. Reference: ${invoiceNumber}. Not for payment.`,
     internalNote: `TEST INVOICE for ${client.name} May 2026 preview. Do NOT send to real customer.`,
   });
 
   const payUrl = getMercuryPayUrl(mercuryInvoice.slug);
   const pdfUrl = getMercuryInvoicePdfUrl(mercuryInvoice.slug);
-  L(`✓ Test Mercury invoice ${mercuryInvoice.id} created (${mode})`);
-  L(`  pdf: ${pdfUrl}`);
-  L(`  pay: ${payUrl}`);
+  L(`✓ Test Mercury invoice ${mercuryInvoice.id} created (DontSend)`);
+
+  // --- SendGrid: itemized breakdown email + Mercury pay link ---
+  // This is the customer-facing communication. The HTML mirrors the
+  // /invoicing portal page (per-processor table + per-enrollment
+  // monitoring detail) so the AP team sees exactly what they'd see in
+  // the manager portal.
+  if (mode === 'send_now' && process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const fmtDate = (s: string | null) => s ? s.slice(0, 10) : '';
+
+    const procRows = processorGroups.map((g) => {
+      const rows = g.entities.map((e) => `
+        <tr>
+          <td style="padding:6px 12px;font-size:13px;color:#1f2937;">${e.entity_name}${e.is_reorder ? ' <span style="background:#ede9fe;color:#6b21a8;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;">REORDER</span>' : ''}</td>
+          <td style="padding:6px 12px;font-size:12px;color:#6b7280;">${e.form_type || '—'}</td>
+          <td style="padding:6px 12px;font-size:12px;color:#6b7280;">${e.loan_number || '—'}</td>
+          <td style="padding:6px 12px;font-size:12px;color:#6b7280;">${fmtDate(e.completed_at)}</td>
+          <td style="padding:6px 12px;font-size:13px;color:#1f2937;text-align:right;font-family:ui-monospace,monospace;">${fmt(e.unit_price)}</td>
+        </tr>`).join('');
+      return `
+        <tr><td colspan="5" style="padding:14px 12px 4px 12px;font-size:12px;font-weight:700;color:#295c9e;background:#f8fafc;border-top:1px solid #e5e7eb;">
+          ${g.processor} · ${g.entities.length} ${g.entities.length === 1 ? 'entity' : 'entities'} · ${fmt(g.subtotal)} subtotal
+        </td></tr>
+        ${rows}`;
+    }).join('');
+
+    const monRows = monitorDetails.map((m) => `
+      <tr>
+        <td style="padding:6px 12px;font-size:13px;color:#1f2937;">${m.entity_name}</td>
+        <td style="padding:6px 12px;font-size:12px;color:#6b7280;">${m.processor}</td>
+        <td style="padding:6px 12px;font-size:12px;color:#6b7280;">${m.window_start} → ${m.window_end} (${m.active_days}/31 days)</td>
+        <td style="padding:6px 12px;font-size:13px;color:#1f2937;text-align:right;font-family:ui-monospace,monospace;">${fmt(m.prorated)}</td>
+      </tr>`).join('');
+
+    const catchupRow = catchupLine
+      ? `<tr><td colspan="4" style="padding:14px 12px 4px 12px;font-size:12px;font-weight:700;color:#b91c1c;background:#fef2f2;border-top:1px solid #e5e7eb;">${catchupLine.memo}</td></tr>
+         <tr><td colspan="3" style="padding:6px 12px;font-size:13px;color:#1f2937;">Catch-up balance</td><td style="padding:6px 12px;font-size:13px;color:#1f2937;text-align:right;font-family:ui-monospace,monospace;">${fmt(catchupLine.amount)}</td></tr>`
+      : '';
+
+    const grandTotal = Math.round(lineItems.reduce((a, l) => a + l.unitPrice * l.quantity, 0) * 100) / 100;
+
+    const html = `
+<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:780px;margin:0 auto;color:#1a2845;">
+  <div style="background:#f8fafc;padding:18px 24px;border-bottom:3px solid #00C48C;">
+    <h2 style="margin:0;font-size:20px;color:#0a1929;">${client.name} — May 2026 Invoice</h2>
+    <p style="margin:4px 0 0 0;font-size:13px;color:#475569;">Reference: <code>${invoiceNumber}</code> · Period: ${periodStart} → ${periodEnd}</p>
+    ${process.env.NODE_ENV !== 'production' || invoiceNumber.startsWith('TEST') ? '<p style="margin:8px 0 0 0;font-size:11px;color:#b91c1c;font-weight:700;letter-spacing:.5px;">*** TEST INVOICE — NOT FOR PAYMENT ***</p>' : ''}
+  </div>
+
+  <div style="padding:24px;">
+    <p style="font-size:14px;color:#1f2937;">Below is the full per-processor breakdown for May. Pay via the Mercury link at the bottom — ACH only, net ${5} days from invoice date.</p>
+
+    <h3 style="margin:24px 0 8px 0;font-size:15px;color:#0a1929;">Tax Verification — by loan officer</h3>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Entity</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Form</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Loan</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Completed</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;color:#6b7280;text-transform:uppercase;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${procRows || '<tr><td colspan="5" style="padding:12px;font-size:13px;color:#9ca3af;font-style:italic;">No verification activity in this period.</td></tr>'}</tbody>
+    </table>
+
+    ${monitorDetails.length > 0 ? `
+    <h3 style="margin:24px 0 8px 0;font-size:15px;color:#0a1929;">Account Monitoring — by enrollment</h3>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Entity</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Loan Officer</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;">Window</th>
+          <th style="padding:8px 12px;text-align:right;font-size:11px;color:#6b7280;text-transform:uppercase;">Prorated</th>
+        </tr>
+      </thead>
+      <tbody>${monRows}</tbody>
+    </table>` : ''}
+
+    ${catchupLine ? `
+    <h3 style="margin:24px 0 8px 0;font-size:15px;color:#b91c1c;">Catch-up balance</h3>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+      <tbody>${catchupRow}</tbody>
+    </table>` : ''}
+
+    <div style="margin-top:24px;padding:16px;background:#f0fdf4;border:1px solid #00C48C;border-radius:8px;text-align:right;">
+      <div style="font-size:12px;color:#15803d;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Total Due</div>
+      <div style="font-size:28px;font-weight:700;color:#0a1929;margin-top:2px;font-family:ui-monospace,monospace;">${fmt(grandTotal)}</div>
+    </div>
+
+    <div style="margin-top:24px;text-align:center;">
+      <a href="${payUrl}" style="display:inline-block;background:#0a1929;color:#fff;padding:14px 32px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px;">Pay invoice via Mercury &nbsp;→</a>
+      <p style="margin:12px 0 0 0;font-size:11px;color:#6b7280;">ACH Debit only · net ${5} days · payable to ModernTax Inc.</p>
+    </div>
+
+    <p style="margin-top:32px;font-size:12px;color:#6b7280;">Questions? Reply to this email or contact matt@moderntax.io. Full per-line audit trail also available in your <a href="https://portal.moderntax.io/invoicing" style="color:#295c9e;">invoicing portal</a>.</p>
+  </div>
+
+  <div style="background:#f8fafc;padding:14px 24px;font-size:11px;color:#94a3b8;border-top:1px solid #e5e7eb;">
+    ModernTax Inc. · IRS Practitioner Priority Service · ${invoiceNumber}
+  </div>
+</div>`;
+
+    try {
+      await sgMail.send({
+        to: testEmail,
+        from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
+        subject: `${invoiceNumber} — ${client.name} — ${fmt(grandTotal)} due`,
+        html,
+        text: `${client.name} May 2026 invoice ${invoiceNumber}. Total due: ${fmt(grandTotal)}. Pay: ${payUrl}. Detailed per-processor breakdown is in the HTML version of this email; also at https://portal.moderntax.io/invoicing.`,
+      });
+      L(`✓ SendGrid breakdown email sent to ${testEmail}`);
+    } catch (err: any) {
+      L(`! SendGrid send failed: ${err?.message || err}`);
+    }
+  }
 
   return NextResponse.json({
     success: true,
@@ -328,6 +462,11 @@ export async function POST(request: NextRequest) {
       monitoring_enrollments: monitoringEntities,
     },
     line_items: lineItems,
+    breakdown: {
+      processor_groups: processorGroups,
+      monitoring_details: monitorDetails,
+      catchup_line: catchupLine,
+    },
     grand_total: grandTotal,
     mercury: {
       invoice_id: mercuryInvoice.id,
