@@ -11,7 +11,21 @@
  *     client_slug: "centerstone" | "cal_statewide",
  *     test_email?: string,         // default matt@moderntax.io
  *     include_pending?: boolean,   // default false — only completed entities
- *     mode?: "stage" | "send_now"  // default "send_now"
+ *     mode?: "stage" | "send_now", // default "send_now"
+ *
+ *     // Optional balance-due mode (2026-05-29 — Matt's directive
+ *     // "Cal Statewide CDC should only get invoice for balance due not
+ *     // full amount"):
+ *     entities_completed_after?: string,  // ISO date — only bill entities
+ *                                          // completed strictly AFTER this.
+ *                                          // Used when prior invoice already
+ *                                          // billed everything ≤ this date.
+ *     monitoring_active_after?: string,    // ISO date — only count monitoring
+ *                                          // prorated AFTER this date.
+ *     catchup_line?: {                     // Adds a single fixed-amount line
+ *       amount: number,                    // for catch-up balance from an
+ *       memo: string,                      // earlier, partially-paid invoice.
+ *     },
  *   }
  *
  * Behavior:
@@ -63,7 +77,15 @@ export async function POST(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
   if (unauthorized) return unauthorized;
 
-  let body: { client_slug?: string; test_email?: string; include_pending?: boolean; mode?: 'stage' | 'send_now' };
+  let body: {
+    client_slug?: string;
+    test_email?: string;
+    include_pending?: boolean;
+    mode?: 'stage' | 'send_now';
+    entities_completed_after?: string;
+    monitoring_active_after?: string;
+    catchup_line?: { amount: number; memo: string };
+  };
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
 
@@ -75,6 +97,11 @@ export async function POST(request: NextRequest) {
   const testEmail = body.test_email?.trim().toLowerCase() || 'matt@moderntax.io';
   const includePending = body.include_pending === true;
   const mode: 'stage' | 'send_now' = body.mode === 'stage' ? 'stage' : 'send_now';
+  const entitiesCutoff = body.entities_completed_after?.trim() || null;
+  const monitoringCutoff = body.monitoring_active_after?.trim() || null;
+  const catchupLine = (body.catchup_line && typeof body.catchup_line.amount === 'number' && body.catchup_line.memo)
+    ? body.catchup_line
+    : null;
 
   const admin = createAdminClient();
   const log: string[] = [];
@@ -100,9 +127,16 @@ export async function POST(request: NextRequest) {
     .select(`id, entity_name, status, completed_at, gross_receipts, requests!inner(loan_number, client_id, requested_by, profiles!requests_requested_by_fkey(full_name, email))`)
     .eq('requests.client_id', client.id)
     .in('status', billStatuses);
+  // Floor on completion date is the LATER of periodStart and entitiesCutoff
+  // (when provided). Used for balance-due invoices that net out work
+  // already billed on a prior partially-paid invoice.
+  const lowerBound = entitiesCutoff && entitiesCutoff > `${periodStart}T00:00:00Z`
+    ? entitiesCutoff
+    : `${periodStart}T00:00:00Z`;
   if (!includePending) {
-    entitiesQ = entitiesQ.gte('completed_at', `${periodStart}T00:00:00Z`).lte('completed_at', `${periodEnd}T23:59:59Z`);
+    entitiesQ = entitiesQ.gt('completed_at', lowerBound).lte('completed_at', `${periodEnd}T23:59:59Z`);
   }
+  L(`  Entity cutoff: completed > ${lowerBound}`);
   const { data: entities } = await entitiesQ as { data: any[] | null };
   const allEntities = entities || [];
   // Filter out pre-billed
@@ -120,8 +154,11 @@ export async function POST(request: NextRequest) {
 
   const lineItems: LineItem[] = [];
   if (standardCount > 0) {
+    const verifLabel = entitiesCutoff
+      ? `Tax Verification — ${client.name} (completed after ${entitiesCutoff.slice(0, 10)})`
+      : `Tax Verification — ${client.name} (May 2026)`;
     lineItems.push({
-      name: `Tax Verification — ${client.name} (May 2026)`,
+      name: verifLabel,
       unitPrice: ratePdf,
       quantity: standardCount,
     });
@@ -145,15 +182,21 @@ export async function POST(request: NextRequest) {
       .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: any[] | null };
     const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
     const daysInMonth = 31;
-    const periodStartMs = Date.parse(`${periodStart}T00:00:00Z`);
-    const periodEndMs   = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
+    // Lower bound on the monitoring window — periodStart by default, OR
+    // monitoringCutoff (when provided) for balance-due invoices that
+    // already billed the early-period monitoring on a prior invoice.
+    const monitoringLowerMs = monitoringCutoff
+      ? Math.max(Date.parse(`${periodStart}T00:00:00Z`), Date.parse(monitoringCutoff))
+      : Date.parse(`${periodStart}T00:00:00Z`);
+    const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
+    L(`  Monitoring window: ${new Date(monitoringLowerMs).toISOString()} → ${new Date(periodEndMs).toISOString()}`);
     for (const m of (monitors || [])) {
       if (m.status === 'pending') continue;
       const enrolled = Date.parse(m.enrolled_at);
       const cancelled = m.cancelled_at ? Date.parse(m.cancelled_at) : Number.POSITIVE_INFINITY;
-      if (enrolled >= periodStartMs && cancelled <= periodEndMs) continue;
-      const windowStart = Math.max(enrolled, periodStartMs);
-      const windowEnd   = Math.min(cancelled, periodEndMs);
+      if (enrolled >= monitoringLowerMs && cancelled <= periodEndMs) continue;
+      const windowStart = Math.max(enrolled, monitoringLowerMs);
+      const windowEnd = Math.min(cancelled, periodEndMs);
       if (windowEnd <= windowStart) continue;
       const activeDays = Math.ceil((windowEnd - windowStart) / (24 * 3600 * 1000));
       const prorated = (Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate;
@@ -162,12 +205,25 @@ export async function POST(request: NextRequest) {
     }
     monitoringAmount = Math.round(monitoringAmount * 100) / 100;
     if (monitoringEntities > 0) {
+      const monLabel = monitoringCutoff
+        ? `Account Monitoring (${monitoringCutoff.slice(0, 10)} → ${periodEnd}, net new since prior invoice)`
+        : `Account Monitoring (${periodStart} → ${periodEnd})`;
       lineItems.push({
-        name: `Account Monitoring (${periodStart} → ${periodEnd})`,
+        name: monLabel,
         unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100,
         quantity: monitoringEntities,
       });
     }
+  }
+
+  // --- Catchup line (balance carried over from a partially-paid prior invoice) ---
+  if (catchupLine) {
+    lineItems.push({
+      name: catchupLine.memo,
+      unitPrice: Math.round(catchupLine.amount * 100) / 100,
+      quantity: 1,
+    });
+    L(`  Catchup line: $${catchupLine.amount.toFixed(2)} — ${catchupLine.memo}`);
   }
 
   const grandTotal = Math.round(lineItems.reduce((a, l) => a + l.unitPrice * l.quantity, 0) * 100) / 100;
