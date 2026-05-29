@@ -66,7 +66,12 @@ import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+// 2026-05-29 — bumped from 60s after a 504 on the Centerstone send_now
+// flow. Mercury customer+invoice creation + 26-entity PDF generation +
+// SendGrid send + DB write was occasionally exceeding 60s. 120s gives
+// headroom without changing the architecture; if it keeps tripping
+// we'll split Mercury/email into two endpoints.
+export const maxDuration = 120;
 
 const CLIENTS: Record<string, { name_ilike: string; slug: string }> = {
   centerstone:   { name_ilike: 'Centerstone%', slug: 'CENT' },
