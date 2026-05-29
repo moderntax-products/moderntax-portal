@@ -12,12 +12,15 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
-import { PRICE_ERC_BASE, PRICE_ERC_FULL_SWEEP_PREMIUM, PRICE_ERC_FULL_SWEEP_TOTAL, PRICE_CHECK_REISSUE, fmtUsd, fmtUsdShort } from '@/lib/pricing';
+import { PRICE_ERC_BASE, PRICE_ERC_FULL_SWEEP_PREMIUM, PRICE_ERC_FULL_SWEEP_TOTAL, PRICE_CHECK_REISSUE, PRICE_POST_CLOSE_MONITORING_MONTHLY, fmtUsd, fmtUsdShort } from '@/lib/pricing';
 import { LoanBillingForecast } from '@/components/LoanBillingForecast';
 
 const ENTITY_TRANSCRIPT_PRICE = 19.99;
 const CASH_FLOW_PACK_PRICE = 49.99;
-const MONITORING_MONTHLY_PRICE = 19.99;
+// 2026-05-28 — was 19.99 (legacy enrollment fee). Now references the
+// canonical post-close monitoring SKU price from INVOICE_SKU_CATALOG so
+// the entity table header and the forecast widget always agree.
+const MONITORING_MONTHLY_PRICE = PRICE_POST_CLOSE_MONITORING_MONTHLY;
 
 // Form types the dropdown offers. Order: most-common first.
 // 941 (employer quarterly payroll) was added May 2026 — enables ERC

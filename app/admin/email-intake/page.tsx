@@ -777,11 +777,26 @@ export default function EmailIntakePage() {
                         <div className="font-semibold text-mt-dark">{h.entity_name} <span className="text-gray-500 font-normal">({h.form_type}, TIN {h.tid_masked})</span></div>
                         <div className="text-gray-600">Previously pulled years: <span className="font-mono">{h.years_previously_pulled.join(', ') || '—'}</span> · {h.transcript_count} transcript{h.transcript_count === 1 ? '' : 's'} on file across {h.prior_request_count} prior request{h.prior_request_count === 1 ? '' : 's'}</div>
                         <div className={h.signature_still_valid ? 'text-emerald-700' : 'text-amber-700'}>
-                          {h.signed_8821_url
-                            ? h.signature_still_valid
-                              ? `✓ Signed 8821 on file (${h.signature_age_days}d old, within ${h.signed_8821_valid_window_days}d window) — will be reused, no new signature needed.`
-                              : `⚠ Signed 8821 on file but ${h.signature_age_days}d old (>${h.signed_8821_valid_window_days}d window) — a fresh 8821 will be required.`
-                            : '⚠ No 8821 on file — a fresh one will be required.'}
+                          {(() => {
+                            // Three-way state instead of two:
+                            //   1. No PDF on file at all → "No 8821 on file"
+                            //   2. PDF on file + valid timestamp + within window → reuse
+                            //   3. PDF on file but EITHER missing timestamp OR stale → require fresh
+                            // The middle of those used to render "nulld old"
+                            // when signature_created_at was null (e.g. older
+                            // entities pre-dating the timestamp column or
+                            // signatures inherited without metadata).
+                            if (!h.signed_8821_url) {
+                              return '⚠ No 8821 on file — a fresh one will be required.';
+                            }
+                            if (h.signature_still_valid && h.signature_age_days !== null) {
+                              return `✓ Signed 8821 on file (${h.signature_age_days}d old, within ${h.signed_8821_valid_window_days}d window) — will be reused, no new signature needed.`;
+                            }
+                            if (h.signature_age_days === null) {
+                              return '⚠ Signed 8821 on file but no signature timestamp on record — a fresh 8821 will be required (we can\'t confirm it\'s within the 120-day window).';
+                            }
+                            return `⚠ Signed 8821 on file but ${h.signature_age_days}d old (>${h.signed_8821_valid_window_days}d window) — a fresh 8821 will be required.`;
+                          })()}
                         </div>
                       </div>
                     );
