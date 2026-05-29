@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
     : ['completed'];
 
   let entitiesQ = admin.from('request_entities')
-    .select(`id, entity_name, status, completed_at, gross_receipts, requests!inner(loan_number, client_id, requested_by, profiles!requests_requested_by_fkey(full_name, email))`)
+    .select(`id, entity_name, form_type, status, completed_at, gross_receipts, requests!inner(loan_number, client_id, requested_by, profiles!requests_requested_by_fkey(full_name, email))`)
     .eq('requests.client_id', client.id)
     .in('status', billStatuses);
   // Floor on completion date is the LATER of periodStart and entitiesCutoff
@@ -144,52 +144,72 @@ export async function POST(request: NextRequest) {
   L(`  Entities found: ${allEntities.length} (pre-billed skipped: ${allEntities.length - billable.length})`);
 
   const ratePdf = Number(client.billing_rate_pdf || 59.98);
-  // Group reorders separately (priced at $29.99).
+
+  // 2026-05-29 — Matt: "Both need detailed itemized invoices with billing
+  // by processor, by entity, with specifics for monitoring." Switch from
+  // one summary line per category to ONE LINE PER ENTITY, sorted by
+  // processor name then entity name. Each line shows
+  //   "Verification — <Processor> — <Entity Name> (<form_type>, completed <date>)"
+  // Reorders are clearly distinguished with a "(Reorder)" suffix and the
+  // $29.99 rate. This is what the customer's AP team will see line-for-line
+  // on the Mercury invoice PDF.
+  const lineItems: LineItem[] = [];
+
+  // Sort entities by processor name, then by completed_at
+  const sortedBillable = [...billable].sort((a, b) => {
+    const pa = ((a.requests || {}).profiles || {}).full_name || 'Unattributed';
+    const pb = ((b.requests || {}).profiles || {}).full_name || 'Unattributed';
+    if (pa !== pb) return pa.localeCompare(pb);
+    const ca = a.completed_at || '';
+    const cb = b.completed_at || '';
+    return ca.localeCompare(cb);
+  });
+
   let reorderCount = 0;
   let standardCount = 0;
-  for (const e of billable) {
-    if (e?.gross_receipts?.reorder?.sku === 'reorder-from-history') reorderCount += 1;
-    else standardCount += 1;
-  }
-
-  const lineItems: LineItem[] = [];
-  if (standardCount > 0) {
-    const verifLabel = entitiesCutoff
-      ? `Tax Verification — ${client.name} (completed after ${entitiesCutoff.slice(0, 10)})`
-      : `Tax Verification — ${client.name} (May 2026)`;
-    lineItems.push({
-      name: verifLabel,
-      unitPrice: ratePdf,
-      quantity: standardCount,
-    });
-  }
-  if (reorderCount > 0) {
-    lineItems.push({
-      name: 'Tax Verification — Reorder (May 2026)',
-      unitPrice: 29.99,
-      quantity: reorderCount,
-    });
+  for (const e of sortedBillable) {
+    const processorName = ((e.requests || {}).profiles || {}).full_name || 'Unattributed';
+    const isReorder = e?.gross_receipts?.reorder?.sku === 'reorder-from-history';
+    const completedDate = (e.completed_at || '').slice(0, 10);
+    const formType = e.form_type || ''; // present in newer rows; ignored if missing
+    const formSuffix = formType ? ` (${formType})` : '';
+    if (isReorder) {
+      reorderCount += 1;
+      lineItems.push({
+        name: `Verification (Reorder) — ${processorName} — ${e.entity_name}${formSuffix}, completed ${completedDate}`,
+        unitPrice: 29.99,
+        quantity: 1,
+      });
+    } else {
+      standardCount += 1;
+      lineItems.push({
+        name: `Verification — ${processorName} — ${e.entity_name}${formSuffix}, completed ${completedDate}`,
+        unitPrice: ratePdf,
+        quantity: 1,
+      });
+    }
   }
 
   // --- Monitoring line (if enabled for this client) ---
   let monitoringAmount = 0;
   let monitoringEntities = 0;
   if (!client.disable_monitoring) {
+    // Join monitor rows with their entity_name for per-enrollment line items.
     const { data: monitors } = await admin.from('entity_monitoring')
-      .select('id, enrolled_at, cancelled_at, status')
+      .select('id, enrolled_at, cancelled_at, status, entity_id, request_entities!inner(entity_name, requests!inner(loan_number, profiles!requests_requested_by_fkey(full_name)))')
       .eq('client_id', client.id)
       .lte('enrolled_at', `${periodEnd}T23:59:59Z`)
       .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: any[] | null };
     const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
     const daysInMonth = 31;
-    // Lower bound on the monitoring window — periodStart by default, OR
-    // monitoringCutoff (when provided) for balance-due invoices that
-    // already billed the early-period monitoring on a prior invoice.
     const monitoringLowerMs = monitoringCutoff
       ? Math.max(Date.parse(`${periodStart}T00:00:00Z`), Date.parse(monitoringCutoff))
       : Date.parse(`${periodStart}T00:00:00Z`);
     const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
     L(`  Monitoring window: ${new Date(monitoringLowerMs).toISOString()} → ${new Date(periodEndMs).toISOString()}`);
+
+    type MonitorLine = { entityName: string; processor: string; windowStartIso: string; windowEndIso: string; activeDays: number; prorated: number };
+    const monitorLines: MonitorLine[] = [];
     for (const m of (monitors || [])) {
       if (m.status === 'pending') continue;
       const enrolled = Date.parse(m.enrolled_at);
@@ -199,19 +219,33 @@ export async function POST(request: NextRequest) {
       const windowEnd = Math.min(cancelled, periodEndMs);
       if (windowEnd <= windowStart) continue;
       const activeDays = Math.ceil((windowEnd - windowStart) / (24 * 3600 * 1000));
-      const prorated = (Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate;
-      monitoringAmount += prorated;
+      const prorated = Math.round(((Math.min(activeDays, daysInMonth) / daysInMonth) * monitoringRate) * 100) / 100;
+      const re = (m.request_entities || {});
+      const entityName = re.entity_name || '(unknown entity)';
+      const proc = ((re.requests || {}).profiles || {}).full_name || 'Unattributed';
+      monitorLines.push({
+        entityName,
+        processor: proc,
+        windowStartIso: new Date(windowStart).toISOString().slice(0, 10),
+        windowEndIso: new Date(windowEnd - 1).toISOString().slice(0, 10),
+        activeDays,
+        prorated,
+      });
       monitoringEntities += 1;
+      monitoringAmount += prorated;
     }
     monitoringAmount = Math.round(monitoringAmount * 100) / 100;
-    if (monitoringEntities > 0) {
-      const monLabel = monitoringCutoff
-        ? `Account Monitoring (${monitoringCutoff.slice(0, 10)} → ${periodEnd}, net new since prior invoice)`
-        : `Account Monitoring (${periodStart} → ${periodEnd})`;
+
+    // Sort by processor, then entity name
+    monitorLines.sort((a, b) => {
+      if (a.processor !== b.processor) return a.processor.localeCompare(b.processor);
+      return a.entityName.localeCompare(b.entityName);
+    });
+    for (const ml of monitorLines) {
       lineItems.push({
-        name: monLabel,
-        unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100,
-        quantity: monitoringEntities,
+        name: `Monitoring — ${ml.processor} — ${ml.entityName} (${ml.windowStartIso} → ${ml.windowEndIso}, ${ml.activeDays}/31 days at $${monitoringRate.toFixed(2)}/mo)`,
+        unitPrice: ml.prorated,
+        quantity: 1,
       });
     }
   }
