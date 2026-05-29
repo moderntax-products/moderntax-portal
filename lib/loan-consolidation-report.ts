@@ -1,7 +1,7 @@
 /**
  * Loan-Package Consolidation Report generator.
  *
- * Driver: 2026-05-28 Matt — the SKU was sold without a deliverable. This
+ * Driver: 2026-05-28 Matt -- the SKU was sold without a deliverable. This
  * generates a single PDF (and an Excel companion when invoked from a
  * server that can write files) that an underwriter can read end-to-end
  * for a multi-entity SBA loan.
@@ -19,7 +19,7 @@
  *   - Aggregate footer: total exposure across the loan, count of flags
  *     by category, recommended underwriter next-step
  *
- * The generator is intentionally tolerant of partial data — when a field
+ * The generator is intentionally tolerant of partial data -- when a field
  * is missing it emits an "n/a" cell rather than failing. That keeps it
  * useful for the "free admin demo" path Matt wants today even when the
  * underlying entities aren't yet fully completed.
@@ -144,7 +144,7 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
     const usedFont = opts.bold ? fontBold : font;
     let line = text;
     if (opts.max && opts.max > 0) {
-      // crude truncation — pdf-lib has no native wrap
+      // crude truncation -- pdf-lib has no native wrap
       while (usedFont.widthOfTextAtSize(line, size) > opts.max && line.length > 1) {
         line = line.slice(0, -2) + '…';
       }
@@ -192,7 +192,7 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
   drawText(`  · ${totalUnfiled} entit${totalUnfiled === 1 ? 'y' : 'ies'} with unfiled returns`, { size: 10, color: totalUnfiled > 0 ? danger : muted });
   drawText(`  · Aggregate balance-due exposure: $${totalBalanceDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { size: 10, color: totalBalanceDue > 0 ? warning : muted });
   if (pending > 0) {
-    drawText(`  · ${pending} entit${pending === 1 ? 'y' : 'ies'} not yet completed — report will refresh on completion`, { size: 9, color: muted });
+    drawText(`  · ${pending} entit${pending === 1 ? 'y' : 'ies'} not yet completed -- report will refresh on completion`, { size: 9, color: muted });
   }
   y -= 8;
 
@@ -211,16 +211,16 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
     drawText(`  Signer: ${signer} · Transcripts on file: ${e.transcript_urls?.length || 0}`, { size: 9, color: muted });
 
     if (flags.noRecordYears.length > 0) {
-      drawText(`  ⚠ No record found for: ${[...new Set(flags.noRecordYears)].sort().join(', ')}`, { size: 9, color: warning });
+      drawText(`  WARN:No record found for: ${[...new Set(flags.noRecordYears)].sort().join(', ')}`, { size: 9, color: warning });
     }
     if (flags.civilPenalties) {
-      drawText(`  ⛔ Civil penalties flagged on this entity`, { size: 9, color: danger });
+      drawText(`  FLAG:Civil penalties flagged on this entity`, { size: 9, color: danger });
     }
     if (flags.unfiledReturns) {
-      drawText(`  ⛔ Unfiled returns flagged on this entity`, { size: 9, color: danger });
+      drawText(`  FLAG:Unfiled returns flagged on this entity`, { size: 9, color: danger });
     }
     if (typeof flags.balanceDue === 'number' && flags.balanceDue > 0) {
-      drawText(`  ⚠ Balance due: $${flags.balanceDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { size: 9, color: warning });
+      drawText(`  WARN:Balance due: $${flags.balanceDue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, { size: 9, color: warning });
     }
     if (flags.notes.length > 0) {
       for (const n of flags.notes.slice(0, 3)) {
@@ -228,11 +228,11 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
         drawText(`  • ${n}`, { size: 8, color: muted, max: PAGE_W - MARGIN * 2 });
       }
       if (flags.notes.length > 3) {
-        drawText(`  • +${flags.notes.length - 3} more flags — see entity record for detail`, { size: 8, color: muted });
+        drawText(`  • +${flags.notes.length - 3} more flags -- see entity record for detail`, { size: 8, color: muted });
       }
     }
     if (flags.noRecordYears.length === 0 && !flags.civilPenalties && !flags.unfiledReturns && flags.notes.length === 0 && (flags.balanceDue == null || flags.balanceDue <= 0)) {
-      drawText(`  ✓ Clean — no flags`, { size: 9, color: accent });
+      drawText(`  OK:Clean -- no flags`, { size: 9, color: accent });
     }
     y -= 6;
   }
@@ -247,7 +247,7 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
       : totalNoRecord > 0
         ? 'Medium-risk profile: pull no-record-found years again post-close (monitoring) to confirm filing landed.'
         : 'Low-risk profile: aggregate flags are within acceptable range for SBA underwriting.',
-    'Reach out to the ModernTax team if borrower provides amended returns — we will reorder at the $29.99 reorder rate.',
+    'Reach out to the ModernTax team if borrower provides amended returns -- we will reorder at the $29.99 reorder rate.',
   ];
   for (const r of reco) {
     ensureSpace(1);
@@ -256,8 +256,8 @@ export async function generateConsolidationReportPdf(input: ConsolidationInput):
 
   ensureSpace(2);
   y -= 14;
-  drawText('— Generated by ModernTax Portal', { size: 8, color: muted });
-  drawText('  Loan-Package Consolidation Report SKU — see your invoice for billing detail.', { size: 8, color: muted });
+  drawText('-- Generated by ModernTax Portal', { size: 8, color: muted });
+  drawText('  Loan-Package Consolidation Report SKU -- see your invoice for billing detail.', { size: 8, color: muted });
 
   const bytes = await pdf.save();
   return Buffer.from(bytes);
