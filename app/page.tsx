@@ -273,13 +273,18 @@ export default async function DashboardPage({
         const RATE_CSV = clientBillingRateCsv;
         const FREE_ENTITIES_PER_ACCOUNT = 3;
 
-        // Flatten all entities with their request context for entity-level counting
+        // Flatten all entities with their request context for entity-level counting.
+        // 2026-05-29: also propagate the external loan-officer attribution
+        // from the request row so the per-officer stats can use it for
+        // API-sourced requests (Clearfirm).
         const allEntityRows = allClientRequests.flatMap((req: any) =>
           (req.request_entities || []).map((e: any) => ({
             ...e,
             requested_by: req.requested_by,
             intake_method: req.intake_method,
             request_created_at: req.created_at,
+            external_loan_officer_name: req.external_loan_officer_name || null,
+            external_loan_officer_email: req.external_loan_officer_email || null,
           }))
         );
 
@@ -292,10 +297,24 @@ export default async function DashboardPage({
           freeEntityIds = new Set(billableEntities.slice(0, FREE_ENTITIES_PER_ACCOUNT).map((e: any) => e.id));
         }
 
-        // Build per-officer stats from all entities
+        // Build per-officer stats from all entities. 2026-05-29: when the
+        // request has external_loan_officer_name (API-sourced from a partner
+        // LOS like Clearfirm), use that as the officer key instead of the
+        // requested_by user. The requested_by on API requests is always the
+        // admin who provisioned the API key — wrong attribution for the
+        // dashboard view of "who originated this loan."
         allEntityRows.forEach((entity: any) => {
-          const officerId = entity.requested_by;
-          const officerName = nameLookup[officerId] || 'Unknown';
+          // Key the bucket on the email (preferred, stable) or fall back
+          // to the name. For non-API requests this is just the requested_by uuid.
+          let officerId: string;
+          let officerName: string;
+          if (entity.external_loan_officer_name || entity.external_loan_officer_email) {
+            officerId = `ext:${(entity.external_loan_officer_email || entity.external_loan_officer_name).toLowerCase()}`;
+            officerName = entity.external_loan_officer_name || entity.external_loan_officer_email;
+          } else {
+            officerId = entity.requested_by;
+            officerName = nameLookup[officerId] || 'Unknown';
+          }
 
           if (!officerStats[officerId]) {
             officerStats[officerId] = { name: officerName, total: 0, completed: 0, pending: 0, amount: 0 };
@@ -1104,9 +1123,15 @@ export default async function DashboardPage({
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {requests.map((request) => {
-                    // Find officer name for manager view
+                    // Find officer name for manager view. 2026-05-29: prefer the
+                    // external loan-officer attribution from the API payload
+                    // (Clearfirm passes loan_officer_name + email per request)
+                    // over the requested_by lookup. Falls back to the
+                    // requested_by profile when the API payload omitted it OR
+                    // the intake was non-API.
+                    const externalName: string | null = (request as any).external_loan_officer_name || (request as any).external_loan_officer_email || null;
                     const officerProfile = teamProfiles.find((p) => p.id === request.requested_by);
-                    const officerName = officerProfile?.full_name || officerProfile?.email || '—';
+                    const officerName = externalName || officerProfile?.full_name || officerProfile?.email || '—';
 
                     return (
                       <tr key={request.id} className="hover:bg-gray-50 transition-colors">

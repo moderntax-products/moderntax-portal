@@ -51,6 +51,15 @@ interface TranscriptIntakeBody {
   loan_number?: string;
   entities: EntityPayload[];
   notes?: string;
+  /**
+   * Optional loan-officer attribution (2026-05-29). When the API partner's
+   * LOS knows which loan officer originated the request, pass the name and
+   * email here. The dashboard's "Loan Officer" column + manager breakdown
+   * table will use these instead of "Unknown" / the admin who provisioned
+   * the API key. Free-text — does NOT need to match a ModernTax profile.
+   */
+  loan_officer_name?: string;
+  loan_officer_email?: string;
 }
 
 const VALID_FORM_TYPES = ['1040', '1065', '1120', '1120S', '941'];
@@ -221,20 +230,41 @@ export async function POST(request: NextRequest) {
     // --- Create request ---
     const loanNumber = body.loan_number?.trim() || body.request_token.trim();
 
-    const { data: req, error: reqError } = await supabase
-      .from('requests')
-      .insert({
-        client_id: client.id,
-        requested_by: adminProfile.id,
-        loan_number: loanNumber,
-        intake_method: 'api',
-        product_type: 'transcript',
-        external_request_token: body.request_token.trim(),
-        status: 'irs_queue', // Skip 8821 flow — go straight to queue
-        notes: body.notes || `[API] Transcript request via ${client.name}`,
-      })
+    // Loan-officer attribution from the API payload (optional). Trimmed
+    // to strip accidental whitespace from LOS exports.
+    const officerName = body.loan_officer_name?.trim() || null;
+    const officerEmail = body.loan_officer_email?.trim().toLowerCase() || null;
+
+    // Two-phase insert: try with the officer columns first. If they don't
+    // exist yet (migration-external-loan-officer.sql not applied), retry
+    // without them. Same pattern as source_request_id + add_ons.
+    const reqInsertPayload: Record<string, unknown> = {
+      client_id: client.id,
+      requested_by: adminProfile.id,
+      loan_number: loanNumber,
+      intake_method: 'api',
+      product_type: 'transcript',
+      external_request_token: body.request_token.trim(),
+      status: 'irs_queue', // Skip 8821 flow — go straight to queue
+      notes: body.notes || `[API] Transcript request via ${client.name}${officerName ? ` (officer: ${officerName})` : ''}`,
+      external_loan_officer_name: officerName,
+      external_loan_officer_email: officerEmail,
+    };
+    let { data: req, error: reqError } = await (supabase
+      .from('requests') as any)
+      .insert(reqInsertPayload)
       .select()
       .single();
+    if (reqError && /external_loan_officer|column .* does not exist|PGRST204/i.test(reqError?.message || '')) {
+      console.warn('[transcript-intake] external_loan_officer_* columns missing — falling back without attribution. Paste supabase/migration-external-loan-officer.sql to enable.');
+      delete reqInsertPayload.external_loan_officer_name;
+      delete reqInsertPayload.external_loan_officer_email;
+      ({ data: req, error: reqError } = await (supabase
+        .from('requests') as any)
+        .insert(reqInsertPayload)
+        .select()
+        .single());
+    }
 
     if (reqError || !req) {
       console.error('[transcript-intake] Request creation error:', reqError);
