@@ -73,12 +73,13 @@ export default function NewRequestChooserPage() {
               <h2 className="text-lg font-bold text-mt-dark">Signed 8821 PDF</h2>
             </div>
             <p className="text-sm text-gray-600 flex-1 mb-4">
-              Already collected the borrower&apos;s signature elsewhere? Upload the PDF and we go straight to IRS pulling.
+              Have the borrower&apos;s signed 8821 in hand? Upload the PDF and we go straight to IRS pulling — no e-signature round-trip, no wet signature required.
             </p>
             <ul className="text-xs text-gray-500 space-y-1.5 mb-4">
-              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Multiple PDFs per submit</span></li>
-              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>No Dropbox Sign round-trip needed</span></li>
-              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Queues for IRS pull within minutes</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Accepts digital signatures (DocuSign, HelloSign, etc.)</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Or generate the 8821 from our portal template, send for signature in 2 clicks</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Up to 15 PDFs per loan submission, auto-matched to entities by TIN</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Queues for IRS pull within minutes — same-day turnaround in most cases</span></li>
             </ul>
             <div className="flex items-center justify-between pt-3 border-t border-gray-100">
               <span className="text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold">Skips signature step</span>

@@ -168,6 +168,186 @@ export const SELF_SERVE_CATALOG = {
 export type SelfServePackId = keyof typeof SELF_SERVE_CATALOG;
 
 // ---------------------------------------------------------------------------
+// 2026-05-28 SKU expansion — driven by Centerstone renegotiation +
+// Enterprise Bank discovery + the broader product-stack synthesis. Three
+// new SKUs, each tied to a specific customer ask:
+//   - REORDER:      Mathew Paek (Centerstone) "fine to charge us again
+//                   as long as it shows" → explicit reorder SKU at a
+//                   discount vs. new request.
+//   - POST_CLOSE_MONITORING: Derek + Jasmine (Enterprise) named this as
+//                   their primary use case ("we condition for tax
+//                   returns to be filed... reconcile post closing").
+//                   Flat monthly rate replaces the legacy per-pull
+//                   model (PRICE_MONITORING_PER_PULL) for clarity.
+//   - CONSOLIDATION_REPORT: Mathew Paek's "loan with 15 affiliates"
+//                   pipeline growth → per-loan SKU separate from
+//                   per-entity verification, sold to the underwriter.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reorder pricing — clone of a prior completed entity into a fresh
+ * request with new years. Discounted vs. PRICE_DEPOSIT because:
+ *   1. The existing 8821 is reused (no Dropbox Sign cost)
+ *   2. Vision/OCR results cached from the source entity
+ *   3. Expert PPS time is ~30% of a new pull (less identity verification,
+ *      designee already known)
+ * Surfaces in /admin/email-intake "Reorder from history" tab.
+ */
+export const PRICE_REORDER = 29.99;
+
+/**
+ * Post-close monitoring — flat monthly rate per enrolled entity, runs
+ * until the IRS finally has the transcript and we auto-unenroll. Matt
+ * confirmed this is the model going forward on the 2026-05-27
+ * Centerstone + Enterprise Bank calls. Replaces the legacy
+ * PRICE_MONITORING_MONTHLY ($19.99 enrollment) +
+ * PRICE_MONITORING_PER_PULL ($39.99 per fresh transcript) pair, which
+ * was confusing customers and producing surprise bills. The legacy
+ * constants stay exported for backwards-compat with auto-invoice cron
+ * paths that haven't been migrated yet.
+ */
+export const PRICE_POST_CLOSE_MONITORING_MONTHLY = 29.00;
+
+/**
+ * Loan-package consolidation report — single PDF + Excel that rolls up
+ * findings across all entities on a multi-entity loan. Sold per-loan
+ * (not per-entity), targets the underwriter / credit officer (not the
+ * loan processor). Anchored at $99 to drive adoption; revisit upward
+ * once we have signal on attach rate.
+ */
+export const PRICE_CONSOLIDATION_REPORT = 99.00;
+
+/** Minimum entity count on a loan before the consolidation report is offered. */
+export const CONSOLIDATION_REPORT_MIN_ENTITIES = 3;
+
+// ---------------------------------------------------------------------------
+// Unified invoice SKU catalog — single source of truth for Mercury line
+// items + Stripe Products. Used by:
+//   - scripts/register-invoice-skus-stripe.ts (creates Stripe Products
+//     + Prices, writes IDs back to env/DB)
+//   - Mercury invoice creation (line-item name + unit price)
+//   - The per-loan billing forecast widget on intake surfaces
+//   - The auto-invoice cron when building the breakdown PDF
+//
+// Each entry encodes everything billing systems need:
+//   - sku:         stable identifier used in code + DB writes
+//   - name:        what the customer sees on their invoice
+//   - description: longer-form explanation for invoice PDF + Stripe portal
+//   - unitPrice:   USD amount per unit (entity / loan / month, see cadence)
+//   - cadence:     'one_time' | 'monthly' (drives Stripe recurring config)
+//   - unit:        'entity' | 'loan' | 'enrollment' (for line-item math)
+//   - stripeMetadata: tags written to Stripe products for searchability
+// ---------------------------------------------------------------------------
+
+export type SkuCadence = 'one_time' | 'monthly';
+export type SkuUnit = 'entity' | 'loan' | 'enrollment' | 'pack';
+
+export interface InvoiceSku {
+  sku: string;
+  name: string;
+  description: string;
+  unitPrice: number;
+  cadence: SkuCadence;
+  unit: SkuUnit;
+  stripeMetadata: Record<string, string>;
+}
+
+export const INVOICE_SKU_CATALOG: Record<string, InvoiceSku> = {
+  // Verification tiers — match the three customer contracts today.
+  'verification-self-serve': {
+    sku: 'verification-self-serve',
+    name: 'Tax Verification (Self-Serve)',
+    description: 'Per-entity IRS tax verification on Self-Serve tier. Client uploads pre-signed 8821. Includes Record of Account + Tax Return Transcripts for up to 3 years.',
+    unitPrice: 49.98,
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'self_serve', category: 'verification' },
+  },
+  'verification-managed': {
+    sku: 'verification-managed',
+    name: 'Tax Verification (Managed)',
+    description: 'Per-entity IRS tax verification on Managed tier. ModernTax handles 8821 acquisition + signing. Includes Record of Account + Tax Return Transcripts for up to 3 years.',
+    unitPrice: PRICE_DEPOSIT, // 59.98
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'managed', category: 'verification' },
+  },
+  'verification-enterprise': {
+    sku: 'verification-enterprise',
+    name: 'Tax Verification (Enterprise)',
+    description: 'Per-entity IRS tax verification on Enterprise tier. Includes Record of Account + Tax Return Transcripts for up to 3 years, plus same-day SLA + dedicated expert routing + portfolio reporting eligibility.',
+    unitPrice: PRICE_PAYG, // 79.98
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'enterprise', category: 'verification' },
+  },
+
+  // Reorder — new 2026-05-28 SKU.
+  'reorder-from-history': {
+    sku: 'reorder-from-history',
+    name: 'Tax Verification — Reorder',
+    description: 'Re-pull of an existing entity for new years. Reuses the prior signed 8821 (within 120-day validity window). Discounted vs. a new request.',
+    unitPrice: PRICE_REORDER, // 29.99
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'add_on', category: 'reorder' },
+  },
+
+  // Monitoring — new flat monthly model.
+  'post-close-monitoring': {
+    sku: 'post-close-monitoring',
+    name: 'Post-Close Monitoring',
+    description: 'Monthly per-entity monitoring while we re-poll the IRS until the conditioned transcript lands. Auto-cancels the month the transcript arrives. Replaces the legacy enrollment + per-pull bill.',
+    unitPrice: PRICE_POST_CLOSE_MONITORING_MONTHLY, // 29.00
+    cadence: 'monthly',
+    unit: 'enrollment',
+    stripeMetadata: { tier: 'add_on', category: 'monitoring' },
+  },
+
+  // Loan-package consolidation — new per-loan SKU.
+  'loan-consolidation-report': {
+    sku: 'loan-consolidation-report',
+    name: 'Loan-Package Consolidation Report',
+    description: `Underwriter-ready PDF + Excel consolidating findings across every entity on a multi-entity loan (filing status, no-record-found years with reason codes, civil penalty flags, aggregate exposure). Offered on loans with ${CONSOLIDATION_REPORT_MIN_ENTITIES}+ entities.`,
+    unitPrice: PRICE_CONSOLIDATION_REPORT, // 99.00
+    cadence: 'one_time',
+    unit: 'loan',
+    stripeMetadata: { tier: 'add_on', category: 'reporting' },
+  },
+
+  // Existing add-ons brought into the catalog for unified handling.
+  'entity-transcript-addon': {
+    sku: 'entity-transcript-addon',
+    name: 'Entity Transcript Add-On',
+    description: 'Pre-verification entity transcript that confirms IRS filing requirements + NAICS code before we pull the income transcripts. Reduces blank-result frustration on form-type mismatches.',
+    unitPrice: PRICE_ENTITY_TRANSCRIPT, // 19.99
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'add_on', category: 'verification' },
+  },
+  'cash-flow-pack': {
+    sku: 'cash-flow-pack',
+    name: 'SBA Cash-Flow Pack',
+    description: 'Auto-generated cash-flow analysis PDF after the income transcripts complete. DSCR, trend, and ratio analysis ready for underwriter review.',
+    unitPrice: PRICE_CASH_FLOW_PACK, // 49.99
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'add_on', category: 'reporting' },
+  },
+};
+
+export type InvoiceSkuId = keyof typeof INVOICE_SKU_CATALOG;
+
+/** Resolve an SKU ID to its catalog entry. Throws if unknown — fail loud. */
+export function getInvoiceSku(sku: string): InvoiceSku {
+  const entry = INVOICE_SKU_CATALOG[sku];
+  if (!entry) {
+    throw new Error(`Unknown invoice SKU: ${sku}. Add it to INVOICE_SKU_CATALOG in lib/pricing.ts.`);
+  }
+  return entry;
+}
+
+// ---------------------------------------------------------------------------
 // Helper for currency formatting — used by UI surfaces that display prices.
 // ---------------------------------------------------------------------------
 

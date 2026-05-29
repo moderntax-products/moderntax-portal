@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
 import { PRICE_ERC_BASE, PRICE_ERC_FULL_SWEEP_PREMIUM, PRICE_ERC_FULL_SWEEP_TOTAL, PRICE_CHECK_REISSUE, fmtUsd, fmtUsdShort } from '@/lib/pricing';
+import { LoanBillingForecast } from '@/components/LoanBillingForecast';
 
 const ENTITY_TRANSCRIPT_PRICE = 19.99;
 const CASH_FLOW_PACK_PRICE = 49.99;
@@ -89,6 +90,13 @@ export function CsvUploadFlow() {
   // matches each PDF to the entity in this submission.
   const [presigned8821Pdfs, setPresigned8821Pdfs] = useState<File[]>([]);
   const pdfRef = useRef<HTMLInputElement>(null);
+
+  // Loan-Package Consolidation Report — new SKU 2026-05-28. Opt-in
+  // toggle inline on the billing forecast widget. Only offered on loans
+  // with ≥ CONSOLIDATION_REPORT_MIN_ENTITIES entities (Mathew Paek's
+  // "15-affiliate loan" use case). Submitted as form data so the
+  // CSV intake server route can stamp the request with the SKU.
+  const [consolidationReportSelected, setConsolidationReportSelected] = useState(false);
   const supabaseClient = useMemo(() => createClient(), []);
   useEffect(() => {
     // Dev-only preview override: ?demo=1 forces the "required 8821 PDF"
@@ -412,6 +420,13 @@ export function CsvUploadFlow() {
         // by rowIndex.
         const formTypeOverrides = previewEntities.map(e => ({ rowIndex: e.rowIndex, formType: e.formType }));
         formData.append('form_type_overrides', JSON.stringify(formTypeOverrides));
+      }
+
+      // Consolidation-report add-on (2026-05-28 new per-loan SKU at $99).
+      // Server stamps the request with the SKU so the auto-invoice cron
+      // picks it up as a one-time loan-level line item.
+      if (consolidationReportSelected) {
+        formData.append('add_loan_consolidation_report', '1');
       }
 
       // Dev-only demo mode: ?demo=1 routes to a dry-run endpoint that
@@ -785,6 +800,33 @@ export function CsvUploadFlow() {
 
       {previewEntities && previewEntities.length > 0 && (
         <div className="bg-white rounded-lg shadow p-8">
+          {/* Billing forecast (2026-05-28 Mathew Paek "Jasmine getting fed up"
+              fix). Surfaces every billable line live so the processor sees
+              exactly what's coming on the next invoice before they submit.
+              Inline monitoring + consolidation toggles double as the opt-in
+              path for the two new SKUs. */}
+          <div className="mb-6">
+            <LoanBillingForecast
+              entityCount={previewEntities.length}
+              verificationTier={require8821Pdfs ? 'self-serve' : 'managed'}
+              monitoringEnrollmentCount={
+                disableMonitoring ? 0 : (previewEntities.length - monitoringSkipCount)
+              }
+              consolidationReportSelected={consolidationReportSelected}
+              cashFlowPackCount={cashFlowPackCount}
+              entityTranscriptCount={entityTranscriptCount}
+              onMonitoringChange={disableMonitoring ? undefined : (count) => {
+                // count = 0 means skip ALL; count = entityCount means enroll ALL.
+                if (count === 0) {
+                  setPreviewEntities(previewEntities.map((e) => ({ ...e, enrollMonitoring: false })));
+                } else {
+                  setPreviewEntities(previewEntities.map((e) => ({ ...e, enrollMonitoring: true })));
+                }
+              }}
+              onConsolidationReportChange={setConsolidationReportSelected}
+            />
+          </div>
+
           <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
             <div>
               <h3 className="text-lg font-bold text-mt-dark">Review Entities</h3>

@@ -489,20 +489,48 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create batch' }, { status: 500 });
     }
 
-    // Create single request with the user-provided loan number
-    const { data: req, error: reqError } = (await supabase
-      .from('requests')
-      .insert({
-        client_id: profile.client_id,
-        requested_by: user.id,
-        batch_id: batch.id,
-        loan_number: effectiveLoanNumber,
-        intake_method: 'csv',
-        status: 'submitted',
-        notes: notes || null,
-      })
+    // Loan-Package Consolidation Report — new SKU 2026-05-28. Per-loan
+    // add-on at $99. Read the opt-in flag from the multipart form and
+    // stamp it into requests.add_ons so the auto-invoice cron picks it
+    // up as a loan-level line item.
+    const addLoanConsolidation = formData.get('add_loan_consolidation_report') === '1';
+    const addOnsForRequest: Record<string, any> = {};
+    if (addLoanConsolidation) {
+      addOnsForRequest.loan_consolidation_report = {
+        selected: true,
+        price: 99.00,
+        sku: 'loan-consolidation-report',
+        selected_at: new Date().toISOString(),
+      };
+    }
+
+    // Create single request with the user-provided loan number. Two-phase
+    // insert handles older envs where the add_ons column isn't migrated
+    // yet — same pattern as source_request_id.
+    const reqInsertPayload: Record<string, unknown> = {
+      client_id: profile.client_id,
+      requested_by: user.id,
+      batch_id: batch.id,
+      loan_number: effectiveLoanNumber,
+      intake_method: 'csv',
+      status: 'submitted',
+      notes: notes || null,
+      add_ons: addOnsForRequest,
+    };
+    let { data: req, error: reqError } = (await (supabase
+      .from('requests') as any)
+      .insert(reqInsertPayload)
       .select()
-      .single()) as { data: { id: string } | null; error: unknown };
+      .single()) as { data: { id: string } | null; error: any };
+    if (reqError && /add_ons|column .* does not exist|PGRST204/i.test(reqError?.message || '')) {
+      console.warn('[csv-upload] add_ons column missing — falling back without it. Paste supabase/migration-request-add-ons.sql in Studio to enable.');
+      delete reqInsertPayload.add_ons;
+      ({ data: req, error: reqError } = (await (supabase
+        .from('requests') as any)
+        .insert(reqInsertPayload)
+        .select()
+        .single()) as { data: { id: string } | null; error: any });
+    }
 
     if (reqError || !req) {
       console.error('Request creation error:', reqError);

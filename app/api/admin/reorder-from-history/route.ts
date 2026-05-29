@@ -185,7 +185,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: reqErr?.message || 'Failed to create request' }, { status: 500 });
   }
 
-  // 4. Clone the entity row.
+  // 4. Clone the entity row. Stamp gross_receipts with the reorder SKU
+  //    so the auto-invoice cron bills at $29.99 (PRICE_REORDER) instead
+  //    of the client's normal verification rate. This is the per-entity
+  //    flag the cron looks for when computing the period total.
   const newEntityRow: Record<string, unknown> = {
     request_id: newRequest.id,
     entity_name: sourceEntity.entity_name,
@@ -201,6 +204,15 @@ export async function POST(request: NextRequest) {
     state: sourceEntity.state,
     zip_code: sourceEntity.zip_code,
     status: canReuse8821 ? '8821_signed' : 'pending',
+    gross_receipts: {
+      reorder: {
+        sku: 'reorder-from-history',
+        price: 29.99,
+        source_entity_id: sourceEntity.id,
+        source_request_id: sourceEntity.requests.id,
+        marked_at: new Date().toISOString(),
+      },
+    },
   };
   if (canReuse8821) {
     newEntityRow.signed_8821_url = sourceEntity.signed_8821_url;

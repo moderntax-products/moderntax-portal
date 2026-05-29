@@ -247,6 +247,11 @@ export async function GET(request: NextRequest) {
           // in place for backwards-compat with admin UI but the cron ignores
           // it. Remove the column when convenient.
           const baseRate = ratePdf;
+          // Track reorders separately so they show as their own Mercury
+          // line item ("Tax Verification — Reorder × N at $29.99"). New
+          // 2026-05-28 SKU stamped by /api/admin/reorder-from-history.
+          let reorderEntities = 0;
+          let reorderAmount = 0;
           (completedRequests || []).forEach((req: any) => {
             const entities = req.request_entities || [];
             entities.forEach((entity: any) => {
@@ -261,10 +266,24 @@ export async function GET(request: NextRequest) {
               // and any future ad-hoc pre-bill path.
               if (entity.gross_receipts?.pre_billed?.invoice_id) return;
 
+              // Reorder SKU — flat $29.99 instead of the tier rate.
+              // Stamped by the reorder-from-history admin route.
+              const reorderMark = entity.gross_receipts?.reorder;
+              if (reorderMark?.sku === 'reorder-from-history') {
+                const reorderPrice = typeof reorderMark.price === 'number' ? reorderMark.price : 29.99;
+                reorderEntities += 1;
+                reorderAmount += reorderPrice;
+                return;
+              }
+
               totalEntities += 1;
               totalAmount += baseRate;
             });
           });
+          reorderAmount = Math.round(reorderAmount * 100) / 100;
+          // Expose for the line-item builder below.
+          (client as any)._reorderEntities = reorderEntities;
+          (client as any)._reorderAmount = reorderAmount;
           // rateCsv reference kept silent so unused-var lint doesn't fire on
           // imports we still want available for future tiered pricing work.
           void rateCsv;
@@ -373,21 +392,49 @@ export async function GET(request: NextRequest) {
         }
         checkReissueAmount = Math.round(checkReissueAmount * 100) / 100;
 
+        // --- Loan-Package Consolidation Report — new $99 SKU 2026-05-28 ---
+        // Sold per-loan (per requests row), stored on requests.add_ons.
+        // Walk every request for this client this period and bill $99 once
+        // per request that opted in. Stamp requests.add_ons.loan_consolidation_report.billed_at
+        // for idempotency on subsequent cron runs.
+        type ConsolidationLine = { request_id: string; loan_number: string | null; price: number };
+        const consolidationLines: ConsolidationLine[] = [];
+        let consolidationAmount = 0;
+        const { data: consolRequests } = await supabase
+          .from('requests')
+          .select('id, loan_number, add_ons, created_at')
+          .eq('client_id', client.id)
+          .gte('created_at', periodStart)
+          .lte('created_at', `${periodEnd}T23:59:59.999Z`) as { data: any[] | null };
+        for (const r of (consolRequests || [])) {
+          const addOn = r?.add_ons?.loan_consolidation_report;
+          if (!addOn?.selected) continue;
+          if (addOn?.billed_at) continue; // already billed
+          const price = typeof addOn.price === 'number' ? addOn.price : 99.00;
+          consolidationLines.push({ request_id: r.id, loan_number: r.loan_number, price });
+          consolidationAmount += price;
+        }
+        consolidationAmount = Math.round(consolidationAmount * 100) / 100;
+
         // Skip only for per-TIN clients with zero activity across ALL service
-        // lines (verification, monitoring, cash-flow pack, check reissue).
-        // Subscription clients always get invoiced for the flat monthly fee.
+        // lines (verification, monitoring, cash-flow pack, check reissue,
+        // consolidation report). Subscription clients always get invoiced
+        // for the flat monthly fee.
         if (
           !isSubscription &&
           totalEntities === 0 &&
           monitoringEntities === 0 &&
           cashFlowPacks.length === 0 &&
-          checkReissues.length === 0
+          checkReissues.length === 0 &&
+          consolidationLines.length === 0
         ) {
           skipped++;
           continue;
         }
 
-        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount + checkReissueAmount) * 100) / 100;
+        const reorderEntities = ((client as any)._reorderEntities as number) || 0;
+        const reorderAmount = ((client as any)._reorderAmount as number) || 0;
+        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount + checkReissueAmount + consolidationAmount + reorderAmount) * 100) / 100;
 
         // Generate invoice number: INV-{year}-{month}-{slug}
         const slugUpper = client.slug.toUpperCase().slice(0, 4);
@@ -463,6 +510,34 @@ export async function GET(request: NextRequest) {
             .from('request_entities')
             .update({ gross_receipts: updated })
             .eq('id', pack.entityId);
+        }
+
+        // Mark Loan-Package Consolidation Reports as billed against this
+        // invoice. Idempotency: subsequent cron runs skip rows where
+        // add_ons.loan_consolidation_report.billed_at is set. Done after
+        // the invoice row exists for the same Mercury-failure-survival
+        // reasoning as cash-flow packs and check-reissue rows above.
+        for (const line of consolidationLines) {
+          const { data: cur } = await supabase
+            .from('requests')
+            .select('add_ons')
+            .eq('id', line.request_id)
+            .single() as { data: { add_ons: any } | null };
+          if (!cur?.add_ons?.loan_consolidation_report) continue;
+          const updatedAddOns = {
+            ...cur.add_ons,
+            loan_consolidation_report: {
+              ...cur.add_ons.loan_consolidation_report,
+              billed: true,
+              billed_at: new Date().toISOString(),
+              invoice_id: insertedInvoice.id,
+              invoice_number: invoiceNumber,
+            },
+          };
+          await (supabase
+            .from('requests') as any)
+            .update({ add_ons: updatedAddOns })
+            .eq('id', line.request_id);
         }
 
         // ---------------------------------------------------------------
@@ -566,6 +641,26 @@ export async function GET(request: NextRequest) {
                 name: label,
                 unitPrice: r.service_fee,
                 quantity: 1,
+              });
+            }
+            // Loan-Package Consolidation Report — new $99 per-loan SKU.
+            // One line per loan so the underwriter / AP team can see which
+            // loan the consolidated PDF was generated for.
+            for (const c of consolidationLines) {
+              lineItems.push({
+                name: `Loan-Package Consolidation Report — loan ${c.loan_number || c.request_id.slice(0, 8)}`,
+                unitPrice: c.price,
+                quantity: 1,
+              });
+            }
+            // Reorder line — new $29.99 SKU 2026-05-28. Grouped one line
+            // for transparency on the Mercury PDF; per-entity detail
+            // appears on the breakdown email.
+            if (reorderEntities > 0) {
+              lineItems.push({
+                name: 'Tax Verification — Reorder',
+                unitPrice: reorderEntities === 0 ? 0 : Math.round((reorderAmount / reorderEntities) * 100) / 100,
+                quantity: reorderEntities,
               });
             }
           }
