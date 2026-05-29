@@ -48,13 +48,23 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
   const { data: profile } = await sb.from('profiles').select('role').eq('id', user.id).single() as { data: { role: string } | null };
-  if (profile?.role !== 'admin') {
-    return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+  // 2026-05-28 — widened beyond admin so processors / managers can use
+  // the same endpoint to self-serve a reorder of their own historical
+  // entities. Admin can query any processor_id; processor / manager can
+  // only query their own user id (enforced below).
+  if (!profile || !['admin', 'processor', 'manager'].includes(profile.role || '')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const processorId = request.nextUrl.searchParams.get('processor_id');
   if (!processorId) {
     return NextResponse.json({ error: 'processor_id required' }, { status: 400 });
+  }
+
+  // Non-admin callers can only fetch their OWN history — prevents one
+  // processor from enumerating another's submitted entities.
+  if (profile.role !== 'admin' && processorId !== user.id) {
+    return NextResponse.json({ error: 'Can only fetch your own history' }, { status: 403 });
   }
 
   const admin = createAdminClient();

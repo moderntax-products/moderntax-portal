@@ -8,6 +8,7 @@ import { AdminExpertAssign } from '@/components/AdminExpertAssign';
 import { Regenerate8821Button } from '@/components/Regenerate8821Button';
 import { Send8821ForSignatureButton } from '@/components/Send8821ForSignatureButton';
 import { EntityNotesThread } from '@/components/EntityNotesThread';
+import { GenerateConsolidationReportButton } from '@/components/GenerateConsolidationReportButton';
 import { Admin8821Upload } from '@/components/Admin8821Upload';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
 import { Entity8821Info } from '@/components/Entity8821Info';
@@ -174,12 +175,19 @@ export default async function AdminRequestManagePage({ params }: Props) {
                 </p>
               </div>
             </div>
-            <Link
-              href={`/request/${request.id}`}
-              className="text-sm text-gray-500 hover:text-gray-700 border border-gray-300 rounded-lg px-3 py-1.5"
-            >
-              Client View →
-            </Link>
+            <div className="flex items-center gap-3 flex-wrap">
+              <GenerateConsolidationReportButton
+                requestId={request.id}
+                loanNumber={request.loan_number}
+                entityCount={request.request_entities?.length || 0}
+              />
+              <Link
+                href={`/request/${request.id}`}
+                className="text-sm text-gray-500 hover:text-gray-700 border border-gray-300 rounded-lg px-3 py-1.5"
+              >
+                Client View →
+              </Link>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <span className={`inline-block px-4 py-2 rounded-full text-sm font-semibold ${getStatusBadgeColor(request.status)}`}>

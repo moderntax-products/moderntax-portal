@@ -140,6 +140,35 @@ export default function NewRequestChooserPage() {
               <span className="text-mt-green font-semibold text-sm group-hover:translate-x-0.5 transition-transform">Open →</span>
             </div>
           </Link>
+
+          {/* Reorder from history — new 2026-05-28 self-serve flow. Reuses
+              the existing 8821, lands at $29.99 instead of full verification
+              rate. Solves Soobin's Peter Geyen workflow without admin relay. */}
+          <Link
+            href="/new/reorder"
+            className="group bg-white rounded-2xl border-2 border-gray-200 hover:border-mt-green hover:shadow-lg transition-all p-7 flex flex-col"
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-3 rounded-xl bg-violet-50 text-violet-700 group-hover:bg-violet-100 transition-colors">
+                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </div>
+              <h2 className="text-lg font-bold text-mt-dark">Reorder from history</h2>
+            </div>
+            <p className="text-sm text-gray-600 flex-1 mb-4">
+              Re-pull a prior entity for new years (e.g. amended 2024 return now filed). Reuses the existing 8821, skips re-signature, lands in the IRS queue immediately.
+            </p>
+            <ul className="text-xs text-gray-500 space-y-1.5 mb-4">
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Discounted at <strong>$29.99</strong> (vs. full $59.98 verification rate)</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Existing 8821 auto-reused when within the 120-day window</span></li>
+              <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>One-click — no CSV, no new signature, no admin email</span></li>
+            </ul>
+            <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+              <span className="text-xs px-2 py-0.5 rounded bg-violet-50 text-violet-700 font-semibold">$29.99 · ~30 seconds</span>
+              <span className="text-mt-green font-semibold text-sm group-hover:translate-x-0.5 transition-transform">Open →</span>
+            </div>
+          </Link>
         </div>
 
         <div className="mt-10 bg-blue-50 border border-blue-200 rounded-lg p-5 text-sm">

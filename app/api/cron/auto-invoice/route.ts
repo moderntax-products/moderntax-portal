@@ -17,6 +17,7 @@ import {
   getMercuryPayUrl,
 } from '@/lib/mercury';
 import { requireBearer } from '@/lib/auth-util';
+import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
 
 export const maxDuration = 60;
 
@@ -294,7 +295,13 @@ export async function GET(request: NextRequest) {
         // verification entities. Prorate by fraction of the billing month the
         // entity was enrolled (enrolled_at ≤ period_end AND not cancelled before
         // period_start).
-        const monitoringRate = client.billing_rate_monitoring ?? 25;
+        // 2026-05-28 — Default to the catalog price ($29.00) so the
+        // auto-invoice math matches what the forecast widget shows the
+        // processor at intake. client.billing_rate_monitoring is kept as
+        // an OPTIONAL per-client override for special-case contracts; if
+        // it's null/unset the catalog wins. This eliminates the prior
+        // mismatch where UI said $29 but cron billed $25.
+        const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
         let monitoringEntities = 0;
         let monitoringAmount = 0;
         // Per-client opt-out: when disable_monitoring=true (Centerstone

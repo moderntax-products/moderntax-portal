@@ -6,6 +6,7 @@ import { FireAllPending8821sButton } from '@/components/FireAllPending8821sButto
 import { UpgradeYourTeamPanel } from '@/components/UpgradeYourTeamPanel';
 import { ProcessorUpgradeCTAs } from '@/components/ProcessorUpgradeCTAs';
 import { AskAIPanel } from '@/components/AskAIPanel';
+import { PremiumSlaSurface } from '@/components/PremiumSlaSurface';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 
 export default async function DashboardPage({
@@ -797,6 +798,13 @@ export default async function DashboardPage({
             </div>
           );
         })()}
+
+        {/* Premium SLA — banner for standard accounts (upgrade CTA), badge
+            for premium accounts (Cal Statewide today). Driver: 2026-05-28
+            productized same-day SLA tier. */}
+        <div className="mb-6">
+          <PremiumSlaSurface variant="banner" />
+        </div>
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">

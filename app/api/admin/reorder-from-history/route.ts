@@ -54,11 +54,17 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-  const { data: adminProfile } = await sb.from('profiles')
+  // 2026-05-28 — widened beyond admin so processors / managers can self-
+  // serve a reorder of their own historical entities. Admin can submit a
+  // reorder for any processor_id; processor / manager can only submit a
+  // reorder for themselves (enforced below by comparing user.id to
+  // body.processor_id).
+  const { data: callerProfile } = await sb.from('profiles')
     .select('role, full_name, email').eq('id', user.id).single() as { data: { role: string; full_name: string | null; email: string } | null };
-  if (adminProfile?.role !== 'admin') {
-    return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+  if (!callerProfile || !['admin', 'processor', 'manager'].includes(callerProfile.role || '')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+  const adminProfile = callerProfile; // back-compat for code below that still references adminProfile
 
   let body: {
     processor_id?: string;
@@ -84,6 +90,12 @@ export async function POST(request: NextRequest) {
   if (!sourceEntityId) return NextResponse.json({ error: 'source_entity_id required' }, { status: 400 });
   if (!loanNumber) return NextResponse.json({ error: 'loan_number required' }, { status: 400 });
   if (newYears.length === 0) return NextResponse.json({ error: 'new_years required (e.g. [2024])' }, { status: 400 });
+
+  // Non-admin callers can only reorder for THEMSELVES — prevents one
+  // processor from creating a reorder attributed to another processor.
+  if (callerProfile.role !== 'admin' && processorId !== user.id) {
+    return NextResponse.json({ error: 'Can only reorder your own history' }, { status: 403 });
+  }
 
   const admin = createAdminClient();
 
