@@ -9,37 +9,33 @@
  * upgrade CTA on their dashboard so they convert from speed-curious to
  * paying.
  *
- * Drop this into the dashboard top-right or the request detail page
- * header. Reads sla_tier off the user's profile.client config.
+ * 2026-05-29 refactor: tier is now passed as a PROP (server-rendered)
+ * instead of fetched client-side. The original client-side fetch could
+ * fail silently when:
+ *   - sla_tier column wasn't migrated yet (now it is)
+ *   - Anon-client RLS blocked the clients table read
+ *   - The select referenced a column that didn't exist
+ *     (sla_tier_requested_at was selected but never created)
+ * Server-rendering via the admin client makes this rock-solid: any
+ * authenticated user with a real client_id sees the right state.
  */
 
-import { useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase';
+import { useState } from 'react';
 
-type Tier = 'standard' | 'premium' | null;
+export interface PremiumSlaSurfaceProps {
+  /**
+   * The client's current SLA tier. Server-rendered from the auto-invoice
+   * cron's data source. Pass null when the migration hasn't been applied
+   * yet — the component renders nothing in that case (fail-quiet).
+   */
+  tier: 'standard' | 'premium' | null;
+  variant?: 'inline' | 'banner';
+}
 
-export function PremiumSlaSurface({ variant = 'inline' }: { variant?: 'inline' | 'banner' }) {
-  const [tier, setTier] = useState<Tier>(null);
+export function PremiumSlaSurface({ tier, variant = 'inline' }: PremiumSlaSurfaceProps) {
   const [requested, setRequested] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      const sb = createClient();
-      const { data: { user } } = await sb.auth.getUser();
-      if (!user) return;
-      const { data: profile } = await sb.from('profiles')
-        .select('client_id').eq('id', user.id).single() as { data: { client_id: string | null } | null };
-      if (!profile?.client_id) return;
-      const { data: client } = await sb.from('clients')
-        .select('sla_tier, sla_tier_requested_at').eq('id', profile.client_id).single() as { data: { sla_tier: Tier; sla_tier_requested_at: string | null } | null };
-      if (client) {
-        setTier(client.sla_tier);
-        if (client.sla_tier_requested_at) setRequested(true);
-      }
-    })().catch(() => {/* silent — pre-migration */});
-  }, []);
 
   const handleUpgrade = async () => {
     setSubmitting(true);
@@ -49,7 +45,7 @@ export function PremiumSlaSurface({ variant = 'inline' }: { variant?: 'inline' |
       const data = await res.json();
       if (res.ok) {
         setRequested(true);
-        setMessage(data.message || 'Upgrade requested — we\'ll be in touch.');
+        setMessage(data.message || 'Upgrade requested — we will be in touch.');
       } else {
         setMessage(data.error || 'Something went wrong.');
       }

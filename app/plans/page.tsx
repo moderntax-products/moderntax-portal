@@ -22,35 +22,33 @@
 import Link from 'next/link';
 import { createServerComponentClient } from '@/lib/supabase-server';
 import { TierUpgradeButton } from '@/components/TierUpgradeButton';
+// Single source of truth: lib/pricing.ts INVOICE_SKU_CATALOG. No more
+// drift between this marketing page, the cron, and the forecast widget.
+import {
+  PRICE_PAYG,
+  PRICE_DEPOSIT,
+  PRICE_PLATFORM,
+  PRICE_PLATFORM_MONTHLY,
+  PRICE_DEPOSIT_ONBOARDING,
+  PRICE_POST_CLOSE_MONITORING_MONTHLY,
+  PRICE_ERC_BASE,
+  PRICE_ERC_FULL_SWEEP_TOTAL,
+  PRICE_CHECK_REISSUE,
+  PRICE_CASH_FLOW_PACK,
+  PRICE_ENTITY_TRANSCRIPT,
+  PRICE_REORDER,
+  PRICE_CONSOLIDATION_REPORT,
+  CONSOLIDATION_REPORT_MIN_ENTITIES,
+} from '@/lib/pricing';
 
 export const metadata = {
   title: 'Plans & Add-Ons — ModernTax',
-  description: 'Compare ModernTax plan tiers and add-ons for SBA lender teams. PAYG, Deposit, and Platform tiers + Continuous Monitoring and Cash-Flow Analysis Pack add-ons.',
+  description: 'Compare ModernTax plan tiers and add-ons for SBA lender teams. PAYG, Deposit, Platform tiers + Premium SLA upgrade + Post-Close Monitoring, Loan-Package Consolidation Report, Reorder, Cash-Flow Analysis Pack add-ons.',
 };
 
 interface PlansPageProps {
   searchParams: Promise<{ upgrade?: string; tier?: string; session_id?: string }>;
 }
-
-// Pricing constants — kept in sync with the API/billing layer manually since
-// they're spread across multiple route files. If pricing changes, grep for
-// these dollar amounts in:
-//   app/api/cron/auto-invoice/route.ts (per-pull rates + monitoring rate)
-//   app/api/cash-flow/generate/route.ts (CASH_FLOW_PACK_PRICE)
-//   components/UpgradeYourTeamPanel.tsx (display constants)
-//   lib/repeat-entity.ts (MONITORING_PER_PULL_FEE)
-const PRICE_PAYG = 79.98;
-const PRICE_DEPOSIT = 59.98;
-const PRICE_PLATFORM = 39.99;
-const PRICE_PLATFORM_MONTHLY = 2500;
-const PRICE_DEPOSIT_ONBOARDING = 2500;
-const PRICE_MONITORING_MONTHLY = 19.99;
-const PRICE_ERC_BASE = 79.98;
-const PRICE_ERC_FULL_SWEEP_TOTAL = 159.96;
-const PRICE_CHECK_REISSUE = 1000;
-const PRICE_MONITORING_PER_PULL = 39.99;
-const PRICE_CASH_FLOW_PACK = 49.99;
-const PRICE_ENTITY_TRANSCRIPT = 19.99;
 
 export default async function PlansPage({ searchParams }: PlansPageProps) {
   const { upgrade: upgradeStatus, tier: upgradedTier } = await searchParams;
@@ -265,7 +263,10 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Add-on 1 — Continuous Monitoring */}
+            {/* Add-on 1 — Post-Close Monitoring (refreshed 2026-05-29 to
+                match the new flat-rate SKU at $29/mo, auto-cancel on
+                transcript arrival). Replaces the legacy $19.99 enrollment
+                + $39.99 per-pull model — same value, simpler bill. */}
             <AddOnCard
               colorClass="border-emerald-300 bg-gradient-to-br from-emerald-50 to-white"
               accentClass="bg-emerald-100 text-emerald-800"
@@ -274,18 +275,18 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                 </svg>
               }
-              title="Continuous Monitoring"
-              priceLine={`$${PRICE_MONITORING_MONTHLY}/entity/mo · $${PRICE_MONITORING_PER_PULL}/pull`}
-              tagline="Catch default risk before servicing"
-              body="Automatically pull fresh transcripts every quarter on every funded loan. The minute a borrower picks up a new tax lien, balance due, or unfiled return, your servicing team gets an alert — months before it would have shown up in a manual annual review."
+              title="Post-Close Monitoring"
+              priceLine={`$${PRICE_POST_CLOSE_MONITORING_MONTHLY}/entity/mo · auto-cancel`}
+              tagline="One flat fee until the transcript lands"
+              body="When a borrower owes a tax return as a closing condition, enroll the entity in monitoring at intake. We re-poll the IRS monthly until the conditioned transcript arrives, then auto-cancel — no manual unenroll, no per-pull surprise. One predictable line item per entity per month."
               steps={[
-                { title: 'Auto-enroll on completion', body: 'When an entity reaches "Complete," it auto-enrolls in quarterly monitoring (default-on, opt-out per client).' },
-                { title: 'Quarterly transcript pull', body: 'Cron pulls Records of Account every 90 days at the per-pull rate. Same expert pipeline as your initial verification.' },
-                { title: 'Compliance screening', body: 'Each pull runs the screener — flags balance dues, liens, audits, unfiled returns. Severity tagged CLEAN / WARNING / CRITICAL.' },
-                { title: 'Alert + dashboard tile', body: 'Servicing dashboard shows monitored entities + new flags since last pull. Email alert on any CRITICAL change.' },
+                { title: 'Opt in at intake', body: 'Per-entity checkbox on every intake flow. Manager can also flip on team-wide auto-enroll from the dashboard.' },
+                { title: 'Monthly IRS sweep', body: 'Cron re-pulls Records of Account on a 30-day cadence using the same expert pipeline as your initial verification. Cadence configurable per client.' },
+                { title: 'Auto-cancel on landing', body: 'The first month the conditioned transcript actually lands, the enrollment closes itself. You stop being billed. No "did I remember to unenroll" cleanup.' },
+                { title: 'Compliance screening', body: 'Every pull runs the flag screener. CLEAN / WARNING / CRITICAL severity tags so your servicing team can triage at a glance.' },
               ]}
               cta={{
-                href: isSignedIn && role === 'manager' ? '/' : 'mailto:matt@moderntax.io?subject=Enable%20Continuous%20Monitoring',
+                href: isSignedIn && role === 'manager' ? '/' : 'mailto:matt@moderntax.io?subject=Enable%20Post-Close%20Monitoring',
                 label: isSignedIn && role === 'manager' ? 'Toggle on from your dashboard →' : 'Enable monitoring →',
               }}
             />
@@ -401,6 +402,107 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
               </a>
             </div>
           </div>
+
+          {/* Add-on 4 — Reorder from history (new SKU 2026-05-28).
+              Discounted re-pull when the existing 8821 is reused. */}
+          <div className="mt-6 bg-white rounded-xl border border-violet-300 p-5">
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="shrink-0 w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-violet-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-bold text-mt-dark">Reorder from history</h3>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-violet-100 text-violet-800">
+                    ${PRICE_REORDER}/entity
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">50% off new verification</span>
+                </div>
+                <p className="text-sm text-gray-600 mt-1">
+                  Re-pull a prior entity for new years (e.g. amended 2024 return just landed). We reuse the existing 8821 when it&apos;s within the 120-day validity window — no CSV upload, no re-signature, no full verification rate. One-click from the processor dashboard.
+                </p>
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Why discounted: 8821 is cached, vision/OCR results are cached, expert PPS time is ~30% of a new pull. Fair to the customer, profitable to us.
+                </p>
+              </div>
+              <a
+                href={isSignedIn ? '/new/reorder' : 'mailto:matt@moderntax.io?subject=Reorder%20from%20history'}
+                className="px-3 py-2 text-xs font-semibold bg-white border border-violet-300 text-violet-700 rounded-lg hover:bg-violet-50 whitespace-nowrap"
+              >
+                {isSignedIn ? 'Open reorder flow →' : 'Learn more'}
+              </a>
+            </div>
+          </div>
+
+          {/* Add-on 5 — Loan-Package Consolidation Report (new SKU
+              2026-05-28). Per-loan SKU for the underwriter. */}
+          <div className="mt-6 bg-white rounded-xl border border-indigo-300 p-5">
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="shrink-0 w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-indigo-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-bold text-mt-dark">Loan-Package Consolidation Report</h3>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                    ${PRICE_CONSOLIDATION_REPORT}/loan
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                    {CONSOLIDATION_REPORT_MIN_ENTITIES}+ entities
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600 mt-1">
+                  One PDF that consolidates findings across every entity on a multi-entity loan: filing status, no-record-found years with reason codes, civil penalty flags, aggregate balance-due exposure, and a recommended underwriter next-step. Designed for the 15-affiliate-loan cases — solves the &quot;now I have 15 separate PDFs, how do I read these as a portfolio&quot; problem.
+                </p>
+                <p className="text-xs text-gray-500 mt-1.5">
+                  Sold per-loan (not per-entity). Different buyer (the underwriter / credit officer) than per-entity verification (the loan processor). Auto-generated on demand from the request detail page.
+                </p>
+              </div>
+              <a
+                href={isSignedIn ? '/' : 'mailto:matt@moderntax.io?subject=Loan-Package%20Consolidation%20Report'}
+                className="px-3 py-2 text-xs font-semibold bg-white border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 whitespace-nowrap"
+              >
+                {isSignedIn ? 'Generate from a request →' : 'Learn more'}
+              </a>
+            </div>
+          </div>
+
+          {/* Add-on 6 — Premium SLA tier upgrade. Same-day turnaround
+              target + expert-routing priority. */}
+          <div className="mt-6 bg-gradient-to-r from-violet-50 to-indigo-50 rounded-xl border-2 border-violet-300 p-5">
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="shrink-0 w-10 h-10 bg-violet-200 rounded-lg flex items-center justify-center">
+                <span className="text-xl">⚡</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-bold text-violet-900">Premium SLA</h3>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-violet-200 text-violet-900">
+                    Account upgrade
+                  </span>
+                </div>
+                <p className="text-sm text-violet-900 mt-1">
+                  Upgrade your whole account to a same-day turnaround target on every verification. Your loans get expert-routing priority on the assignment queue, you get a Premium SLA badge across your customer-facing surfaces, and your team gets dedicated SLA monitoring on every request.
+                </p>
+                <ul className="text-xs text-violet-800 mt-2 space-y-0.5 list-disc list-inside">
+                  <li>Same-day target on standard pulls (vs. 24-48h on standard accounts)</li>
+                  <li>Expert-routing priority — your loans jump the assignment queue</li>
+                  <li>Premium SLA badge on the dashboard + request detail pages</li>
+                  <li>Dedicated SLA tracking + escalation when a request slips</li>
+                </ul>
+              </div>
+              <a
+                href={isSignedIn ? '/' : 'mailto:matt@moderntax.io?subject=Upgrade%20to%20Premium%20SLA'}
+                className="px-3 py-2 text-xs font-semibold bg-violet-600 text-white rounded-lg hover:bg-violet-700 whitespace-nowrap"
+              >
+                {isSignedIn ? 'Request upgrade →' : 'Talk to sales'}
+              </a>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -408,31 +510,33 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
       <section className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
         <div className="bg-mt-dark text-white rounded-2xl p-8 sm:p-12">
           <h2 className="text-2xl sm:text-3xl font-bold">What one funded SBA loan is worth</h2>
-          <p className="mt-2 text-gray-300 text-sm">Average 7(a) loan with 3 entities (borrower + 2 affiliates).</p>
+          <p className="mt-2 text-gray-300 text-sm">Average 7(a) loan with 3 entities (borrower + 2 affiliates) on Tier A (PAYG).</p>
 
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white/5 rounded-lg p-5">
-              <div className="text-xs uppercase tracking-wide text-gray-400">Phase 1–2 (Days 1–60)</div>
-              <div className="mt-2 text-3xl font-bold">$240</div>
-              <div className="text-xs text-gray-400 mt-1">3 entity verifications @ ${PRICE_PAYG}</div>
-              <div className="mt-3 text-sm text-gray-300">+ ${PRICE_CASH_FLOW_PACK} cash-flow pack</div>
+              <div className="text-xs uppercase tracking-wide text-gray-400">Intake (Days 1–60)</div>
+              <div className="mt-2 text-3xl font-bold">${(3 * PRICE_PAYG + PRICE_CASH_FLOW_PACK + PRICE_CONSOLIDATION_REPORT).toFixed(0)}</div>
+              <div className="text-xs text-gray-400 mt-1">3 verifications @ ${PRICE_PAYG} = ${(3 * PRICE_PAYG).toFixed(2)}</div>
+              <div className="mt-1 text-xs text-gray-400">+ ${PRICE_CASH_FLOW_PACK} cash-flow pack</div>
+              <div className="mt-1 text-xs text-gray-400">+ ${PRICE_CONSOLIDATION_REPORT} consolidation report</div>
             </div>
             <div className="bg-white/5 rounded-lg p-5">
-              <div className="text-xs uppercase tracking-wide text-gray-400">Year 1 monitoring</div>
-              <div className="mt-2 text-3xl font-bold">$240</div>
-              <div className="text-xs text-gray-400 mt-1">3 entities × ${PRICE_MONITORING_MONTHLY}/mo × 12</div>
-              <div className="mt-3 text-sm text-gray-300">+ 4 quarterly pulls @ ${PRICE_MONITORING_PER_PULL}</div>
+              <div className="text-xs uppercase tracking-wide text-gray-400">Post-close (avg)</div>
+              <div className="mt-2 text-3xl font-bold">${(3 * PRICE_POST_CLOSE_MONITORING_MONTHLY * 4 + PRICE_REORDER).toFixed(0)}</div>
+              <div className="text-xs text-gray-400 mt-1">3 entities × ${PRICE_POST_CLOSE_MONITORING_MONTHLY}/mo × ~4 months</div>
+              <div className="mt-1 text-xs text-gray-400">until the conditioned transcript lands (auto-cancels)</div>
+              <div className="mt-1 text-xs text-gray-400">+ ~1 reorder @ ${PRICE_REORDER}</div>
             </div>
             <div className="bg-mt-green/20 border border-mt-green rounded-lg p-5">
-              <div className="text-xs uppercase tracking-wide text-mt-green">Year 1 total</div>
-              <div className="mt-2 text-3xl font-bold text-mt-green">~$830</div>
-              <div className="text-xs text-mt-green mt-1">vs. ~$240 (transcripts only)</div>
-              <div className="mt-3 text-sm text-gray-300">Recurring through SBA loan life (10–25 years)</div>
+              <div className="text-xs uppercase tracking-wide text-mt-green">Year-1 total per loan</div>
+              <div className="mt-2 text-3xl font-bold text-mt-green">~${(3 * PRICE_PAYG + PRICE_CASH_FLOW_PACK + PRICE_CONSOLIDATION_REPORT + 3 * PRICE_POST_CLOSE_MONITORING_MONTHLY * 4 + PRICE_REORDER).toFixed(0)}</div>
+              <div className="text-xs text-mt-green mt-1">vs. ~${(3 * PRICE_PAYG).toFixed(0)} verifications-only</div>
+              <div className="mt-3 text-sm text-gray-300">~{((3 * PRICE_PAYG + PRICE_CASH_FLOW_PACK + PRICE_CONSOLIDATION_REPORT + 3 * PRICE_POST_CLOSE_MONITORING_MONTHLY * 4 + PRICE_REORDER) / (3 * PRICE_PAYG)).toFixed(1)}× ARPU lift per loan</div>
             </div>
           </div>
 
           <p className="mt-6 text-sm text-gray-300">
-            For a lender funding ~70 loans/year (Centerstone, Cal Statewide scale): <strong className="text-white">~$50K/yr new MRR by Q4</strong> with the add-ons enabled, on top of base verification revenue.
+            For a lender funding ~70 loans/year (Centerstone, Cal Statewide scale): <strong className="text-white">~${Math.round((3 * PRICE_PAYG + PRICE_CASH_FLOW_PACK + PRICE_CONSOLIDATION_REPORT + 3 * PRICE_POST_CLOSE_MONITORING_MONTHLY * 4 + PRICE_REORDER) * 70 / 1000)}K/yr add-on revenue</strong> on top of base verification at PAYG. Tier B and Tier C convert more of that into prepaid + recurring MRR.
           </p>
         </div>
       </section>
@@ -448,7 +552,7 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
             Unused balance is refunded within 30 days of termination. Any verifications in flight at termination still draw against the balance.
           </Faq>
           <Faq q="Does monitoring renew automatically?">
-            Yes. Once an entity is enrolled it pulls quarterly indefinitely. Manager can pause or cancel any individual entity from the monitoring panel. Bulk pause/cancel via support.
+            Post-Close Monitoring runs at ${PRICE_POST_CLOSE_MONITORING_MONTHLY}/entity/mo until the conditioned transcript actually lands at the IRS, then auto-cancels — no manual unenroll. Most entities self-cancel within 2-6 months. Manager can also pause or cancel any individual entity from the monitoring panel at any time.
           </Faq>
           <Faq q="Can I generate a Cash-Flow Pack on a loan I already closed?">
             Yes — any completed entity can generate a pack from the entity card. The pack uses whatever transcripts are on file. If you re-pull transcripts, generate a fresh pack.

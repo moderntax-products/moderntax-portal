@@ -24,7 +24,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import sgMail from '@sendgrid/mail';
-import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { createServerRouteClient } from '@/lib/supabase-server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,17 +51,12 @@ export async function POST(_request: NextRequest) {
     });
   }
 
-  const admin = createAdminClient();
-
-  // Stamp the request timestamp on the client row (idempotent — only
-  // first request lands).
-  const { error: stampErr } = await (admin.from('clients') as any)
-    .update({ sla_tier_requested_at: new Date().toISOString() })
-    .eq('id', profile.client_id)
-    .is('sla_tier_requested_at', null);
-  if (stampErr && !/column .* does not exist/i.test(stampErr.message || '')) {
-    console.warn('[request-premium-sla] stamp failed (non-fatal):', stampErr.message);
-  }
+  // (2026-05-29) Removed the clients.sla_tier_requested_at stamp + the
+  // admin client that powered it. That column was never created in
+  // migration-sla-tier.sql, so we have no DB persistence layer for the
+  // request. The Matt-notification email is the durable record; the
+  // PremiumSlaSurface component tracks the "user clicked" state in
+  // memory for the current session.
 
   // Notify Matt. Fire-and-forget — failure logged but doesn't block the
   // response (the row is stamped regardless).

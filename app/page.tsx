@@ -103,12 +103,26 @@ export default async function DashboardPage({
   // standard tier rates if a client doesn't have overrides set.
   let clientBillingRatePdf = 59.98;
   let clientBillingRateCsv = 69.98;
+  // SLA tier — server-rendered into PremiumSlaSurface so the component
+  // never silently fails on a client-side RLS error. Two-phase select
+  // (with column-existence fallback) so pre-migration envs still load.
+  let clientSlaTier: 'standard' | 'premium' | null = null;
   if (profile.client_id) {
-    const { data: clientRecord } = await supabase
-      .from('clients')
-      .select('free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv')
-      .eq('id', profile.client_id)
-      .single() as { data: { free_trial: boolean | null; monitoring_default_enabled: boolean | null; cash_flow_auto_attach: boolean | null; stripe_payment_method_id: string | null; payment_method_status: string | null; payment_method_brand: string | null; payment_method_last4: string | null; payment_method_type: string | null; billing_rate_pdf: number | null; billing_rate_csv: number | null } | null; error: any };
+    const baseSelect = 'free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv';
+    const fullSelect = `${baseSelect}, sla_tier`;
+    let clientRecord: any = null;
+    {
+      const r = await supabase.from('clients').select(fullSelect).eq('id', profile.client_id).single() as { data: any; error: any };
+      if (r.error && /sla_tier|column .* does not exist|PGRST204/i.test(r.error.message || '')) {
+        const r2 = await supabase.from('clients').select(baseSelect).eq('id', profile.client_id).single() as { data: any; error: any };
+        clientRecord = r2.data;
+      } else {
+        clientRecord = r.data;
+      }
+    }
+    if (clientRecord?.sla_tier === 'premium' || clientRecord?.sla_tier === 'standard') {
+      clientSlaTier = clientRecord.sla_tier;
+    }
     if (typeof clientRecord?.billing_rate_pdf === 'number') clientBillingRatePdf = clientRecord.billing_rate_pdf;
     if (typeof clientRecord?.billing_rate_csv === 'number') clientBillingRateCsv = clientRecord.billing_rate_csv;
     if (clientRecord?.free_trial === false) clientFreeTrial = false;
@@ -117,7 +131,7 @@ export default async function DashboardPage({
     hasPaymentMethod =
       !!clientRecord?.stripe_payment_method_id && clientRecord?.payment_method_status === 'active';
     if (clientRecord?.payment_method_last4) {
-      const brand = (clientRecord.payment_method_brand || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const brand = (clientRecord.payment_method_brand || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
       paymentMethodLabel = `${brand || (clientRecord.payment_method_type === 'us_bank_account' ? 'Bank account' : 'Card')} ending in ${clientRecord.payment_method_last4}`;
     }
 
@@ -801,9 +815,10 @@ export default async function DashboardPage({
 
         {/* Premium SLA — banner for standard accounts (upgrade CTA), badge
             for premium accounts (Cal Statewide today). Driver: 2026-05-28
-            productized same-day SLA tier. */}
+            productized same-day SLA tier. Tier is server-rendered to avoid
+            a class of client-side silent failures (RLS + missing-column). */}
         <div className="mb-6">
-          <PremiumSlaSurface variant="banner" />
+          <PremiumSlaSurface tier={clientSlaTier} variant="banner" />
         </div>
 
         {/* Stats Grid */}
