@@ -2,6 +2,10 @@
   "installCommand": "npm ci",
   "crons": [
     {
+      "path": "/api/cron/monthly-client-invoices",
+      "schedule": "0 6 28-31 * *"
+    },
+    {
       "path": "/api/cron/expire-batches",
       "schedule": "*/5 * * * *"
     },
