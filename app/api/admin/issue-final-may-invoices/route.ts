@@ -248,27 +248,33 @@ export async function POST(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
   if (unauthorized) return unauthorized;
 
+  // ?client=centerstone | cal_statewide | all (default: all, but run one at a time
+  // to avoid the Vercel 300s limit — each client takes ~60-90s alone).
+  const clientParam = request.nextUrl.searchParams.get('client') || 'all';
+
   const admin = createAdminClient();
   const log: string[] = [];
   const results: any[] = [];
 
-  // CENTERSTONE
-  try {
-    const r = await issueInvoice(admin, '60f80d60-03ad-42d7-95da-c0f1cd311523', null, null, 0, log);
-    results.push({ client: 'Centerstone SBA Lending', ...r });
-  } catch (err: any) {
-    log.push('Centerstone error: ' + err?.message);
-    results.push({ client: 'Centerstone SBA Lending', error: err?.message });
+  if (clientParam === 'centerstone' || clientParam === 'all') {
+    try {
+      const r = await issueInvoice(admin, '60f80d60-03ad-42d7-95da-c0f1cd311523', null, null, 0, log);
+      results.push({ client: 'Centerstone SBA Lending', ...r });
+    } catch (err: any) {
+      log.push('Centerstone error: ' + err?.message);
+      results.push({ client: 'Centerstone SBA Lending', error: err?.message });
+    }
   }
 
-  // CAL STATEWIDE
-  try {
-    const r = await issueInvoice(admin, '3256293c-6c98-42bc-a828-2b73a603048e', CALI_PRIOR_CUTOFF, CALI_PRIOR_INV, CALI_PRIOR_PAID, log);
-    results.push({ client: 'California Statewide CDC', ...r });
-  } catch (err: any) {
-    log.push('Cal Statewide error: ' + err?.message);
-    results.push({ client: 'California Statewide CDC', error: err?.message });
+  if (clientParam === 'cal_statewide' || clientParam === 'all') {
+    try {
+      const r = await issueInvoice(admin, '3256293c-6c98-42bc-a828-2b73a603048e', CALI_PRIOR_CUTOFF, CALI_PRIOR_INV, CALI_PRIOR_PAID, log);
+      results.push({ client: 'California Statewide CDC', ...r });
+    } catch (err: any) {
+      log.push('Cal Statewide error: ' + err?.message);
+      results.push({ client: 'California Statewide CDC', error: err?.message });
+    }
   }
 
-  return NextResponse.json({ success: true, results, log });
+  return NextResponse.json({ success: true, client: clientParam, results, log });
 }
