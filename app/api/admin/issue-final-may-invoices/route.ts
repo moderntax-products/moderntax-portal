@@ -21,7 +21,6 @@ import { requireBearer } from '@/lib/auth-util';
 import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
 import {
   createMercuryInvoice,
-  listMercuryInvoices,
   getDestinationAccountId,
   getMercuryPayUrl,
 } from '@/lib/mercury';
@@ -58,7 +57,10 @@ async function issueInvoice(
   L('\n=== ' + client.name + ' ===');
 
   const slugUpper = (client.slug || client.name).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
-  const invoiceNumber = 'INV-2026-05-' + slugUpper;
+  // -F suffix (Final) avoids Mercury collision with the auto-cron that
+  // already created INV-2026-05-CENT on the Saturday schedule (vercel.json
+  // 0 15 * * 6). The customer sees the same invoice number format.
+  const invoiceNumber = 'INV-2026-05-' + slugUpper + '-F';
 
   // Idempotency
   const { data: existing } = await (admin.from('invoices') as any)
@@ -159,33 +161,15 @@ async function issueInvoice(
   const due = new Date(); due.setUTCDate(due.getUTCDate() + netDays);
   const dueDate = due.toISOString().split('T')[0];
 
-  // Create the Mercury invoice — if the number already exists (prior test run
-  // that wasn't fully cleaned up), look it up from the Mercury invoice list
-  // and reuse its slug/payUrl rather than failing.
-  let mercuryInvoice: any;
-  try {
-    mercuryInvoice = await createMercuryInvoice({
-      customerId: client.mercury_customer_id, destinationAccountId: getDestinationAccountId(),
-      dueDate, invoiceDate, invoiceNumber, lineItems,
-      ccEmails: client.billing_ap_email_cc || [],
-      creditCardEnabled: false, achDebitEnabled: true, useRealAccountNumber: false,
-      sendEmailOption: 'DontSend',
-      servicePeriodStartDate: PERIOD_START, servicePeriodEndDate: PERIOD_END,
-      payerMemo: 'Reference: ' + invoiceNumber + '. ' + client.name + ' May 2026 IRS transcript verification. Net ' + netDays + ' days. ACH Debit only.',
-    });
-    L('Mercury invoice created — id: ' + mercuryInvoice.id);
-  } catch (mercErr: any) {
-    if (/already exists/i.test(mercErr?.message || '')) {
-      L('Mercury invoice number already exists — looking up existing invoice...');
-      const all = await listMercuryInvoices(500);
-      const found = all.find((inv: any) => inv.invoiceNumber === invoiceNumber);
-      if (!found) { L('Could not find existing Mercury invoice — aborting'); return null; }
-      mercuryInvoice = found;
-      L('Found existing Mercury invoice: ' + mercuryInvoice.id + ' status=' + mercuryInvoice.status);
-    } else {
-      throw mercErr;
-    }
-  }
+  const mercuryInvoice = await createMercuryInvoice({
+    customerId: client.mercury_customer_id, destinationAccountId: getDestinationAccountId(),
+    dueDate, invoiceDate, invoiceNumber, lineItems,
+    ccEmails: client.billing_ap_email_cc || [],
+    creditCardEnabled: false, achDebitEnabled: true, useRealAccountNumber: false,
+    sendEmailOption: 'DontSend',
+    servicePeriodStartDate: PERIOD_START, servicePeriodEndDate: PERIOD_END,
+    payerMemo: 'Reference: ' + invoiceNumber + '. ' + client.name + ' May 2026 IRS transcript verification. Net ' + netDays + ' days. ACH Debit only.',
+  });
   const payUrl = getMercuryPayUrl(mercuryInvoice.slug);
   L('Pay URL: ' + payUrl);
 
