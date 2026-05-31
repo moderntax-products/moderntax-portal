@@ -21,9 +21,9 @@ import { requireBearer } from '@/lib/auth-util';
 import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
 import {
   createMercuryInvoice,
+  listMercuryInvoices,
   getDestinationAccountId,
   getMercuryPayUrl,
-  getMercuryInvoicePdfUrl,
 } from '@/lib/mercury';
 import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
 
@@ -159,19 +159,35 @@ async function issueInvoice(
   const due = new Date(); due.setUTCDate(due.getUTCDate() + netDays);
   const dueDate = due.toISOString().split('T')[0];
 
-  const mercuryInvoice = await createMercuryInvoice({
-    customerId: client.mercury_customer_id, destinationAccountId: getDestinationAccountId(),
-    dueDate, invoiceDate, invoiceNumber, lineItems,
-    ccEmails: client.billing_ap_email_cc || [],
-    creditCardEnabled: false, achDebitEnabled: true, useRealAccountNumber: false,
-    sendEmailOption: 'DontSend',
-    servicePeriodStartDate: PERIOD_START, servicePeriodEndDate: PERIOD_END,
-    payerMemo: 'Reference: ' + invoiceNumber + '. ' + client.name + ' May 2026 IRS transcript verification. Net ' + netDays + ' days. ACH Debit only.',
-  });
+  // Create the Mercury invoice — if the number already exists (prior test run
+  // that wasn't fully cleaned up), look it up from the Mercury invoice list
+  // and reuse its slug/payUrl rather than failing.
+  let mercuryInvoice: any;
+  try {
+    mercuryInvoice = await createMercuryInvoice({
+      customerId: client.mercury_customer_id, destinationAccountId: getDestinationAccountId(),
+      dueDate, invoiceDate, invoiceNumber, lineItems,
+      ccEmails: client.billing_ap_email_cc || [],
+      creditCardEnabled: false, achDebitEnabled: true, useRealAccountNumber: false,
+      sendEmailOption: 'DontSend',
+      servicePeriodStartDate: PERIOD_START, servicePeriodEndDate: PERIOD_END,
+      payerMemo: 'Reference: ' + invoiceNumber + '. ' + client.name + ' May 2026 IRS transcript verification. Net ' + netDays + ' days. ACH Debit only.',
+    });
+    L('Mercury invoice created — id: ' + mercuryInvoice.id);
+  } catch (mercErr: any) {
+    if (/already exists/i.test(mercErr?.message || '')) {
+      L('Mercury invoice number already exists — looking up existing invoice...');
+      const all = await listMercuryInvoices(500);
+      const found = all.find((inv: any) => inv.invoiceNumber === invoiceNumber);
+      if (!found) { L('Could not find existing Mercury invoice — aborting'); return null; }
+      mercuryInvoice = found;
+      L('Found existing Mercury invoice: ' + mercuryInvoice.id + ' status=' + mercuryInvoice.status);
+    } else {
+      throw mercErr;
+    }
+  }
   const payUrl = getMercuryPayUrl(mercuryInvoice.slug);
-  const pdfUrlMercury = getMercuryInvoicePdfUrl(mercuryInvoice.slug);
-  void pdfUrlMercury;
-  L('Mercury invoice created — pay: ' + payUrl);
+  L('Pay URL: ' + payUrl);
 
   const catchupLine = catchupAmount > 0 ? { amount: catchupAmount, memo: catchupMemo } : null;
   let pdfBuffer: Buffer | null = null;
