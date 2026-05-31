@@ -35,7 +35,9 @@ import {
   getDestinationAccountId,
   getMercuryPayUrl,
 } from '@/lib/mercury';
-import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
+// PDF generation is done via dynamic import inside stage 2 only — keeping
+// it out of the top-level import prevents pdf-lib from crashing the route
+// initializer on Vercel when other stages don't need it.
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -212,6 +214,7 @@ export async function POST(request: NextRequest) {
 
     let pdfBuffer: Buffer | null = null;
     try {
+      const { generateInvoiceBreakdownPdf } = await import('@/lib/invoice-breakdown-pdf');
       pdfBuffer = await generateInvoiceBreakdownPdf({
         clientName, invoiceNumber: inv, periodStart: PERIOD_START, periodEnd: PERIOD_END,
         grandTotal, payUrl, isTest: false, processorGroups,
