@@ -18,9 +18,6 @@ interface Processor8821PanelProps {
   requestId: string;
 }
 
-const TEMPLATE_INDIVIDUAL = '/templates/8821-individual.pdf';
-const TEMPLATE_BUSINESS = '/templates/8821-business.pdf';
-
 // 941 added May 2026 for ERC verification workflows. (Notes-required
 // UX for non-standard forms is implemented in CsvUploadFlow; ported
 // here in a follow-up if needed — this panel is lower-volume.)
@@ -67,6 +64,7 @@ function parseYearsInput(raw: string): { years: string[]; errors: string[] } {
 
 export function Processor8821Panel({ entity, requestId: _requestId }: Processor8821PanelProps) {
   const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -164,6 +162,45 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
       return false;
     } finally {
       setSavingMeta(false);
+    }
+  };
+
+  // Download the per-entity pre-filled 8821. Reflects the form type + years
+  // currently shown in the panel (passed as query overrides) so the processor
+  // doesn't have to "save" first just to get an up-to-date PDF.
+  const handleDownloadPrefilled = async () => {
+    if (tidFormMismatch) {
+      setMessage({ type: 'error', text: tidFormMismatch });
+      return;
+    }
+    setDownloading(true);
+    setMessage(null);
+    try {
+      const params = new URLSearchParams({ entityId: entity.id, formType });
+      const { years: parsedYears } = parseYearsInput(yearsInput);
+      if (parsedYears.length > 0) params.set('years', parsedYears.join(','));
+
+      const res = await fetch(`/api/entity/8821-prefill?${params.toString()}`);
+      if (!res.ok) {
+        let detail = 'Failed to generate the pre-filled 8821.';
+        try { const j = await res.json(); detail = j.error || j.detail || detail; } catch { /* non-JSON */ }
+        setMessage({ type: 'error', text: detail });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safe = (entity.entity_name || 'entity').replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40);
+      a.download = `8821-${safe}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Download failed' });
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -281,35 +318,28 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
         <h4 className="text-sm font-semibold text-indigo-800">Form 8821 — Tax Information Authorization</h4>
       </div>
 
-      {/* Template Downloads */}
+      {/* Pre-filled 8821 download — generated per-entity */}
       <div className="mb-4">
         <p className="text-xs text-gray-600 mb-2">
-          Download the pre-formatted ModernTax 8821 template to include in your DocuSign or signature packet:
+          Download the 8821 pre-filled with <strong>{entity.entity_name || 'this entity'}</strong>&rsquo;s
+          information (name, TIN, address) — ModernTax is already listed as the designee.
+          Send it to the borrower to sign, then upload the signed copy below:
         </p>
         <div className="flex flex-wrap gap-2">
-          <a
-            href={TEMPLATE_INDIVIDUAL}
-            download="ModernTax-8821-Individual.pdf"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors"
+          <button
+            type="button"
+            onClick={handleDownloadPrefilled}
+            disabled={downloading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            8821 Individual (1040)
-          </a>
-          <a
-            href={TEMPLATE_BUSINESS}
-            download="ModernTax-8821-Business.pdf"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            8821 Business (1065/1120/1120S)
-          </a>
+            {downloading ? 'Generating…' : `Download Pre-filled 8821 — ${templateLabel}`}
+          </button>
         </div>
         <p className="text-xs text-gray-400 mt-1.5">
-          Recommended for this entity: <strong>{templateLabel}</strong>
+          Form type: <strong>{templateLabel}</strong>. Change the form type below if this is wrong before downloading.
         </p>
       </div>
 
