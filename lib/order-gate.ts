@@ -208,6 +208,15 @@ export async function checkOrderGate(
     clientName: client?.name ?? null,
   };
 
+  // Rule 3.5 (2026-06-01 trial overhaul) — trial converted + Stripe card active.
+  // After auto-conversion the customer is on PAYG via Stripe off-session charges.
+  // They have no Mercury enrollment yet but are a paying customer. Allow ordering;
+  // the entity-completion webhook will auto-charge the card for each new pull.
+  const hasTrialConverted = !!((client as any)?.trial_converted_at);
+  if (hasTrialConverted && hasPaymentMethod) {
+    return { allowed: true, ...baseResult };
+  }
+
   // Allow: sandbox OR explicit bypass OR Mercury enrolled OR trial allowance remaining.
   if (isSandbox || hasBypass || hasMercuryEnrolled || trialRemaining > 0) {
     return { allowed: true, ...baseResult };
