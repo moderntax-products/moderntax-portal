@@ -77,40 +77,28 @@ export async function POST(request: NextRequest) {
   const periodEnd = `${correctedYear}-${correctedMonth}-${String(lastDay).padStart(2, '0')}`;
   L(`Period: ${periodStart} → ${periodEnd} (corrected from stored: ${invoice.billing_period_start} → ${invoice.billing_period_end})`);
 
-  // Get all request IDs for this client first, then query entities.
-  // Supabase REST API doesn't support joined-table WHERE filters via the
-  // query params (.eq('requests.client_id', ...)) — must use a two-step
-  // approach.
-  const { data: clientRequests } = await admin.from('requests')
-    .select('id, loan_number, profiles!requests_requested_by_fkey(full_name)')
-    .eq('client_id', invoice.client_id) as { data: any[] | null };
-  const requestIds = (clientRequests || []).map((r: any) => r.id);
-  const requestMap = Object.fromEntries((clientRequests || []).map((r: any) => [r.id, r]));
+  // Use the same joined query pattern as send-test-may-invoice which confirmed
+  // 27 entities for Centerstone. The .eq('requests.client_id', ...) filter
+  // works correctly via the Supabase JS admin client (PostgREST joined filter).
+  const { data: rawEntities } = await admin.from('request_entities')
+    .select('entity_name, form_type, completed_at, gross_receipts, requests!inner(loan_number, client_id, profiles!requests_requested_by_fkey(full_name))')
+    .eq('requests.client_id', invoice.client_id)
+    .eq('status', 'completed')
+    .gte('completed_at', `${periodStart}T00:00:00Z`)
+    .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: any[] | null };
 
-  const { data: rawEntities } = requestIds.length > 0
-    ? await admin.from('request_entities')
-        .select('id, entity_name, form_type, completed_at, gross_receipts, request_id')
-        .in('request_id', requestIds)
-        .eq('status', 'completed')
-        .gte('completed_at', `${periodStart}T00:00:00Z`)
-        .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: any[] | null }
-    : { data: [] };
-
-  // Attach request context back onto each entity
-  const entities = (rawEntities || [])
-    .filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id)
-    .map((e: any) => ({ ...e, _req: requestMap[e.request_id] || {} }));
-  L(`Entities found: ${entities.length} (from ${requestIds.length} requests in period)`);
+  const entities = (rawEntities || []).filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id);
+  L(`Entities found: ${entities.length}`);
   L(`Entities found: ${entities.length}`);
 
-  // Build processor groups — use _req for request context (two-step join)
+  // Build processor groups
   const byProc: Record<string, { processor: string; entities: any[]; subtotal: number }> = {};
   for (const e of entities) {
-    const proc = e._req?.profiles?.full_name || 'Unattributed';
+    const proc = (e.requests as any)?.profiles?.full_name || 'Unattributed';
     const isReorder = e.gross_receipts?.reorder?.sku === 'reorder-from-history';
     const price = isReorder ? 29.99 : ratePdf;
     if (!byProc[proc]) byProc[proc] = { processor: proc, entities: [], subtotal: 0 };
-    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: e._req?.loan_number || null, unit_price: price, is_reorder: isReorder });
+    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: (e.requests as any)?.loan_number || null, unit_price: price, is_reorder: isReorder });
     byProc[proc].subtotal = Math.round((byProc[proc].subtotal + price) * 100) / 100;
   }
   const processorGroups = Object.values(byProc).sort((a, b) => a.processor.localeCompare(b.processor));
