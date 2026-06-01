@@ -68,15 +68,29 @@ function formatYears(years: number[]): string {
 
 export async function GET(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerRouteClient(cookieStore);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    // Server-secret bypass: a valid CRON_SECRET bearer token authenticates as
+    // admin-equivalent (can pull any entity). Used for ops + production smoke
+    // tests; the same pattern the admin/cron endpoints use. Falls through to
+    // normal cookie auth when absent.
+    const authHeader = request.headers.get('authorization') || '';
+    const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const isServiceCaller = !!process.env.CRON_SECRET && bearer === process.env.CRON_SECRET;
 
-    const { data: profile } = await supabase
-      .from('profiles').select('role, client_id').eq('id', user.id).single() as {
-        data: { role: string | null; client_id: string | null } | null;
-      };
+    let profile: { role: string | null; client_id: string | null } | null = null;
+    if (isServiceCaller) {
+      profile = { role: 'admin', client_id: null };
+    } else {
+      const cookieStore = await cookies();
+      const supabase = createServerRouteClient(cookieStore);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+
+      const { data } = await supabase
+        .from('profiles').select('role, client_id').eq('id', user.id).single() as {
+          data: { role: string | null; client_id: string | null } | null;
+        };
+      profile = data;
+    }
     if (!profile) return NextResponse.json({ error: 'No profile' }, { status: 403 });
 
     const entityId = new URL(request.url).searchParams.get('entityId')?.trim();
