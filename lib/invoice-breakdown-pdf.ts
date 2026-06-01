@@ -75,10 +75,16 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
     const x = opts.x ?? MARGIN;
     const usedFont = opts.bold ? fontBold : font;
     let line = text;
-    if (opts.max && opts.max > 0) {
-      while (usedFont.widthOfTextAtSize(line, size) > opts.max && line.length > 1) {
-        line = line.slice(0, -2) + '...';
+    if (opts.max && opts.max > 0 && usedFont.widthOfTextAtSize(line, size) > opts.max) {
+      // Shrink the base text one char at a time, measuring WITH the ellipsis
+      // appended. The previous form (`line = line.slice(0,-2) + '...'`) removed
+      // 2 chars but re-added 3 every pass, so the string GREW and the loop
+      // never terminated → infinite hang on any over-wide cell (the blank-
+      // breakdown / endpoint-timeout bug, fixed 2026-06-01).
+      while (line.length > 1 && usedFont.widthOfTextAtSize(line + '...', size) > opts.max) {
+        line = line.slice(0, -1);
       }
+      line = line + '...';
     }
     page.drawText(line, { x, y, size, font: usedFont, color: opts.color ?? navy });
     y -= size + 4;
@@ -89,8 +95,13 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
     for (const c of cells) {
       const cellFont = c.bold ? fontBold : font;
       let txt = c.text;
-      while (cellFont.widthOfTextAtSize(txt, size) > c.w - 4 && txt.length > 1) {
-        txt = txt.slice(0, -2) + '...';
+      if (cellFont.widthOfTextAtSize(txt, size) > c.w - 4) {
+        // See drawText above: net-shrink with the ellipsis measured in, or this
+        // loop grows the string forever and hangs the whole PDF render.
+        while (txt.length > 1 && cellFont.widthOfTextAtSize(txt + '...', size) > c.w - 4) {
+          txt = txt.slice(0, -1);
+        }
+        txt = txt + '...';
       }
       const tx = c.align === 'right'
         ? c.x + c.w - cellFont.widthOfTextAtSize(txt, size) - 2
