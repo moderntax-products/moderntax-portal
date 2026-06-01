@@ -77,30 +77,51 @@ export async function POST(request: NextRequest) {
   const periodEnd = `${correctedYear}-${correctedMonth}-${String(lastDay).padStart(2, '0')}`;
   L(`Period: ${periodStart} → ${periodEnd} (corrected from stored: ${invoice.billing_period_start} → ${invoice.billing_period_end})`);
 
-  // Step 1: Get request IDs + processor names for this client (lightweight)
+  // Step 1a: Get request IDs + loan numbers (no join — keep it fast)
   const { data: reqRows } = await admin.from('requests')
-    .select('id, loan_number, requested_by, profiles!requests_requested_by_fkey(full_name)')
+    .select('id, loan_number, requested_by')
     .eq('client_id', invoice.client_id)
     .limit(2000) as { data: any[] | null };
-  const reqMap: Record<string, { loan_number: string | null; proc_name: string }> = {};
+  const reqIds = (reqRows || []).map((r: any) => r.id);
+  const loanMap: Record<string, string | null> = {};
+  const requestedByMap: Record<string, string> = {};
   for (const r of (reqRows || [])) {
-    reqMap[r.id] = { loan_number: r.loan_number || null, proc_name: r.profiles?.full_name || 'Unattributed' };
+    loanMap[r.id] = r.loan_number || null;
+    requestedByMap[r.id] = r.requested_by;
   }
-  const reqIds = Object.keys(reqMap);
   L(`Requests found for client: ${reqIds.length}`);
 
-  // Step 2: Get completed entities in the billing period
-  const { data: rawEntities } = reqIds.length > 0
-    ? await admin.from('request_entities')
-        .select('entity_name, form_type, completed_at, gross_receipts, request_id')
-        .in('request_id', reqIds.slice(0, 500)) // PostgREST in() limit
-        .eq('status', 'completed')
-        .gte('completed_at', `${periodStart}T00:00:00Z`)
-        .lte('completed_at', `${periodEnd}T23:59:59Z`)
-        .order('completed_at', { ascending: true }) as { data: any[] | null }
-    : { data: [] };
+  // Step 1b: Get processor names separately (by unique requested_by user IDs)
+  const uniqueUserIds = [...new Set(Object.values(requestedByMap))];
+  const { data: profRows } = await admin.from('profiles')
+    .select('id, full_name')
+    .in('id', uniqueUserIds) as { data: any[] | null };
+  const profMap: Record<string, string> = {};
+  for (const p of (profRows || [])) {
+    profMap[p.id] = p.full_name || 'Unattributed';
+  }
 
-  const entities = (rawEntities || []).filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id);
+  // reqMap: request_id → { loan_number, proc_name }
+  const reqMap: Record<string, { loan_number: string | null; proc_name: string }> = {};
+  for (const id of reqIds) {
+    reqMap[id] = { loan_number: loanMap[id] || null, proc_name: profMap[requestedByMap[id]] || 'Unattributed' };
+  }
+
+  // Step 2: Get completed entities in the billing period — batch the in() to avoid limits
+  let rawEntities: any[] = [];
+  for (let i = 0; i < reqIds.length; i += 200) {
+    const batch = reqIds.slice(i, i + 200);
+    const { data: batchEntities } = await admin.from('request_entities')
+      .select('entity_name, form_type, completed_at, gross_receipts, request_id')
+      .in('request_id', batch)
+      .eq('status', 'completed')
+      .gte('completed_at', `${periodStart}T00:00:00Z`)
+      .lte('completed_at', `${periodEnd}T23:59:59Z`)
+      .order('completed_at', { ascending: true }) as { data: any[] | null };
+    rawEntities = rawEntities.concat(batchEntities || []);
+  }
+
+  const entities = rawEntities.filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id);
   L(`Entities found: ${entities.length}`);
   L(`Entities found: ${entities.length}`);
 
