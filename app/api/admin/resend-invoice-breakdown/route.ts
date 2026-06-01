@@ -22,7 +22,7 @@ import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 function fmt(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -77,28 +77,42 @@ export async function POST(request: NextRequest) {
   const periodEnd = `${correctedYear}-${correctedMonth}-${String(lastDay).padStart(2, '0')}`;
   L(`Period: ${periodStart} → ${periodEnd} (corrected from stored: ${invoice.billing_period_start} → ${invoice.billing_period_end})`);
 
-  // Use the same joined query pattern as send-test-may-invoice which confirmed
-  // 27 entities for Centerstone. The .eq('requests.client_id', ...) filter
-  // works correctly via the Supabase JS admin client (PostgREST joined filter).
-  const { data: rawEntities } = await admin.from('request_entities')
-    .select('entity_name, form_type, completed_at, gross_receipts, requests!inner(loan_number, client_id, profiles!requests_requested_by_fkey(full_name))')
-    .eq('requests.client_id', invoice.client_id)
-    .eq('status', 'completed')
-    .gte('completed_at', `${periodStart}T00:00:00Z`)
-    .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: any[] | null };
+  // Step 1: Get request IDs + processor names for this client (lightweight)
+  const { data: reqRows } = await admin.from('requests')
+    .select('id, loan_number, requested_by, profiles!requests_requested_by_fkey(full_name)')
+    .eq('client_id', invoice.client_id)
+    .limit(2000) as { data: any[] | null };
+  const reqMap: Record<string, { loan_number: string | null; proc_name: string }> = {};
+  for (const r of (reqRows || [])) {
+    reqMap[r.id] = { loan_number: r.loan_number || null, proc_name: r.profiles?.full_name || 'Unattributed' };
+  }
+  const reqIds = Object.keys(reqMap);
+  L(`Requests found for client: ${reqIds.length}`);
+
+  // Step 2: Get completed entities in the billing period
+  const { data: rawEntities } = reqIds.length > 0
+    ? await admin.from('request_entities')
+        .select('entity_name, form_type, completed_at, gross_receipts, request_id')
+        .in('request_id', reqIds.slice(0, 500)) // PostgREST in() limit
+        .eq('status', 'completed')
+        .gte('completed_at', `${periodStart}T00:00:00Z`)
+        .lte('completed_at', `${periodEnd}T23:59:59Z`)
+        .order('completed_at', { ascending: true }) as { data: any[] | null }
+    : { data: [] };
 
   const entities = (rawEntities || []).filter((e: any) => !e.gross_receipts?.pre_billed?.invoice_id);
   L(`Entities found: ${entities.length}`);
   L(`Entities found: ${entities.length}`);
 
-  // Build processor groups
+  // Build processor groups using the reqMap lookup
   const byProc: Record<string, { processor: string; entities: any[]; subtotal: number }> = {};
   for (const e of entities) {
-    const proc = (e.requests as any)?.profiles?.full_name || 'Unattributed';
+    const reqCtx = reqMap[e.request_id] || { loan_number: null, proc_name: 'Unattributed' };
+    const proc = reqCtx.proc_name;
     const isReorder = e.gross_receipts?.reorder?.sku === 'reorder-from-history';
     const price = isReorder ? 29.99 : ratePdf;
     if (!byProc[proc]) byProc[proc] = { processor: proc, entities: [], subtotal: 0 };
-    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: (e.requests as any)?.loan_number || null, unit_price: price, is_reorder: isReorder });
+    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: reqCtx.loan_number, unit_price: price, is_reorder: isReorder });
     byProc[proc].subtotal = Math.round((byProc[proc].subtotal + price) * 100) / 100;
   }
   const processorGroups = Object.values(byProc).sort((a, b) => a.processor.localeCompare(b.processor));
