@@ -46,7 +46,7 @@ export interface BreakdownInput {
     active_days: number;
     prorated: number;
   }>;
-  catchupLine: { amount: number; memo: string } | null;
+  catchupLine: { amount: number; memo: string; label?: string } | null;
 }
 
 const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -251,7 +251,7 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
   // ----- Catch-up -----
   if (input.catchupLine) {
     ensureSpace(4);
-    drawText('Catch-up balance', { size: 12, bold: true, color: danger });
+    drawText(input.catchupLine.label || 'Catch-up balance', { size: 12, bold: true, color: danger });
     y -= 2;
     page.drawRectangle({
       x: MARGIN, y: y - 30, width: PAGE_W - MARGIN * 2, height: 32,
