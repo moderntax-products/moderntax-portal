@@ -51,6 +51,27 @@ export interface BreakdownInput {
 
 const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/**
+ * Make arbitrary DB text safe for pdf-lib's StandardFonts (WinAnsi encoding).
+ * WinAnsi cannot encode control chars (tabs/newlines) or most non-Latin-1
+ * code points — passing them to drawText throws and aborts the whole render.
+ * Real-world data hits this constantly: a processor profile imported with a
+ * leading tab ("\tErin Wilsey"), business names with smart quotes / em-dashes,
+ * etc. Normalize the common offenders and replace anything still un-encodable
+ * with '?' so the PDF always renders.
+ */
+const clean = (s: unknown): string =>
+  String(s ?? '')
+    .replace(/[‘’ʼ]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—−]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/[ \t]/g, ' ')
+    .replace(/[\x00-\x1F\x7F]/g, ' ')
+    .replace(/[^\x20-\x7E\xA1-\xFF]/g, '?')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+
 export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promise<Buffer> {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -74,7 +95,7 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
     const size = opts.size ?? 10;
     const x = opts.x ?? MARGIN;
     const usedFont = opts.bold ? fontBold : font;
-    let line = text;
+    let line = clean(text);
     if (opts.max && opts.max > 0 && usedFont.widthOfTextAtSize(line, size) > opts.max) {
       // Shrink the base text one char at a time, measuring WITH the ellipsis
       // appended. The previous form (`line = line.slice(0,-2) + '...'`) removed
@@ -94,7 +115,7 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
     const size = cells[0]?.size ?? 9;
     for (const c of cells) {
       const cellFont = c.bold ? fontBold : font;
-      let txt = c.text;
+      let txt = clean(c.text);
       if (cellFont.widthOfTextAtSize(txt, size) > c.w - 4) {
         // See drawText above: net-shrink with the ellipsis measured in, or this
         // loop grows the string forever and hangs the whole PDF render.
