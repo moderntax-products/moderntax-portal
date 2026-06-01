@@ -739,9 +739,17 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
                                       rel="noopener noreferrer"
                                       className="px-2.5 py-1 text-xs font-medium rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
                                     >
-                                      PDF
+                                      Invoice PDF
                                     </a>
                                   )}
+                                  {/* Itemized breakdown PDF — generated on-demand
+                                      (who ordered what, by loan officer). */}
+                                  <a
+                                    href={`/api/invoicing/breakdown-pdf?invoiceId=${inv.id}`}
+                                    className="px-2.5 py-1 text-xs font-medium rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                                  >
+                                    Breakdown PDF
+                                  </a>
                                   {!inv.mercury_pay_url && !inv.mercury_pdf_url && (
                                     <span className="text-xs text-gray-400 italic">—</span>
                                   )}
