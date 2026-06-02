@@ -93,8 +93,13 @@ async function handle(request: NextRequest) {
 
   // Build PDF
   const designee = buildDesigneeFromProfile(expert);
-  const entityAddress = [entity.address, entity.city, entity.state, entity.zip_code]
-    .filter(Boolean).join(', ') || '';
+  // street on line 1, "City, ST ZIP" on line 2 (newline-separated) so the
+  // 8821 taxpayer box renders the full address without dropping City/ST/ZIP.
+  const cityStateZip = [
+    [entity.city, entity.state].filter(Boolean).join(', '),
+    entity.zip_code,
+  ].filter(Boolean).join(' ').trim();
+  const entityAddress = [entity.address, cityStateZip].filter(Boolean).join('\n');
   const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
 
   // Years format: prefer compact contiguous range ("2022-2024") for

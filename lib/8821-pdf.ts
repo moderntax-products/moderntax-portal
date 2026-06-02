@@ -378,22 +378,35 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const page = pdfDoc.getPage(0);
 
-      // Build multi-line taxpayer block: name on line 1, then split address
-      // on commas while keeping "City, ST ZIP" intact on its own line.
-      const lines = [taxpayer.name, ...taxpayer.address.split('\n')].flatMap(l =>
-        l.split(',').reduce<string[]>((acc, part, idx, arr) => {
-          if (idx === arr.length - 1 && acc.length > 0) acc[acc.length - 1] += ',' + part;
-          else acc.push(part.trim());
-          return acc;
-        }, []),
-      ).filter(Boolean);
-
-      // f1_6 cell: top=672, bottom=636 — 36pt of vertical space. Stack up to
-      // 3 lines from the top with ~11pt line height; first baseline at 660.
-      const f6_TOP = 660;
-      const F6_LH = 11;
+      // Build the taxpayer block: name on line 1, then the address. Split on
+      // NEWLINES only (NOT commas) and word-wrap each segment to the cell
+      // width, so nothing is dropped. The previous comma-split + 3-line cap
+      // silently dropped City/State/ZIP whenever the street contained a comma
+      // (e.g. "42050 Kingston Lyons Dr, SE, Stayton, OR 97383" → only the
+      // street + "SE" rendered). Callers may pass either a newline-formatted
+      // address ("street\nCity, ST ZIP") or a comma-joined one — both now
+      // render complete.
       const F6_SIZE = 9;
-      for (let i = 0; i < Math.min(lines.length, 3); i++) {
+      const F6_MAXW = 300; // f1_6 cell is ~309pt wide (x 36→345); keep margin
+      const rawSegments = [taxpayer.name, ...String(taxpayer.address || '').split('\n')]
+        .map(s => s.trim()).filter(Boolean);
+      const lines: string[] = [];
+      for (const seg of rawSegments) {
+        let cur = '';
+        for (const word of seg.split(/\s+/)) {
+          const test = cur ? `${cur} ${word}` : word;
+          if (cur && font.widthOfTextAtSize(test, F6_SIZE) > F6_MAXW) { lines.push(cur); cur = word; }
+          else cur = test;
+        }
+        if (cur) lines.push(cur);
+      }
+
+      // f1_6 cell: top=672, bottom=636 — 36pt. Stack up to 4 lines from the
+      // top at 9pt line height (660 → 633) so name + a wrapped 2–3 line
+      // address all fit without dropping City/State/ZIP.
+      const f6_TOP = 660;
+      const F6_LH = 9;
+      for (let i = 0; i < Math.min(lines.length, 4); i++) {
         page.drawText(lines[i], { x: 40, y: f6_TOP - i * F6_LH, size: F6_SIZE, font, color: rgb(0, 0, 0) });
       }
 

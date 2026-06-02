@@ -112,8 +112,13 @@ export async function GET(request: NextRequest) {
     }
 
     const formType = normalizeFormType(entity.form_type);
-    const entityAddress = [entity.address, entity.city, entity.state, entity.zip_code]
-      .filter(Boolean).join(', ') || '';
+    // street on line 1, "City, ST ZIP" on line 2 (newline-separated) so the
+    // 8821 taxpayer box renders the full address without dropping City/ST/ZIP.
+    const cityStateZip = [
+      [entity.city, entity.state].filter(Boolean).join(', '),
+      entity.zip_code,
+    ].filter(Boolean).join(' ').trim();
+    const entityAddress = [entity.address, cityStateZip].filter(Boolean).join('\n');
     const yearsArr: number[] = (entity.years || [])
       .map((y: any) => parseInt(String(y), 10))
       .filter(Number.isFinite);

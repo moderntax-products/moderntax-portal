@@ -173,7 +173,13 @@ export async function GET(request: NextRequest) {
         try {
           const formType = (entity.form_type || '1040') as '1040' | '1065' | '1120' | '1120S';
           const designee = Object.values(DESIGNEES)[0];
-          const address = [entity.address, entity.city, entity.state, entity.zip_code].filter(Boolean).join(', ');
+          // street on line 1, "City, ST ZIP" on line 2 (newline-separated so
+          // the 8821 taxpayer box renders all of it — never drop City/ST/ZIP).
+          const cityStateZip = [
+            [entity.city, entity.state].filter(Boolean).join(', '),
+            entity.zip_code,
+          ].filter(Boolean).join(' ').trim();
+          const address = [entity.address, cityStateZip].filter(Boolean).join('\n');
           const pdfBytes = await generate8821PDF({
             taxpayer: { name: entity.entity_name || '', tin: entity.tid || '', address },
             designee,
