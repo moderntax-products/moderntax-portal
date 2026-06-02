@@ -296,6 +296,13 @@ export default async function AdminRequestManagePage({ params }: Props) {
                       <p className="text-xs text-amber-800 mt-0.5">
                         Pull only the IRS <strong>Account Transcript</strong> for the years below (filing status + civil-penalty assessments). Do <strong>not</strong> pull Wage &amp; Income or Record of Account. This is the only request needed in your SOR inbox for this entity.
                       </p>
+                      <Link
+                        href={`/admin/filing-compliance-report/${entity.id}`}
+                        className="mt-2 inline-block px-2.5 py-1 text-[11px] font-semibold text-white bg-amber-700 rounded hover:bg-amber-800"
+                        title="Generate the filing-compliance report from this entity's account transcripts"
+                      >
+                        View Filing-Compliance Report →
+                      </Link>
                     </div>
                   )}
                   {/* Entity info header */}
