@@ -220,6 +220,15 @@ export const PRICE_CONSOLIDATION_REPORT = 99.00;
 /** Minimum entity count on a loan before the consolidation report is offered. */
 export const CONSOLIDATION_REPORT_MIN_ENTITIES = 3;
 
+/**
+ * Filing-Compliance Report (2026-06-01, Banc of California pilot — Erin Wilsey
+ * ask). A standalone product that returns civil-penalty assessments + filed vs.
+ * unfiled status from the IRS Account Transcript WITHOUT pulling income/wage
+ * transcripts. Lighter than a full verification ($59.98) — priced like a
+ * reorder to drive pilot volume. Ordered per individual/entity.
+ */
+export const PRICE_FILING_COMPLIANCE = 29.99;
+
 // ---------------------------------------------------------------------------
 // Unified invoice SKU catalog — single source of truth for Mercury line
 // items + Stripe Products. Used by:
@@ -333,6 +342,17 @@ export const INVOICE_SKU_CATALOG: Record<string, InvoiceSku> = {
     cadence: 'one_time',
     unit: 'entity',
     stripeMetadata: { tier: 'add_on', category: 'reporting' },
+  },
+
+  // Filing-Compliance Report — standalone, no income transcripts.
+  'filing-compliance-report': {
+    sku: 'filing-compliance-report',
+    name: 'Filing-Compliance Report',
+    description: 'Standalone IRS filing-compliance check: civil-penalty assessments + filed vs. unfiled status per year, sourced from the IRS Account Transcript. Does NOT include income/wage transcripts.',
+    unitPrice: PRICE_FILING_COMPLIANCE, // 29.99
+    cadence: 'one_time',
+    unit: 'entity',
+    stripeMetadata: { tier: 'add_on', category: 'compliance' },
   },
 };
 
