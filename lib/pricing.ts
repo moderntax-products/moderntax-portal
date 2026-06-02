@@ -358,6 +358,28 @@ export const INVOICE_SKU_CATALOG: Record<string, InvoiceSku> = {
 
 export type InvoiceSkuId = keyof typeof INVOICE_SKU_CATALOG;
 
+/**
+ * Resolve the billable rate + product kind for a completed entity from its
+ * `gross_receipts` JSONB. Centralizes per-entity pricing so the invoice cron,
+ * the breakdown PDF, and the live /invoicing projection all agree.
+ *
+ * - Filing-Compliance Report  → $29.99 (account transcript only)
+ * - Reorder-from-history       → $29.99 (reuses prior 8821)
+ * - Everything else            → the client's contracted PDF rate
+ */
+export function entityBillableRate(
+  grossReceipts: any,
+  clientRatePdf: number,
+): { price: number; kind: 'standard' | 'reorder' | 'filing_compliance' } {
+  if (grossReceipts?.product_type === 'filing_compliance') {
+    return { price: PRICE_FILING_COMPLIANCE, kind: 'filing_compliance' };
+  }
+  if (grossReceipts?.reorder?.sku === 'reorder-from-history') {
+    return { price: PRICE_REORDER, kind: 'reorder' };
+  }
+  return { price: clientRatePdf, kind: 'standard' };
+}
+
 /** Resolve an SKU ID to its catalog entry. Throws if unknown — fail loud. */
 export function getInvoiceSku(sku: string): InvoiceSku {
   const entry = INVOICE_SKU_CATALOG[sku];

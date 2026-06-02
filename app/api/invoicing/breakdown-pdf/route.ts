@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
+import { entityBillableRate } from '@/lib/pricing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,7 +103,7 @@ export async function GET(request: NextRequest) {
     let rawEntities: any[] = [];
     for (let i = 0; i < reqIds.length; i += 200) {
       const { data: batch } = await admin.from('request_entities')
-        .select('entity_name, form_type, completed_at, request_id')
+        .select('entity_name, form_type, completed_at, gross_receipts, request_id')
         .in('request_id', reqIds.slice(i, i + 200))
         .eq('status', 'completed')
         .gte('completed_at', `${periodStart}T00:00:00Z`)
@@ -111,20 +112,22 @@ export async function GET(request: NextRequest) {
       rawEntities = rawEntities.concat(batch || []);
     }
 
-    // Group by loan officer, flat rate per entity.
+    // Group by loan officer. Per-entity rate: filing-compliance + reorder draw
+    // down at their own SKU price; everything else at the client rate.
     const groups: Record<string, { processor: string; entities: any[]; subtotal: number }> = {};
     for (const e of rawEntities) {
       const proc = procMap[reqByMap[e.request_id]] || 'Unattributed';
+      const { price, kind } = entityBillableRate(e.gross_receipts, rate);
       if (!groups[proc]) groups[proc] = { processor: proc, entities: [], subtotal: 0 };
       groups[proc].entities.push({
         entity_name: e.entity_name,
         form_type: e.form_type || '-',
         completed_at: e.completed_at,
         loan_number: loanMap[e.request_id] || null,
-        unit_price: rate,
-        is_reorder: false,
+        unit_price: price,
+        is_reorder: kind === 'reorder',
       });
-      groups[proc].subtotal = Math.round((groups[proc].subtotal + rate) * 100) / 100;
+      groups[proc].subtotal = Math.round((groups[proc].subtotal + price) * 100) / 100;
     }
     const processorGroups = Object.keys(groups).sort().map((k) => groups[k]);
 

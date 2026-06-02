@@ -287,6 +287,17 @@ export default async function AdminRequestManagePage({ params }: Props) {
             <div className="space-y-4">
               {(request.request_entities as RequestEntity[]).map((entity) => (
                 <div key={entity.id} className="bg-white rounded-lg shadow p-6">
+                  {/* Filing-Compliance notation — tells the expert this entity
+                      needs ONLY the IRS Account Transcript in their SOR inbox,
+                      not income/wage transcripts. */}
+                  {(entity.gross_receipts as any)?.product_type === 'filing_compliance' && (
+                    <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+                      <p className="text-sm font-bold text-amber-900">⚑ Filing-Compliance Report — Account Transcript ONLY</p>
+                      <p className="text-xs text-amber-800 mt-0.5">
+                        Pull only the IRS <strong>Account Transcript</strong> for the years below (filing status + civil-penalty assessments). Do <strong>not</strong> pull Wage &amp; Income or Record of Account. This is the only request needed in your SOR inbox for this entity.
+                      </p>
+                    </div>
+                  )}
                   {/* Entity info header */}
                   <div className="flex flex-wrap items-center gap-4 mb-4 pb-4 border-b border-gray-100">
                     <div>

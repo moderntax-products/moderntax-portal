@@ -30,7 +30,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import sgMail from '@sendgrid/mail';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
-import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
+import { PRICE_POST_CLOSE_MONITORING_MONTHLY, entityBillableRate } from '@/lib/pricing';
 import {
   createMercuryInvoice,
   getDestinationAccountId,
@@ -85,7 +85,7 @@ type MonitorRow = {
 
 type ProcessorGroup = {
   processor: string;
-  entities: Array<{ entity_name: string; form_type: string | null; completed_at: string | null; loan_number: string | null; unit_price: number; is_reorder: boolean }>;
+  entities: Array<{ entity_name: string; form_type: string | null; completed_at: string | null; loan_number: string | null; unit_price: number; is_reorder: boolean; is_filing_compliance: boolean }>;
   subtotal: number;
 };
 
@@ -180,10 +180,9 @@ async function issueMonthlyInvoice(
   const byProc: Record<string, ProcessorGroup> = {};
   for (const e of entities) {
     const proc = (e.requests as any)?.profiles?.full_name || 'Unattributed';
-    const isReorder = e.gross_receipts?.reorder?.sku === 'reorder-from-history';
-    const price = isReorder ? 29.99 : ratePdf;
+    const { price, kind } = entityBillableRate(e.gross_receipts, ratePdf);
     if (!byProc[proc]) byProc[proc] = { processor: proc, entities: [], subtotal: 0 };
-    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: (e.requests as any)?.loan_number || null, unit_price: price, is_reorder: isReorder });
+    byProc[proc].entities.push({ entity_name: e.entity_name, form_type: e.form_type, completed_at: e.completed_at, loan_number: (e.requests as any)?.loan_number || null, unit_price: price, is_reorder: kind === 'reorder', is_filing_compliance: kind === 'filing_compliance' });
     byProc[proc].subtotal = Math.round((byProc[proc].subtotal + price) * 100) / 100;
   }
   const processorGroups = Object.values(byProc).sort((a, b) => a.processor.localeCompare(b.processor));
@@ -227,10 +226,12 @@ async function issueMonthlyInvoice(
 
   // ── Mercury line items (summary) ─────────────────────────────────────────
   const lineItems: Array<{ name: string; unitPrice: number; quantity: number }> = [];
-  const stdCount = processorGroups.reduce((s, g) => s + g.entities.filter(e => !e.is_reorder).length, 0);
+  const stdCount = processorGroups.reduce((s, g) => s + g.entities.filter(e => !e.is_reorder && !e.is_filing_compliance).length, 0);
   const reoCount = processorGroups.reduce((s, g) => s + g.entities.filter(e => e.is_reorder).length, 0);
+  const fcCount = processorGroups.reduce((s, g) => s + g.entities.filter(e => e.is_filing_compliance).length, 0);
   if (stdCount > 0) lineItems.push({ name: `Tax Verification — ${client.name} (${periodStart.slice(0, 7)})`, unitPrice: ratePdf, quantity: stdCount });
   if (reoCount > 0) lineItems.push({ name: 'Tax Verification — Reorder', unitPrice: 29.99, quantity: reoCount });
+  if (fcCount > 0) lineItems.push({ name: 'Filing-Compliance Report', unitPrice: 29.99, quantity: fcCount });
   if (monitoringEntities > 0) lineItems.push({ name: `Account Monitoring (${periodStart} → ${periodEnd})`, unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100, quantity: monitoringEntities });
   if (catchupAmount > 0) lineItems.push({ name: catchupMemo, unitPrice: catchupAmount, quantity: 1 });
 
