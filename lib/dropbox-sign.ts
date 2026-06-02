@@ -80,9 +80,13 @@ export async function sendSignatureRequest(entity: {
   const signerName = [entity.signer_first_name, entity.signer_last_name]
     .filter(Boolean)
     .join(' ') || entity.entity_name;
-  const entityAddress = [entity.address, entity.city, entity.state, entity.zip_code]
-    .filter(Boolean)
-    .join(', ') || '';
+  // street on line 1, "City, ST ZIP" on line 2 (newline-separated) so the
+  // 8821 taxpayer box renders the full address without dropping City/ST/ZIP.
+  const cityStateZip = [
+    [entity.city, entity.state].filter(Boolean).join(', '),
+    entity.zip_code,
+  ].filter(Boolean).join(' ').trim();
+  const entityAddress = [entity.address, cityStateZip].filter(Boolean).join('\n');
 
   // Generate filled 8821 PDF
   const pdfBuffer = await generate8821PDF({
