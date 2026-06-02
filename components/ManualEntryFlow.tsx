@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 
 const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const FILING_COMPLIANCE_PRICE = 29.99;
 
 export function ManualEntryFlow() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export function ManualEntryFlow() {
   const [loanNumber, setLoanNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [entities, setEntities] = useState([
-    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false },
+    { id: '1', entityName: '', tid: '', tidKind: 'EIN' as 'EIN' | 'SSN', formType: '1040', years: [] as string[], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false, reportType: 'verification' as 'verification' | 'filing_compliance' },
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -32,7 +33,7 @@ export function ManualEntryFlow() {
   const addEntity = () => {
     setEntities([
       ...entities,
-      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false },
+      { id: Math.random().toString(36).substr(2, 9), entityName: '', tid: '', tidKind: 'EIN', formType: '1040', years: [], signerEmail: '', address: '', city: '', state: '', zipCode: '', entityTranscript: false, reportType: 'verification' },
     ]);
   };
 
@@ -130,13 +131,28 @@ export function ManualEntryFlow() {
         years: ent.years,
         signer_email: ent.signerEmail || null,
         status: 'pending',
-        gross_receipts: ent.entityTranscript ? {
-          entity_transcript_order: {
-            requested: true,
-            price: ENTITY_TRANSCRIPT_PRICE,
-            ordered_at: new Date().toISOString(),
-          },
-        } : null,
+        gross_receipts: (() => {
+          const gr: Record<string, unknown> = {};
+          if (ent.entityTranscript) {
+            gr.entity_transcript_order = {
+              requested: true,
+              price: ENTITY_TRANSCRIPT_PRICE,
+              ordered_at: new Date().toISOString(),
+            };
+          }
+          if (ent.reportType === 'filing_compliance') {
+            // Standalone filing-compliance order: account transcript only,
+            // no income transcripts. Billed at the filing-compliance SKU.
+            gr.product_type = 'filing_compliance';
+            gr.filing_compliance = {
+              requested: true,
+              price: FILING_COMPLIANCE_PRICE,
+              sku: 'filing-compliance-report',
+              ordered_at: new Date().toISOString(),
+            };
+          }
+          return Object.keys(gr).length ? gr : null;
+        })(),
       }));
 
       const { error: entError } = await supabase.from('request_entities').insert(entitiesData);
@@ -225,6 +241,19 @@ export function ManualEntryFlow() {
             </div>
 
             <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-semibold text-mt-dark mb-2">What to order</label>
+                <select value={entity.reportType} onChange={(e) => updateEntity(entity.id, { reportType: e.target.value as 'verification' | 'filing_compliance' })} disabled={isLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50">
+                  <option value="verification">Full Tax Verification — income transcripts (standard rate)</option>
+                  <option value="filing_compliance">Filing-Compliance Report — civil penalties + filed/unfiled status, no transcripts (${FILING_COMPLIANCE_PRICE.toFixed(2)})</option>
+                </select>
+                {entity.reportType === 'filing_compliance' && (
+                  <p className="text-xs text-amber-700 mt-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    We&rsquo;ll pull <strong>only the IRS Account Transcript</strong> (filing status + civil penalties) — no income/wage transcripts. A signed 8821 is still required for IRS authorization.
+                  </p>
+                )}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-semibold text-mt-dark mb-2">Entity Name <span className="text-red-500">*</span></label>
@@ -331,22 +360,31 @@ export function ManualEntryFlow() {
         </button>
       </div>
 
-      {entities.some(e => e.entityTranscript) && (
+      {(entities.some(e => e.entityTranscript) || entities.some(e => e.reportType === 'filing_compliance')) && (
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-sm font-semibold text-mt-dark mb-3">Order Summary</h3>
           <div className="space-y-2 text-sm">
+            {entities.filter(e => e.reportType === 'filing_compliance').map((e, i) => (
+              <div key={`fc-${e.id}`} className="flex justify-between text-gray-600">
+                <span>Filing-Compliance Report — {e.entityName || `Entity ${i + 1}`}</span>
+                <span className="font-medium">${FILING_COMPLIANCE_PRICE.toFixed(2)}</span>
+              </div>
+            ))}
             {entities.filter(e => e.entityTranscript).map((e, i) => (
-              <div key={e.id} className="flex justify-between text-gray-600">
+              <div key={`et-${e.id}`} className="flex justify-between text-gray-600">
                 <span>Entity Transcript — {e.entityName || `Entity ${i + 1}`}</span>
                 <span className="font-medium">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
               </div>
             ))}
             <div className="border-t pt-2 mt-2 flex justify-between font-bold text-mt-dark">
-              <span>Entity Transcript Add-ons</span>
-              <span>${(entities.filter(e => e.entityTranscript).length * ENTITY_TRANSCRIPT_PRICE).toFixed(2)}</span>
+              <span>Order total</span>
+              <span>${(
+                entities.filter(e => e.reportType === 'filing_compliance').length * FILING_COMPLIANCE_PRICE +
+                entities.filter(e => e.entityTranscript).length * ENTITY_TRANSCRIPT_PRICE
+              ).toFixed(2)}</span>
             </div>
           </div>
-          <p className="text-xs text-gray-400 mt-2">Standard transcript verification fees apply separately per entity.</p>
+          <p className="text-xs text-gray-400 mt-2">Full Tax Verification entities are billed separately per your contract rate. Filing-Compliance Reports are billed at ${FILING_COMPLIANCE_PRICE.toFixed(2)} each.</p>
         </div>
       )}
 
