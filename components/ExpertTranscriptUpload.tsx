@@ -242,6 +242,18 @@ export function ExpertTranscriptUpload({
 
       {error && <p className="text-xs text-red-600">{error}</p>}
 
+      {/* Not-submitted warning — files uploaded but work not yet marked
+          complete won't count as finished (Joel Abernathy feedback 2026-06-03:
+          uploaded transcripts but never got credit because the separate submit
+          step was missed). Make that step impossible to miss. */}
+      {uploadedFiles.length > 0 && (
+        <div className="rounded-lg border-2 border-amber-400 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+          <strong>⚠ Not submitted yet.</strong> Your {uploadedFiles.length} uploaded file{uploadedFiles.length > 1 ? 's are' : ' is'} saved,
+          but this assignment is <strong>not marked complete</strong> and <strong>won&rsquo;t count as finished work</strong> (no SLA credit)
+          until you click <strong>&ldquo;Mark Complete &amp; Submit&rdquo;</strong> below.
+        </div>
+      )}
+
       {/* Action buttons */}
       <div className="flex gap-2 flex-wrap">
         {pendingFiles.length > 0 && (
