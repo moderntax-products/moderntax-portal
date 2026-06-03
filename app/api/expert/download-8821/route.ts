@@ -49,24 +49,33 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get the entity's signed_8821_url
+    // Experts download ONLY the admin-prepared 8821 (admin_uploaded_8821_url) —
+    // the copy an admin posts with the expert's correct designee credentials,
+    // re-wet-signed (not the DocuSign-flattened processor original). Serving the
+    // processor's original / an e-signed copy caused experts to reject the work
+    // and skip IRS calls — Joel Abernathy missed a scheduled IRS callback this
+    // way (2026-06-03). If the admin copy isn't posted yet, return a clear
+    // "pending" state rather than handing over the wrong form.
     const { data: entity } = await adminSupabase
       .from('request_entities')
-      .select('signed_8821_url, entity_name')
+      .select('admin_uploaded_8821_url, entity_name')
       .eq('id', entityId)
       .single();
 
-    if (!entity || !entity.signed_8821_url) {
+    if (!entity || !entity.admin_uploaded_8821_url) {
       return NextResponse.json(
-        { error: 'No signed 8821 available for this entity' },
-        { status: 404 }
+        {
+          error: 'Your 8821 is being prepared by an admin and isn’t ready to download yet. It will appear here once the admin posts the expert copy with your designee credentials.',
+          code: 'admin_8821_pending',
+        },
+        { status: 409 }
       );
     }
 
     // Generate a signed URL (valid for 1 hour)
     const { data: signedUrlData, error: signError } = await adminSupabase.storage
       .from('uploads')
-      .createSignedUrl(entity.signed_8821_url, 3600);
+      .createSignedUrl(entity.admin_uploaded_8821_url, 3600);
 
     if (signError || !signedUrlData?.signedUrl) {
       console.error('Failed to create signed URL:', signError);
@@ -86,8 +95,8 @@ export async function GET(request: NextRequest) {
         resourceType: 'request_entity',
         resourceId: entityId,
         details: {
-          file_kind: 'signed_8821',
-          file_path: entity.signed_8821_url,
+          file_kind: 'admin_uploaded_8821',
+          file_path: entity.admin_uploaded_8821_url,
           entity_name: entity.entity_name,
           assignment_id: assignment.id,
           role: 'expert',
