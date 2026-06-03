@@ -6,6 +6,7 @@ import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotificatio
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { resolveFormType } from '@/lib/form-type-validation';
 import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
+import { extractTaxpayerInfoFrom8821, normalizeTin } from '@/lib/extract-8821-pdf';
 
 export async function POST(request: NextRequest) {
   try {
@@ -170,6 +171,19 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
+      // The PDF intake form doesn't capture the taxpayer address or the signer
+      // name/title — but the uploaded 8821 already has them (Section 1 + 6).
+      // Extract them so the entity is complete and the regenerated 8821 isn't
+      // missing Line 1 / the signature block. Only trust the parse when the
+      // extracted TIN matches this entity's TID.
+      let extr: Awaited<ReturnType<typeof extractTaxpayerInfoFrom8821>> | null = null;
+      try {
+        const info = await extractTaxpayerInfoFrom8821(buffer);
+        if (info.tin && normalizeTin(info.tin) === normalizeTin(tid)) extr = info;
+      } catch (e) {
+        console.warn('[upload/pdf] taxpayer/signer extract failed (non-fatal):', e);
+      }
+
       // Create entity
       const entityInsert: Record<string, any> = {
         request_id: req.id,
@@ -181,9 +195,16 @@ export async function POST(request: NextRequest) {
         fiscal_year_end_month: fiscalYearEndMonth,
         signed_8821_url: filePath,
         status: '8821_signed',
+        ...(extr?.address ? { address: extr.address } : {}),
+        ...(extr?.city ? { city: extr.city } : {}),
+        ...(extr?.state ? { state: extr.state } : {}),
+        ...(extr?.zip ? { zip_code: extr.zip } : {}),
+        ...(extr?.signerFirstName ? { signer_first_name: extr.signerFirstName } : {}),
+        ...(extr?.signerLastName ? { signer_last_name: extr.signerLastName } : {}),
       };
 
       const grossReceipts: Record<string, unknown> = {};
+      if (extr?.signerTitle) grossReceipts.signer_title = extr.signerTitle;
       if (entityTranscriptRequested) {
         grossReceipts.entity_transcript_order = {
           requested: true,

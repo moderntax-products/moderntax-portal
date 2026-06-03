@@ -301,7 +301,7 @@ export async function acceptBatch(
   // Load entities in the now-claimed batch.
   const { data: assignments } = await admin
     .from('expert_assignments')
-    .select('id, entity_id, request_entities(id, entity_name, tid, address, city, state, zip_code, form_type, years)')
+    .select('id, entity_id, request_entities(id, entity_name, tid, address, city, state, zip_code, form_type, years, signer_first_name, signer_last_name, gross_receipts)')
     .eq('batch_id', batchId) as { data: any[] | null };
 
   // Regenerate the 8821 for each entity with the ACCEPTING expert's designee
@@ -313,9 +313,17 @@ export async function acceptBatch(
     const e = a.request_entities;
     if (!e) continue;
     try {
-      const fullAddress = [e.address, e.city, e.state, e.zip_code].filter(Boolean).join(', ');
+      const cityStateZip = [[e.city, e.state].filter(Boolean).join(', '), e.zip_code].filter(Boolean).join(' ').trim();
+      const fullAddress = [e.address, cityStateZip].filter(Boolean).join('\n');
+      const signerName = [e.signer_first_name, e.signer_last_name].filter(Boolean).join(' ') || undefined;
       const pdfBuffer = await generate8821PDF({
-        taxpayer: { name: e.entity_name, tin: e.tid, address: fullAddress || '' },
+        taxpayer: {
+          name: e.entity_name,
+          tin: e.tid,
+          address: fullAddress || '',
+          signerName,
+          signerTitle: (e.gross_receipts as any)?.signer_title || undefined,
+        },
         designee,
         formType: (e.form_type || '1040') as '1040' | '1065' | '1120' | '1120S' | '941',
         years: Array.isArray(e.years) ? e.years.join(', ') : '2022-2026',

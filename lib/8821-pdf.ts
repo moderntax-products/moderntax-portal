@@ -47,6 +47,8 @@ export interface TaxpayerInfo {
   tin: string;           // SSN or EIN (formatted)
   address: string;       // Full address line
   phone?: string;
+  signerName?: string;   // Section 6 "Print Name" (e.g. "Linda Oliver")
+  signerTitle?: string;  // Section 6 "Title (if applicable)" (e.g. "Managing Member")
 }
 
 export interface Fill8821Options {
@@ -267,6 +269,9 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
         'f1_6': `${taxpayer.name}\n${taxpayer.address}`,
         'f1_7': taxpayer.tin,
         'f1_8': taxpayer.phone || '',
+        // Section 6 — signer print name + title
+        'f1_32': taxpayer.signerName || '',
+        'f1_33': taxpayer.signerTitle || '',
       }
     : {
         // Section 1: Taxpayer
@@ -305,6 +310,10 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
         'f1_29': rows[2]?.form || '',
         'f1_30': rows[2]?.years || '',
         'f1_31': rows[2]?.specific || '',
+
+        // Section 6 — signer print name + title (pre-filled; borrower signs/dates)
+        'f1_32': taxpayer.signerName || '',
+        'f1_33': taxpayer.signerTitle || '',
       };
 
   let templateBytes: Uint8Array;
@@ -372,7 +381,7 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
   //   f1_8 (phone)          Rect [ 345.6, 635.97, 460.8, 647.97 ]
   // No drawing happens when an expert-supplied template is in use —
   // those carry their own Section 1 baked in.
-  if (!expertTemplateBytes && (taxpayer.name || taxpayer.tin || taxpayer.phone)) {
+  if (!expertTemplateBytes && (taxpayer.name || taxpayer.tin || taxpayer.phone || taxpayer.signerName || taxpayer.signerTitle)) {
     try {
       const { StandardFonts, rgb } = await import('pdf-lib');
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -418,6 +427,16 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
       // f1_8 cell (phone): single-line at top=648, bottom=636. Baseline ~638.
       if (taxpayer.phone) {
         page.drawText(taxpayer.phone, { x: 350, y: 638, size: 10, font, color: rgb(0, 0, 0) });
+      }
+
+      // Section 6 — Print Name (f1_32, Rect ~[58,96,432,120]) + Title
+      // (f1_33, Rect ~[432,96,554,120]). Like f1_6/7/8 these widgets aren't
+      // filled via pdf-lib's named-field loop, so draw them at their cells.
+      if (taxpayer.signerName) {
+        page.drawText(taxpayer.signerName, { x: 62, y: 104, size: 9, font, color: rgb(0, 0, 0) });
+      }
+      if (taxpayer.signerTitle) {
+        page.drawText(taxpayer.signerTitle, { x: 436, y: 104, size: 9, font, color: rgb(0, 0, 0) });
       }
     } catch (overlayErr) {
       console.warn('[8821-pdf] Section 1 overlay failed (non-fatal):', overlayErr instanceof Error ? overlayErr.message : overlayErr);

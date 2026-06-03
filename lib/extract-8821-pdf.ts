@@ -277,3 +277,114 @@ export async function extractEmailsFrom8821(
     filteredLenderEmails,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Taxpayer + signer extraction (2026-06-03 Matt directive)
+//
+// PDF / partner intake captures name/TIN/form/years but NOT the taxpayer
+// address — yet the processor's uploaded 8821 already has it in Section 1, and
+// the signer's printed name + title in Section 6. Pull both so the entity is
+// complete and the regenerated 8821 isn't missing Line 1 / the signature block.
+//
+// Flattened 8821s render the filled field values as a contiguous block in the
+// extracted text (taxpayer name, street, "City, ST ZIP", TIN, …, "Name Title").
+// We anchor on the TIN and read the lines just before it; the signer line is
+// matched by a person-name + title-keyword pattern. Defensive: returns nulls
+// when unsure, and the caller validates the parsed TIN against the entity TID
+// before writing anything.
+// ---------------------------------------------------------------------------
+
+export interface Taxpayer8821Info {
+  tin: string | null;
+  taxpayerName: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  signerFirstName: string | null;
+  signerLastName: string | null;
+  signerTitle: string | null;
+}
+
+const TITLE_KEYWORDS =
+  '(?:Managing Member|General Partner|Managing Partner|Sole Proprietor|Vice President|President|Member|Owner|Partner|Principal|Officer|Manager|Treasurer|Secretary|Director|Trustee|Executor|Administrator|CEO|CFO|COO|VP)';
+
+const CSZ_RE = /^(.+?),\s*([A-Z]{2}),?\s*(\d{5})(?:-\d{4})?$/;
+const TIN_RE = /\b(\d{2}-\d{7}|\d{3}-\d{2}-\d{4})\b/;
+
+export const normalizeTin = (t: string | null | undefined): string =>
+  (t || '').replace(/\D/g, '');
+
+export async function extractTaxpayerInfoFrom8821(pdfBuffer: Buffer): Promise<Taxpayer8821Info> {
+  const out: Taxpayer8821Info = {
+    tin: null, taxpayerName: null, address: null, city: null, state: null, zip: null,
+    signerFirstName: null, signerLastName: null, signerTitle: null,
+  };
+
+  let text = '';
+  try {
+    const data = await pdfParse(pdfBuffer);
+    text = data.text || '';
+  } catch (err) {
+    console.error('[extract-8821-pdf] taxpayer parse failed:', err);
+    return out;
+  }
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // --- TIN anchor (prefer a line that is JUST the TIN) ---
+  let tinIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^(\d{2}-\d{7}|\d{3}-\d{2}-\d{4})$/.test(lines[i])) { out.tin = lines[i]; tinIdx = i; break; }
+  }
+  if (tinIdx < 0) {
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(TIN_RE);
+      if (m) { out.tin = m[1]; tinIdx = i; break; }
+    }
+  }
+
+  // --- Taxpayer Section 1 block: up to 3 lines immediately before the TIN ---
+  if (tinIdx > 0) {
+    const prev = lines.slice(Math.max(0, tinIdx - 3), tinIdx);
+    let cszLine = -1;
+    for (let j = prev.length - 1; j >= 0; j--) { if (CSZ_RE.test(prev[j])) { cszLine = j; break; } }
+    if (cszLine >= 0) {
+      const m = prev[cszLine].match(CSZ_RE)!;
+      out.city = m[1].trim(); out.state = m[2]; out.zip = m[3];
+      if (cszLine - 1 >= 0) out.address = prev[cszLine - 1];
+      if (cszLine - 2 >= 0) out.taxpayerName = prev[cszLine - 2];
+      else if (out.address) { out.taxpayerName = out.address; out.address = null; } // only name + CSZ present
+    } else if (prev.length >= 2) {
+      out.taxpayerName = prev[prev.length - 2];
+      out.address = prev[prev.length - 1];
+    } else if (prev.length === 1) {
+      out.taxpayerName = prev[0];
+    }
+  }
+
+  // --- Signer printed name + title (Section 6), best-effort ---
+  // Handles "Linda Oliver Managing Member" (one line) AND the common pdf-parse
+  // split where the name and title land on consecutive lines.
+  const inlineRe = new RegExp(
+    `^([A-Z][A-Za-z.'\\-]+(?:\\s+[A-Z][A-Za-z.'\\-]+){1,2})\\s+(${TITLE_KEYWORDS}(?:\\s+[A-Za-z]+)?)\\s*$`,
+    'i',
+  );
+  const titleOnlyRe = new RegExp(`^(${TITLE_KEYWORDS}(?:\\s+[A-Za-z]+)?)\\s*$`, 'i');
+  const nameOnlyRe = /^([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})$/;
+  const setSigner = (name: string, title: string) => {
+    const parts = name.trim().replace(/^(Dr|Mr|Mrs|Ms|Mx)\.?\s+/i, '').split(/\s+/);
+    out.signerFirstName = parts[0];
+    out.signerLastName = parts.slice(1).join(' ');
+    out.signerTitle = title.trim();
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const inline = lines[i].match(inlineRe);
+    if (inline) { setSigner(inline[1], inline[2]); break; }
+    if (titleOnlyRe.test(lines[i]) && i > 0 && nameOnlyRe.test(lines[i - 1])) {
+      setSigner(lines[i - 1], lines[i]); break;
+    }
+  }
+
+  return out;
+}
