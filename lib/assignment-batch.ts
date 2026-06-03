@@ -25,7 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { generate8821PDF, buildDesigneeFromProfile, validateExpertDesigneeCreds, type ExpertProfileForDesignee } from './8821-pdf';
+import { generate8821PDF, buildDesigneeFromProfile, validateExpertDesigneeCreds } from './8821-pdf';
 
 export const BATCH_MIN_ENTITIES = 1;       // operationally we want 3-5, but allow 1+
 export const BATCH_MAX_ENTITIES = 8;       // hard upper bound — cognitive overload risk
@@ -238,40 +238,77 @@ export async function acceptBatch(
     .single() as { data: AssignmentBatchRow | null };
   if (!batch) return { ok: false, error: 'Batch not found' };
 
-  // Auth: only the batch's expert can accept
-  if (batch.expert_id !== expertId) {
-    return { ok: false, error: 'This batch is not offered to you' };
-  }
+  // Broadcast model (2026-06-03 Matt directive): a pending batch is offered to
+  // ALL credentialed experts simultaneously, and the FIRST to accept wins. We
+  // no longer reject non-"owner" experts — instead we atomically claim the
+  // batch below. (The batch's expert_id at offer time is only the nominal
+  // initial owner; it is rewritten to the accepting expert on claim.)
   if (batch.status !== 'pending_acceptance') {
-    return { ok: false, error: `Cannot accept a batch in status "${batch.status}"` };
+    return { ok: false, error: 'This batch is no longer available — another expert may have already accepted it.' };
   }
   if (new Date(batch.acceptance_deadline) < new Date()) {
     return { ok: false, error: 'Acceptance window expired — batch will be returned to the pool' };
   }
 
-  // Load expert profile (creds for PDF designee)
+  // Any credentialed expert may accept. Load + validate the claimer's creds.
   const { data: expertProfile } = await admin
     .from('profiles')
-    .select('id, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
+    .select('id, role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
     .eq('id', expertId)
-    .single() as { data: ExpertProfileForDesignee | null };
-  if (!expertProfile) return { ok: false, error: 'Expert profile not found' };
+    .single() as { data: any };
+  if (!expertProfile || expertProfile.role !== 'expert') {
+    return { ok: false, error: 'Only credentialed experts can accept batches' };
+  }
   const missing = validateExpertDesigneeCreds(expertProfile);
   if (missing.length > 0) {
     return { ok: false, error: `Your profile is missing required fields: ${missing.join(', ')}` };
   }
 
-  // Load entities in this batch
+  // ─── ATOMIC CLAIM — first to accept wins ──────────────────────────────────
+  // The conditional update (status must still be pending_acceptance) is a
+  // row-level compare-and-swap: if two experts accept simultaneously, only one
+  // update sees status='pending_acceptance' and succeeds; the loser gets 0
+  // rows back. This sets the accepting expert as the batch owner.
+  const acceptedAt = new Date();
+  const completionDeadline = new Date(acceptedAt.getTime() + COMPLETION_WINDOW_MS).toISOString();
+  const { data: claimedBatch } = await admin
+    .from('assignment_batches')
+    .update({
+      expert_id: expertId,
+      status: 'accepted',
+      accepted_at: acceptedAt.toISOString(),
+      completion_deadline: completionDeadline,
+    })
+    .eq('id', batchId)
+    .eq('status', 'pending_acceptance')
+    .select('*')
+    .maybeSingle() as { data: AssignmentBatchRow | null };
+  if (!claimedBatch) {
+    return { ok: false, error: 'This batch was just accepted by another expert.' };
+  }
+
+  // Re-point the per-entity assignment rows to the accepting expert + advance.
+  await admin
+    .from('expert_assignments')
+    .update({
+      expert_id: expertId,
+      status: 'assigned',
+      expert_clock_started_at: acceptedAt.toISOString(),
+    } as any)
+    .eq('batch_id', batchId)
+    .eq('status', 'pending_acceptance');
+
+  // Load entities in the now-claimed batch.
   const { data: assignments } = await admin
     .from('expert_assignments')
     .select('id, entity_id, request_entities(id, entity_name, tid, address, city, state, zip_code, form_type, years)')
     .eq('batch_id', batchId) as { data: any[] | null };
 
-  // Regenerate 8821 for each entity (best-effort)
+  // Regenerate the 8821 for each entity with the ACCEPTING expert's designee
+  // creds (best-effort — the admin can also upload an override).
   const regenerated: { entityId: string; storagePath: string }[] = [];
   const errors: { entityId: string; error: string }[] = [];
   const designee = buildDesigneeFromProfile(expertProfile);
-
   for (const a of assignments || []) {
     const e = a.request_entities;
     if (!e) continue;
@@ -300,41 +337,14 @@ export async function acceptBatch(
     }
   }
 
-  // Advance batch + assignments
-  const acceptedAt = new Date();
-  const completionDeadline = new Date(acceptedAt.getTime() + COMPLETION_WINDOW_MS).toISOString();
-
-  const { data: updatedBatch, error: batchUpdErr } = await admin
-    .from('assignment_batches')
-    .update({
-      status: 'accepted',
-      accepted_at: acceptedAt.toISOString(),
-      completion_deadline: completionDeadline,
-    })
-    .eq('id', batchId)
-    .select('*')
-    .single() as { data: AssignmentBatchRow | null; error: any };
-  if (batchUpdErr) {
-    return { ok: false, error: 'Failed to mark batch accepted', errors };
-  }
-
-  await admin
-    .from('expert_assignments')
-    .update({
-      status: 'assigned',
-      expert_clock_started_at: acceptedAt.toISOString(),
-    } as any)
-    .eq('batch_id', batchId)
-    .eq('status', 'pending_acceptance');
-
-  // Move entities into irs_queue if they aren't already
+  // Move entities into irs_queue if they aren't already.
   await admin
     .from('request_entities')
     .update({ status: 'irs_queue' })
     .in('id', (assignments || []).map(a => a.entity_id))
     .in('status', ['8821_signed']);
 
-  return { ok: true, batch: updatedBatch || undefined, regenerated, errors };
+  return { ok: true, batch: claimedBatch, regenerated, errors };
 }
 
 // ---------------------------------------------------------------------------

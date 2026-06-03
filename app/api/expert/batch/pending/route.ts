@@ -21,14 +21,36 @@ export async function GET() {
 
   const admin = createAdminClient();
 
-  const { data: batch } = await admin
+  // 1. The expert's OWN accepted (in-progress) batch takes priority — that's
+  //    work they've already claimed.
+  let { data: batch } = await admin
     .from('assignment_batches')
     .select('id, status, offered_at, acceptance_deadline, accepted_at, completion_deadline, notes')
     .eq('expert_id', user.id)
-    .in('status', ['pending_acceptance', 'accepted'])
-    .order('offered_at', { ascending: false })
+    .eq('status', 'accepted')
+    .order('accepted_at', { ascending: false })
     .limit(1)
     .maybeSingle() as { data: any };
+
+  // 2. Broadcast model (2026-06-03): otherwise surface the most recent OPEN
+  //    offer to EVERY credentialed expert — first to accept wins (acceptBatch
+  //    claims it atomically). expert_id on a pending batch is only the nominal
+  //    initial owner, so we do NOT filter by it here.
+  if (!batch) {
+    const { data: profile } = await admin
+      .from('profiles').select('role').eq('id', user.id).single() as { data: { role: string } | null };
+    if (profile?.role === 'expert') {
+      const { data: open } = await admin
+        .from('assignment_batches')
+        .select('id, status, offered_at, acceptance_deadline, accepted_at, completion_deadline, notes')
+        .eq('status', 'pending_acceptance')
+        .gt('acceptance_deadline', new Date().toISOString())
+        .order('offered_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: any };
+      batch = open;
+    }
+  }
 
   if (!batch) return NextResponse.json({ batch: null });
 
