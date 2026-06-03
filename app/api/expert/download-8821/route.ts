@@ -56,11 +56,11 @@ export async function GET(request: NextRequest) {
     // and skip IRS calls — Joel Abernathy missed a scheduled IRS callback this
     // way (2026-06-03). If the admin copy isn't posted yet, return a clear
     // "pending" state rather than handing over the wrong form.
-    const { data: entity } = await adminSupabase
-      .from('request_entities')
+    const { data: entity } = await (adminSupabase
+      .from('request_entities') as any)
       .select('admin_uploaded_8821_url, entity_name')
       .eq('id', entityId)
-      .single();
+      .single() as { data: { admin_uploaded_8821_url: string | null; entity_name: string } | null };
 
     if (!entity || !entity.admin_uploaded_8821_url) {
       return NextResponse.json(
