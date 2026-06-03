@@ -207,6 +207,8 @@ export default async function RequestDetailPage({ params }: Props) {
                   // discovery bonus pulls. Keeps the header count matching
                   // what shows in the per-entity Downloads list below.
                   (request.request_entities || []).reduce((sum: number, e: any) => {
+                    // Filing-Compliance Report orders don't expose transcripts.
+                    if ((e.gross_receipts as any)?.product_type === 'filing_compliance') return sum;
                     const allUrls = [
                       ...(e.transcript_urls || []),
                       ...(e.transcript_html_urls || []),
@@ -378,6 +380,35 @@ export default async function RequestDetailPage({ params }: Props) {
                         only. The small note below tells the processor the
                         team did extra work without revealing the files. */}
                     {(() => {
+                      // Filing-Compliance Report orders deliver the REPORT, not
+                      // the raw IRS transcripts. Show the report links and hide
+                      // the underlying transcript downloads entirely.
+                      const isFilingCompliance = (entity.gross_receipts as any)?.product_type === 'filing_compliance';
+                      if (isFilingCompliance) {
+                        if (entity.status !== 'completed') return null;
+                        return (
+                          <div className="border-t border-gray-200 pt-6">
+                            <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Tax Compliance Report</h4>
+                            <div className="flex flex-wrap gap-2">
+                              <a
+                                href={`/admin/filing-compliance-report/${entity.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-mt-green text-white hover:bg-opacity-90"
+                              >
+                                View Tax Compliance Report →
+                              </a>
+                              <a
+                                href={`/api/admin/filing-compliance-report-pdf?entityId=${entity.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                              >
+                                ↓ Download PDF
+                              </a>
+                            </div>
+                            <p className="mt-2.5 text-xs text-gray-500">
+                              This order delivers the Filing-Compliance Report (civil-penalty + filed/unfiled status). The underlying IRS transcripts are not included with this product.
+                            </p>
+                          </div>
+                        );
+                      }
                       const allUrls = [
                         ...(entity.transcript_urls || []),
                         ...(entity.transcript_html_urls || []),

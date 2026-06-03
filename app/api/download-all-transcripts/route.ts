@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
     // bonus pulls).
     const { data: entities } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, transcript_urls, transcript_html_urls, signed_8821_url, form_type, years')
+      .select('id, entity_name, transcript_urls, transcript_html_urls, signed_8821_url, form_type, years, gross_receipts')
       .eq('request_id', requestId) as { data: any[] | null; error: any };
 
     if (!entities || entities.length === 0) {
@@ -90,6 +90,10 @@ export async function GET(request: NextRequest) {
     let fileCount = 0;
 
     for (const entity of entities) {
+      // Filing-Compliance Report orders deliver the report, not transcripts —
+      // never bundle their raw IRS transcripts into the processor's download.
+      if ((entity.gross_receipts as any)?.product_type === 'filing_compliance') continue;
+
       const entityFolder = zip.folder(entity.entity_name || entity.id);
       if (!entityFolder) continue;
 
