@@ -123,8 +123,8 @@ export default async function FilingComplianceReportPage({ params }: { params: P
               <div className="text-xl font-bold text-gray-900 mt-1">{IA_LABEL[report.summary.installmentAgreement]}</div>
             </div>
             <div>
-              <div className="text-xs uppercase tracking-wide text-gray-500">Liability w/ Liens Filed</div>
-              <div className={`text-xl font-bold mt-1 ${report.summary.liabilityWithLiens > 0 ? 'text-red-700' : 'text-gray-900'}`}>{fmt(report.summary.liabilityWithLiens)}</div>
+              <div className="text-xs uppercase tracking-wide text-gray-500">Civil Penalties</div>
+              <div className={`text-xl font-bold mt-1 ${report.summary.totalCivilPenalties > 0 ? 'text-red-700' : 'text-gray-900'}`}>{report.summary.totalCivilPenalties > 0 ? fmt(report.summary.totalCivilPenalties) : 'None'}</div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-gray-500">Liability at Risk for Levy</div>
@@ -142,7 +142,7 @@ export default async function FilingComplianceReportPage({ params }: { params: P
             <div><div className="text-xs text-gray-500 uppercase">Form / Entity Type</div><div className="font-medium text-gray-900">{report.clientInfo.formTypes.join(', ') || entity.form_type || '—'}</div></div>
             <div><div className="text-xs text-gray-500 uppercase">Earliest IRS Activity</div><div className="font-medium text-gray-900">{fmtDate(report.clientInfo.establishmentDate)}</div></div>
           </div>
-          <div className="mt-3 text-xs text-gray-500">Filing requirements / periods covered: {report.clientInfo.periodsCovered.join(', ') || '—'}</div>
+          <div className="mt-3 text-xs text-gray-500">Filing requirements / periods covered: {report.clientInfo.yearsCovered.join(', ') || '—'}</div>
         </section>
 
         {/* SECTION 3 — Tax Liability Details */}
@@ -155,23 +155,33 @@ export default async function FilingComplianceReportPage({ params }: { params: P
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600">
                   <tr>
-                    <th className="text-left px-4 py-2">Form / Period</th>
-                    <th className="text-right px-4 py-2">Return Filed</th>
+                    <th className="text-left px-4 py-2">Form / Tax Year</th>
+                    <th className="text-center px-4 py-2">Return Filed</th>
                     <th className="text-right px-4 py-2">Liability</th>
-                    <th className="text-right px-4 py-2">Penalties</th>
-                    <th className="text-right px-4 py-2">Interest</th>
+                    <th className="text-right px-4 py-2">Civil Penalty</th>
                     <th className="text-left px-4 py-2">Lien Date</th>
                     <th className="text-left px-4 py-2">Levy Risk Date</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {report.liabilityDetail.map((p, i) => (
-                    <tr key={i} className={p.liability > 0 ? 'bg-red-50/40' : ''}>
+                    <tr key={i} className={(p.liability > 0 || p.civilPenalty > 0) ? 'bg-red-50/40' : ''}>
                       <td className="px-4 py-2 font-medium">{p.formType || '—'} · {p.label}</td>
-                      <td className="px-4 py-2 text-right">{p.returnFiledAmount != null ? fmt(p.returnFiledAmount) : (p.returnFiled ? 'Filed' : '—')}</td>
+                      <td className="px-4 py-2 text-center">
+                        {p.filingStatus === 'filed'
+                          ? <span className="text-emerald-700 text-xs font-semibold">✓ {p.returnFiledAmount != null ? fmt(p.returnFiledAmount) : 'Filed'}</span>
+                          : p.filingStatus === 'unfiled'
+                            ? <span className="text-red-700 text-xs font-semibold">⚠ Unfiled</span>
+                            : <span className="text-gray-400 text-xs">—</span>}
+                      </td>
                       <td className={`px-4 py-2 text-right font-semibold ${p.liability > 0 ? 'text-red-700' : 'text-gray-400'}`}>{p.liability > 0 ? fmt(p.liability) : '$0.00'}</td>
-                      <td className="px-4 py-2 text-right text-gray-600">{p.penalties > 0 ? fmt(p.penalties) : '—'}</td>
-                      <td className="px-4 py-2 text-right text-gray-600">{p.interest > 0 ? fmt(p.interest) : '—'}</td>
+                      <td className="px-4 py-2 text-right">
+                        {p.civilPenaltyStatus === 'assessed'
+                          ? <span className="text-red-700 font-semibold">{fmt(p.civilPenalty)}</span>
+                          : p.civilPenaltyStatus === 'none'
+                            ? <span className="text-emerald-700 text-xs">None</span>
+                            : <span className="text-gray-400 text-xs">Not checked</span>}
+                      </td>
                       <td className="px-4 py-2 text-xs">{p.lienDate ? <span className="text-red-700 font-medium">{fmtDate(p.lienDate)}</span> : '—'}</td>
                       <td className="px-4 py-2 text-xs">{p.levyRiskDate ? <span className="text-red-700 font-medium">{fmtDate(p.levyRiskDate)}</span> : '—'}</td>
                     </tr>
@@ -192,9 +202,11 @@ export default async function FilingComplianceReportPage({ params }: { params: P
                 {report.complianceOverview.filingStatus.map((f, i) => (
                   <li key={i} className="flex items-center justify-between">
                     <span className="text-gray-700">{f.formType || ''} {f.label}</span>
-                    {f.filed
+                    {f.status === 'filed'
                       ? <span className="text-emerald-700 text-xs font-semibold">✓ Filed</span>
-                      : <span className="text-red-700 text-xs font-semibold">⚠ Unfiled</span>}
+                      : f.status === 'unfiled'
+                        ? <span className="text-red-700 text-xs font-semibold">⚠ Unfiled</span>
+                        : <span className="text-gray-400 text-xs">Not checked</span>}
                   </li>
                 ))}
                 {report.complianceOverview.filingStatus.length === 0 && <li className="text-gray-400 italic">No periods on file.</li>}
@@ -206,15 +218,17 @@ export default async function FilingComplianceReportPage({ params }: { params: P
               )}
             </div>
             <div>
-              <div className="text-xs font-semibold text-gray-700 uppercase mb-2">Tax Deposit Trend</div>
-              {report.complianceOverview.depositTrend.length === 0 ? (
-                <p className="text-sm text-gray-400 italic">No deposit activity found.</p>
+              <div className="text-xs font-semibold text-gray-700 uppercase mb-2">Civil Penalties (per year)</div>
+              {report.complianceOverview.civilPenalties.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">Civil-penalty module not checked.</p>
               ) : (
                 <ul className="space-y-1 text-sm">
-                  {report.complianceOverview.depositTrend.map((d, i) => (
+                  {report.complianceOverview.civilPenalties.map((c, i) => (
                     <li key={i} className="flex items-center justify-between">
-                      <span className="text-gray-700">{d.label}</span>
-                      <span className="font-medium text-gray-900">{fmt(d.deposits)}</span>
+                      <span className="text-gray-700">{c.label}</span>
+                      {c.status === 'assessed'
+                        ? <span className="text-red-700 text-xs font-semibold">{fmt(c.amount)} assessed</span>
+                        : <span className="text-emerald-700 text-xs font-semibold">✓ None</span>}
                     </li>
                   ))}
                 </ul>

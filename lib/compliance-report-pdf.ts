@@ -91,8 +91,8 @@ export async function generateComplianceReportPdf(
   const colX = M + 160;
   const cells: [string, string, ReturnType<typeof rgb>][] = [
     ['Total Liability', usd(report.summary.totalLiability), report.summary.totalLiability > 0 ? danger : navy],
+    ['Civil Penalties', report.summary.totalCivilPenalties > 0 ? usd(report.summary.totalCivilPenalties) : 'None', report.summary.totalCivilPenalties > 0 ? danger : navy],
     ['Installment Agreement', IA_LABEL[report.summary.installmentAgreement], navy],
-    ['Liability w/ Liens Filed', usd(report.summary.liabilityWithLiens), report.summary.liabilityWithLiens > 0 ? danger : navy],
     ['Liability at Risk for Levy', usd(report.summary.liabilityAtRiskForLevy), report.summary.liabilityAtRiskForLevy > 0 ? danger : navy],
   ];
   cells.forEach((c, i) => {
@@ -119,31 +119,33 @@ export async function generateComplianceReportPdf(
     page.drawText(clean(row[1]), { x: cx, y: y - 12, size: 10, font, color: navy, ...(undefined as any) });
   });
   y -= 28;
-  text(`Periods covered: ${report.clientInfo.periodsCovered.join(', ') || '--'}`, { size: 8, color: muted, max: W - 2 * M }); y -= 22;
+  text(`Periods covered: ${report.clientInfo.yearsCovered.join(', ') || '--'}`, { size: 8, color: muted, max: W - 2 * M }); y -= 22;
 
   // ── Section 3: Tax Liability Details (table) ────────────────────────────
   ensure(40);
   text('3 - Tax Liability Details', { size: 12, b: true, color: accent }); y -= 16;
   // header row
-  const cols = { period: M, filed: 250, liab: 330, pen: 400, lien: 460, levy: 525 };
-  page.drawText('Form / Period', { x: cols.period, y, size: 8, font: bold, color: muted });
+  const cols = { period: M, filed: 245, liab: 335, civ: 415, lien: 470, levy: 532 };
+  page.drawText('Form / Tax Year', { x: cols.period, y, size: 8, font: bold, color: muted });
   right('Return Filed', cols.liab - 5, { size: 8, b: true, color: muted });
-  right('Liability', cols.pen - 5, { size: 8, b: true, color: muted });
-  right('Penalty', cols.lien - 5, { size: 8, b: true, color: muted });
+  right('Liability', cols.civ - 5, { size: 8, b: true, color: muted });
+  right('Civil Pen.', cols.lien - 5, { size: 8, b: true, color: muted });
   page.drawText('Lien', { x: cols.lien, y, size: 8, font: bold, color: muted });
   page.drawText('Levy', { x: cols.levy, y, size: 8, font: bold, color: muted });
   y -= 4;
   page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.5, color: muted });
   y -= 12;
   if (report.liabilityDetail.length === 0) {
-    text('No liability or transaction activity found.', { size: 9, color: muted }); y -= 16;
+    text('No transcript activity found yet.', { size: 9, color: muted }); y -= 16;
   } else {
     for (const p of report.liabilityDetail) {
       ensure(14);
       page.drawText(clean(`${p.formType || '-'} ${p.label}`), { x: cols.period, y, size: 8.5, font, color: navy });
-      right(p.returnFiledAmount != null ? usd(p.returnFiledAmount) : (p.returnFiled ? 'Filed' : '--'), cols.liab - 5, { size: 8.5 });
-      right(p.liability > 0 ? usd(p.liability) : '$0.00', cols.pen - 5, { size: 8.5, b: p.liability > 0, color: p.liability > 0 ? danger : muted });
-      right(p.penalties > 0 ? usd(p.penalties) : '--', cols.lien - 5, { size: 8.5, color: muted });
+      const filedStr = p.filingStatus === 'filed' ? (p.returnFiledAmount != null ? usd(p.returnFiledAmount) : 'Filed') : p.filingStatus === 'unfiled' ? 'UNFILED' : '--';
+      right(filedStr, cols.liab - 5, { size: 8.5, b: p.filingStatus === 'unfiled', color: p.filingStatus === 'filed' ? green : p.filingStatus === 'unfiled' ? danger : muted });
+      right(p.liability > 0 ? usd(p.liability) : '$0.00', cols.civ - 5, { size: 8.5, b: p.liability > 0, color: p.liability > 0 ? danger : muted });
+      const civStr = p.civilPenaltyStatus === 'assessed' ? usd(p.civilPenalty) : p.civilPenaltyStatus === 'none' ? 'None' : '--';
+      right(civStr, cols.lien - 5, { size: 8, color: p.civilPenaltyStatus === 'assessed' ? danger : p.civilPenaltyStatus === 'none' ? green : muted });
       page.drawText(p.lienDate ? clean(dateStr(p.lienDate)) : '--', { x: cols.lien, y, size: 7.5, font, color: p.lienDate ? danger : muted });
       page.drawText(p.levyRiskDate ? clean(dateStr(p.levyRiskDate)) : '--', { x: cols.levy, y, size: 7.5, font, color: p.levyRiskDate ? danger : muted });
       y -= 13;
@@ -158,20 +160,21 @@ export async function generateComplianceReportPdf(
   for (const f of report.complianceOverview.filingStatus) {
     ensure(12);
     page.drawText(clean(`${f.formType || ''} ${f.label}`), { x: M + 6, y, size: 8.5, font, color: navy });
-    right(f.filed ? 'Filed' : 'UNFILED', W - M, { size: 8.5, b: true, color: f.filed ? green : danger });
+    const lbl = f.status === 'filed' ? 'Filed' : f.status === 'unfiled' ? 'UNFILED' : 'Not checked';
+    right(lbl, W - M, { size: 8.5, b: f.status !== 'not_checked', color: f.status === 'filed' ? green : f.status === 'unfiled' ? danger : muted });
     y -= 12;
   }
   if (report.complianceOverview.unfiledReturns.length > 0) {
     y -= 4; ensure(14);
     text(`Unfiled returns: ${report.complianceOverview.unfiledReturns.join(', ')} - potential hidden liability; monitor closely.`, { size: 8, color: danger, max: W - 2 * M }); y -= 14;
   }
-  if (report.complianceOverview.depositTrend.length > 0) {
+  if (report.complianceOverview.civilPenalties.length > 0) {
     y -= 6; ensure(16);
-    text('Tax Deposit Trend', { size: 8.5, b: true, color: muted }); y -= 13;
-    for (const d of report.complianceOverview.depositTrend) {
+    text('Civil Penalties (per year)', { size: 8.5, b: true, color: muted }); y -= 13;
+    for (const c of report.complianceOverview.civilPenalties) {
       ensure(12);
-      page.drawText(clean(d.label), { x: M + 6, y, size: 8.5, font, color: navy });
-      right(usd(d.deposits), W - M, { size: 8.5 });
+      page.drawText(clean(c.label), { x: M + 6, y, size: 8.5, font, color: navy });
+      right(c.status === 'assessed' ? `${usd(c.amount)} assessed` : 'None', W - M, { size: 8.5, b: c.status === 'assessed', color: c.status === 'assessed' ? danger : green });
       y -= 12;
     }
   }
