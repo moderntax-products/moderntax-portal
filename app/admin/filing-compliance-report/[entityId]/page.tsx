@@ -88,7 +88,15 @@ export default async function FilingComplianceReportPage({ params }: { params: P
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Link href={`/admin/requests/${entity.request_id}`} className="text-xs text-gray-500 hover:text-gray-700">← Back to request</Link>
-        <h1 className="text-2xl sm:text-3xl font-bold text-mt-dark mt-1">Tax Compliance Report</h1>
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="text-2xl sm:text-3xl font-bold text-mt-dark mt-1">Tax Compliance Report</h1>
+          <a
+            href={`/api/admin/filing-compliance-report-pdf?entityId=${entity.id}`}
+            className="mt-1 inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-mt-dark text-white hover:bg-opacity-90 whitespace-nowrap"
+          >
+            ↓ Download PDF
+          </a>
+        </div>
         <p className="text-sm text-gray-600 mt-1">
           {entity.entity_name} · {clientName}{loanNumber ? ` · loan ${loanNumber}` : ''} · {entity.tid_kind} {entity.tid}
         </p>
