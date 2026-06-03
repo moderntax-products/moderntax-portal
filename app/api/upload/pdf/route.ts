@@ -183,14 +183,27 @@ export async function POST(request: NextRequest) {
         status: '8821_signed',
       };
 
+      const grossReceipts: Record<string, unknown> = {};
       if (entityTranscriptRequested) {
-        entityInsert.gross_receipts = {
-          entity_transcript_order: {
-            requested: true,
-            price: 19.99,
-            ordered_at: new Date().toISOString(),
-          },
+        grossReceipts.entity_transcript_order = {
+          requested: true,
+          price: 19.99,
+          ordered_at: new Date().toISOString(),
         };
+      }
+      // Filing-Compliance Report order (MOD-228 Phase 2): account transcript
+      // only, no income transcripts, billed at the filing-compliance SKU.
+      if (formData.get('filing_compliance') === 'true') {
+        grossReceipts.product_type = 'filing_compliance';
+        grossReceipts.filing_compliance = {
+          requested: true,
+          price: 29.99,
+          sku: 'filing-compliance-report',
+          ordered_at: new Date().toISOString(),
+        };
+      }
+      if (Object.keys(grossReceipts).length > 0) {
+        entityInsert.gross_receipts = grossReceipts;
       }
 
       const { error: entError } = await supabase.from('request_entities').insert(entityInsert as any);

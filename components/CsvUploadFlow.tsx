@@ -100,6 +100,9 @@ export function CsvUploadFlow() {
   // "15-affiliate loan" use case). Submitted as form data so the
   // CSV intake server route can stamp the request with the SKU.
   const [consolidationReportSelected, setConsolidationReportSelected] = useState(false);
+  // Batch-level Filing-Compliance Report order (MOD-228 Phase 2): the whole CSV
+  // is ordered as civil-penalty + filed/unfiled reports (no income transcripts).
+  const [filingComplianceBatch, setFilingComplianceBatch] = useState(false);
   const supabaseClient = useMemo(() => createClient(), []);
   useEffect(() => {
     // Dev-only preview override: ?demo=1 forces the "required 8821 PDF"
@@ -430,6 +433,12 @@ export function CsvUploadFlow() {
       // picks it up as a one-time loan-level line item.
       if (consolidationReportSelected) {
         formData.append('add_loan_consolidation_report', '1');
+      }
+
+      // Filing-Compliance Report batch (MOD-228 Phase 2): every entity in this
+      // CSV is ordered as a filing-compliance report (no income transcripts).
+      if (filingComplianceBatch) {
+        formData.append('filing_compliance', '1');
       }
 
       // Dev-only demo mode: ?demo=1 routes to a dry-run endpoint that
@@ -808,6 +817,26 @@ export function CsvUploadFlow() {
               exactly what's coming on the next invoice before they submit.
               Inline monitoring + consolidation toggles double as the opt-in
               path for the two new SKUs. */}
+          {/* Filing-Compliance Report batch toggle (MOD-228 Phase 2) */}
+          <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={filingComplianceBatch}
+                onChange={(e) => setFilingComplianceBatch(e.target.checked)}
+                disabled={isLoading}
+                className="w-5 h-5 mt-0.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <div>
+                <p className="text-sm font-semibold text-indigo-900">Order this batch as Filing-Compliance Reports — $29.99/entity</p>
+                <p className="text-xs text-indigo-700 mt-0.5">
+                  Civil-penalty + filed/unfiled status from the IRS Account Transcript only &mdash; <strong>no income/wage transcripts</strong>.
+                  Applies to all {previewEntities.length} {previewEntities.length === 1 ? 'entity' : 'entities'} in this file. A signed 8821 is still required per entity.
+                </p>
+              </div>
+            </label>
+          </div>
+
           <div className="mb-6">
             <LoanBillingForecast
               entityCount={previewEntities.length}

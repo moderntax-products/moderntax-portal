@@ -23,6 +23,8 @@ export function PdfUploadFlow() {
   const [years, setYears] = useState(String(new Date().getFullYear()));
   const [notes, setNotes] = useState('');
   const [entityTranscript, setEntityTranscript] = useState(false);
+  // Filing-Compliance Report order (MOD-228 Phase 2): account transcript only.
+  const [filingCompliance, setFilingCompliance] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -55,6 +57,7 @@ export function PdfUploadFlow() {
       formData.append('form_type', formType);
       formData.append('years', years);
       if (entityTranscript) formData.append('entity_transcript', 'true');
+      if (filingCompliance) formData.append('filing_compliance', 'true');
       if (notes) formData.append('notes', notes);
 
       const res = await fetch('/api/upload/pdf', { method: 'POST', body: formData });
@@ -152,7 +155,22 @@ export function PdfUploadFlow() {
           </div>
         </div>
 
-        {tidKind === 'EIN' && (
+        {/* Filing-Compliance Report order (MOD-228 Phase 2) */}
+        <div className={`mb-6 border rounded-lg p-4 transition-colors ${filingCompliance ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-gray-50'}`}>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={filingCompliance} onChange={() => setFilingCompliance(!filingCompliance)} disabled={isLoading}
+              className="w-5 h-5 mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-mt-dark text-sm">Order as Filing-Compliance Report</span>
+                <span className="text-indigo-600 font-bold text-sm">$29.99</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Civil-penalty + filed/unfiled status from the IRS Account Transcript only &mdash; no income/wage transcripts.</p>
+            </div>
+          </label>
+        </div>
+
+        {tidKind === 'EIN' && !filingCompliance && (
           <div className={`mb-6 border rounded-lg p-4 transition-colors ${entityTranscript ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
             <label className="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={entityTranscript} onChange={() => setEntityTranscript(!entityTranscript)} disabled={isLoading}

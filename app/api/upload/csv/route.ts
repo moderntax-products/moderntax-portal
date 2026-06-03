@@ -7,6 +7,7 @@ import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 import { bulkAttachPresigned8821s, type BulkPdf } from '@/lib/bulk-8821-attach';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
 import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
+import { PRICE_FILING_COMPLIANCE } from '@/lib/pricing';
 import { findPriorEntities, attachPriorTranscripts, autoEnrollMonitoring, type RepeatEntityMatch } from '@/lib/repeat-entity';
 import {
   inferFormTypeFromTidKind,
@@ -228,6 +229,10 @@ export async function POST(request: NextRequest) {
     const entityTranscriptIndicesRaw = formData.get('entity_transcript_indices') as string | null;
     const cashFlowPackIndicesRaw = formData.get('cash_flow_pack_indices') as string | null;
     const skipMonitoringIndicesRaw = formData.get('skip_monitoring_indices') as string | null;
+    // Batch-level Filing-Compliance Report order (MOD-228 Phase 2): when set,
+    // every entity in this CSV is a filing-compliance order (account transcript
+    // only, no income transcripts) billed at the filing-compliance SKU.
+    const filingComplianceBatch = formData.get('filing_compliance') === '1';
     const formTypeOverridesRaw = formData.get('form_type_overrides') as string | null;
 
     // Pre-signed 8821 PDFs bundled with the CSV. Field names:
@@ -656,6 +661,15 @@ export async function POST(request: NextRequest) {
         grossReceipts.skip_auto_monitoring = {
           requested: true,
           opted_out_at: new Date().toISOString(),
+        };
+      }
+      if (filingComplianceBatch) {
+        grossReceipts.product_type = 'filing_compliance';
+        grossReceipts.filing_compliance = {
+          requested: true,
+          price: PRICE_FILING_COMPLIANCE,
+          sku: 'filing-compliance-report',
+          ordered_at: new Date().toISOString(),
         };
       }
       if (Object.keys(grossReceipts).length > 0) {
