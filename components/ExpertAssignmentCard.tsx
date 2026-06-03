@@ -26,6 +26,7 @@ interface AssignmentCardProps {
       form_type: string;
       years: string[];
       signed_8821_url: string | null;
+      admin_uploaded_8821_url: string | null;
       transcript_urls: string[] | null;
       request_id: string;
     };
@@ -77,7 +78,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
   const [downloading8821, setDownloading8821] = useState(false);
 
   const handleDownload8821 = async () => {
-    if (!entity.signed_8821_url) return;
+    if (!entity.admin_uploaded_8821_url) return;
     setDownloading8821(true);
     setDownloadError(null);
     try {
@@ -183,7 +184,10 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
             </span>
           )}
 
-          {entity.signed_8821_url && (
+          {/* Experts only ever get the ADMIN-prepared 8821 (their designee +
+              re-wet-signed). Until the admin posts it, show a clear pending
+              state instead of a download button to a wrong/e-signed form. */}
+          {entity.admin_uploaded_8821_url ? (
             <button
               onClick={handleDownload8821}
               disabled={downloading8821}
@@ -194,6 +198,10 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
               </svg>
               {downloading8821 ? 'Loading...' : 'Download 8821'}
             </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200 rounded-lg">
+              8821 being prepared by admin
+            </span>
           )}
 
           {assignment.status === 'assigned' && (

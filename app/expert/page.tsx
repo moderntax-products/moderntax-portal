@@ -29,6 +29,7 @@ interface AssignmentData {
     form_type: string;
     years: string[];
     signed_8821_url: string | null;
+    admin_uploaded_8821_url: string | null;
     transcript_urls: string[] | null;
     request_id: string;
   };
@@ -152,7 +153,7 @@ export default function ExpertDashboard() {
       // Fetch active assignments
       const { data: activeData, error: activeError } = await supabase
         .from('expert_assignments')
-        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, transcript_urls, request_id)')
+        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, admin_uploaded_8821_url, transcript_urls, request_id)')
         .in('status', ['assigned', 'in_progress'])
         .eq('expert_id', user.id)
         .order('sla_deadline', { ascending: true });
@@ -163,17 +164,17 @@ export default function ExpertDashboard() {
         return;
       }
 
-      setAssignments((activeData as AssignmentData[]) || []);
+      setAssignments((activeData as unknown as AssignmentData[]) || []);
 
       // Fetch all completed assignments
       const { data: completedData } = await supabase
         .from('expert_assignments')
-        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, transcript_urls, request_id)')
+        .select('*, request_entities(id, entity_name, tid, tid_kind, form_type, years, signed_8821_url, admin_uploaded_8821_url, transcript_urls, request_id)')
         .eq('status', 'completed')
         .eq('expert_id', user.id)
         .order('completed_at', { ascending: false });
 
-      setCompletedAll((completedData as AssignmentData[]) || []);
+      setCompletedAll((completedData as unknown as AssignmentData[]) || []);
     } catch (err) {
       console.error('Dashboard error:', err);
       setError('Failed to load dashboard');
