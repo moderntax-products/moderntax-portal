@@ -128,7 +128,7 @@ export default function ExpertDashboard() {
       // is applied; we just haven't regenerated lib/database.types.ts.
       const { data: credentialData } = await (supabase
         .from('profiles')
-        .select('caf_number, ptin, phone_number, address, onboarding_completed_at, onboarding_dismissed_at')
+        .select('caf_number, ptin, phone_number, address, iana_timezone, onboarding_completed_at, onboarding_dismissed_at')
         .eq('id', user.id)
         .single() as any) as { data: any };
 
@@ -138,6 +138,7 @@ export default function ExpertDashboard() {
         ptin: credentialData?.ptin || null,
         phone_number: credentialData?.phone_number || null,
         address: credentialData?.address || null,
+        iana_timezone: credentialData?.iana_timezone || null,
         onboarding_completed_at: credentialData?.onboarding_completed_at || null,
         onboarding_dismissed_at: credentialData?.onboarding_dismissed_at || null,
       };
@@ -145,7 +146,7 @@ export default function ExpertDashboard() {
       setProfile(mergedProfile);
 
       // Redirect to profile setup if credentials are incomplete
-      if (!mergedProfile.caf_number || !mergedProfile.ptin || !mergedProfile.phone_number || !mergedProfile.address) {
+      if (!mergedProfile.caf_number || !mergedProfile.ptin || !mergedProfile.phone_number || !mergedProfile.address || !mergedProfile.iana_timezone) {
         router.push('/expert/profile');
         return;
       }

@@ -8,6 +8,7 @@ import { ProcessorUpgradeCTAs } from '@/components/ProcessorUpgradeCTAs';
 import { AskAIPanel } from '@/components/AskAIPanel';
 import { PremiumSlaSurface } from '@/components/PremiumSlaSurface';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
+import { TimezoneSetupGate } from '@/components/TimezoneSetupGate';
 
 export default async function DashboardPage({
   searchParams,
@@ -38,7 +39,7 @@ export default async function DashboardPage({
     .from('profiles')
     .select()
     .eq('id', user.id)
-    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null; approval_status?: string | null } | null; error: any };
+    .single() as { data: { id: string; email: string; full_name: string | null; role: string; client_id: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null; approval_status?: string | null; iana_timezone?: string | null } | null; error: any };
 
   if (profileError || !profile) {
     redirect('/login');
@@ -437,6 +438,8 @@ export default async function DashboardPage({
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Mandatory time-zone setup — blocks until set (MOD-229). */}
+      <TimezoneSetupGate userId={profile.id} currentTimezone={profile.iana_timezone ?? null} />
       {/* SOC 2 Data Classification Banner */}
       <div className={`border-b px-4 py-2 text-center text-xs font-semibold tracking-wide ${getClassificationColor('confidential')}`}>
         🔒 {getClassificationLabel('confidential')}
