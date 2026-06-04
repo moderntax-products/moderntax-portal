@@ -17,7 +17,21 @@ interface ExpertProfile {
   zip_code: string;
   sor_id: string;
   voice_sample_url: string;
+  iana_timezone: string;
 }
+
+// Common US timezones (+ a few) for the picker. Value is the IANA id that
+// lib/expert-sla.ts and the SLA/timesheet crons consume.
+const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'America/New_York', label: 'Eastern (New York)' },
+  { value: 'America/Chicago', label: 'Central (Chicago)' },
+  { value: 'America/Denver', label: 'Mountain (Denver)' },
+  { value: 'America/Phoenix', label: 'Mountain — no DST (Phoenix)' },
+  { value: 'America/Los_Angeles', label: 'Pacific (Los Angeles)' },
+  { value: 'America/Anchorage', label: 'Alaska (Anchorage)' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii (Honolulu)' },
+  { value: 'America/Puerto_Rico', label: 'Atlantic (Puerto Rico)' },
+];
 
 interface IrsCredentialsStatus {
   hasSsn: boolean;
@@ -54,6 +68,7 @@ export default function ExpertProfilePage() {
     zip_code: '',
     sor_id: '',
     voice_sample_url: '',
+    iana_timezone: '',
   });
 
   // IRS Credentials (SSN/DOB) — separate from main profile form because
@@ -84,7 +99,7 @@ export default function ExpertProfilePage() {
       // whole page on environments where the column doesn't exist.
       const { data: profileData, error: profileFetchError } = await supabase
         .from('profiles')
-        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, sor_id')
+        .select('role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, sor_id, iana_timezone')
         .eq('id', user.id)
         .single() as { data: any; error: any };
 
@@ -136,6 +151,11 @@ export default function ExpertProfilePage() {
         zip_code: profileData.zip_code || '',
         sor_id: profileData.sor_id || '',
         voice_sample_url: voiceSampleUrl,
+        // Pre-select the browser-detected zone when none is saved yet, so the
+        // expert just confirms + saves rather than hunting for it.
+        iana_timezone: profileData.iana_timezone
+          || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '')
+          || '',
       });
 
       // Fetch IRS credentials presence (NEVER returns the SSN/DOB plaintext)
@@ -238,6 +258,11 @@ export default function ExpertProfilePage() {
       setSaving(false);
       return;
     }
+    if (!profile.iana_timezone) {
+      setError('Time zone is required — it controls your SLA windows and the times you see.');
+      setSaving(false);
+      return;
+    }
 
     try {
       const {
@@ -263,6 +288,7 @@ export default function ExpertProfilePage() {
           state: profile.state.trim(),
           zip_code: profile.zip_code.trim(),
           sor_id: profile.sor_id.trim() || null,
+          iana_timezone: profile.iana_timezone || null,
         } as any)
         .eq('id', user.id) as any);
 
@@ -290,7 +316,7 @@ export default function ExpertProfilePage() {
     );
   }
 
-  const isProfileComplete = profile.caf_number && profile.ptin && profile.phone_number && profile.address;
+  const isProfileComplete = profile.caf_number && profile.ptin && profile.phone_number && profile.address && profile.iana_timezone;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -343,6 +369,28 @@ export default function ExpertProfilePage() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
             />
             <p className="text-xs text-gray-400 mt-1">As it appears on your IRS credentials</p>
+          </div>
+
+          {/* Time zone — mandatory. Drives SLA windows + every time you see. */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Time Zone <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={profile.iana_timezone}
+              onChange={(e) => handleChange('iana_timezone', e.target.value)}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm bg-white"
+            >
+              <option value="" disabled>Select your time zone…</option>
+              {TIMEZONE_OPTIONS.map((tz) => (
+                <option key={tz.value} value={tz.value}>{tz.label}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Your SLA clock and every time shown to you use this zone. We pre-selected the one your browser reports
+              {profile.iana_timezone ? ` — currently ${new Date().toLocaleTimeString('en-US', { timeZone: profile.iana_timezone, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })} your time.` : '.'}
+            </p>
           </div>
 
           {/* Address */}
