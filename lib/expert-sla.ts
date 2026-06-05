@@ -88,6 +88,26 @@ function tzWallClockToUtcMs(
 }
 
 /**
+ * Convert a naive wall-clock date + time in the given IANA timezone to a UTC
+ * Date. DST-aware. Use this instead of `new Date("YYYY-MM-DDTHH:MM:00")`, which
+ * silently interprets the string as the SERVER's local time (UTC on Vercel) and
+ * produces the wrong instant for any non-UTC timezone — the root cause of
+ * experts missing IRS PPS callbacks (MOD-204).
+ *
+ * @param dateStr "YYYY-MM-DD"
+ * @param timeStr "HH:MM" (24h)
+ * @param tz      IANA zone, e.g. "America/Los_Angeles"
+ */
+export function zonedWallClockToUtc(dateStr: string, timeStr: string, tz: string): Date {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const [h, mi] = timeStr.split(':').map(Number);
+  if ([y, mo, d, h, mi].some(n => Number.isNaN(n))) {
+    throw new Error(`zonedWallClockToUtc: invalid date/time "${dateStr}T${timeStr}"`);
+  }
+  return new Date(tzWallClockToUtcMs(y, mo, d, h, mi, tz));
+}
+
+/**
  * For a given absolute instant + tz, return the [windowStart, windowEnd]
  * UTC ms that bracket the *same calendar day's* [7am, 7pm) local window.
  * Returns null if that day is Sat or Sun.

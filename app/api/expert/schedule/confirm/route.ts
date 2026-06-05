@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
+import { zonedWallClockToUtc } from '@/lib/expert-sla';
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,11 +37,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Get expert profile
+    // iana_timezone isn't in the generated types yet; cast to keep inference.
     const { data: profile } = await supabase
       .from('profiles')
-      .select('id, full_name, caf_number, phone_number, fax_number')
+      .select('id, full_name, caf_number, phone_number, fax_number, iana_timezone')
       .eq('id', schedule.expert_id)
-      .single();
+      .single() as { data: any };
 
     if (!profile || !profile.caf_number) {
       return NextResponse.json({ error: 'Expert profile incomplete' }, { status: 400 });
@@ -54,8 +56,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Phone number required for callback/transfer' }, { status: 400 });
     }
 
-    // Build scheduled_for: today at the selected time, in ET (EDT = -04:00)
-    const scheduledFor = new Date(`${today}T${time}:00-04:00`).toISOString();
+    // Build scheduled_for: today at the selected time, interpreted in the
+    // EXPERT'S timezone. The old code hardcoded -04:00 (EDT), which (a) broke
+    // in EST months (Nov–Mar → -05:00) and (b) treated every expert's picked
+    // time as ET — so a PT expert who chose "10:00" was scheduled for 10:00 ET
+    // (7:00 AM PT) and missed the IRS callback. (MOD-204)
+    const expertTz = profile.iana_timezone || 'America/New_York';
+    const scheduledFor = zonedWallClockToUtc(today, time, expertTz).toISOString();
 
     // Get pending assignments
     const { data: assignments } = await supabase
