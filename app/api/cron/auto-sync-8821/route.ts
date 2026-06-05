@@ -4,7 +4,10 @@
  * to matching portal entities.
  * GET /api/cron/auto-sync-8821
  *
- * Expected to be called by Vercel Cron every 30 minutes with CRON_SECRET in headers
+ * Called by Vercel Cron daily at 10:00 UTC (see vercel.json) with CRON_SECRET.
+ * Idempotent: re-syncs an entity only when Dropbox reports a signed time we
+ * haven't recorded yet, so it self-heals entities whose signed_8821_url is
+ * still pointing at the unsigned pre-fill.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -23,6 +26,11 @@ function getApi(): DropboxSign.SignatureRequestApi {
 }
 
 export const maxDuration = 60;
+
+// Cap downloads per run so a backlog of entities needing a (re)sync can't blow
+// the 60s budget. The cron is idempotent and daily, so a backlog converges over
+// a few runs; `remaining` in the response shows how many are still queued.
+const MAX_SYNCS_PER_RUN = 20;
 
 export async function GET(request: NextRequest) {
   try {
@@ -70,7 +78,7 @@ export async function GET(request: NextRequest) {
     // Get all portal entities for matching
     const { data: entities } = await supabase
       .from('request_entities')
-      .select('id, entity_name, signature_id, signed_8821_url, status, request_id') as { data: any[] | null; error: any };
+      .select('id, entity_name, signature_id, signed_8821_url, status, signature_created_at, request_id') as { data: any[] | null; error: any };
 
     const entityByName = new Map<string, any>();
     const entityBySigId = new Map<string, any>();
@@ -82,6 +90,7 @@ export async function GET(request: NextRequest) {
     let synced = 0;
     let skipped = 0;
     let failed = 0;
+    let remaining = 0;
     const errors: { signatureRequestId: string; error: string }[] = [];
 
     for (const dsReq of allRequests) {
@@ -98,25 +107,46 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      // Skip if already synced (entity already has signed_8821_url)
-      if (portalEntity.signed_8821_url) {
-        skipped++;
-        continue;
-      }
-
       try {
         // Hard gate: only download if Dropbox Sign confirms ALL signers
         // have actually signed. Without this check, downloadSignedPdf
         // happily returns the unsigned template PDF for awaiting_signature
         // requests — and we've been writing those into signed_8821_url.
         const isComplete = dsReq.isComplete === true;
-        const sigList = (dsReq.signatures || []) as { statusCode?: string }[];
+        const sigList = (dsReq.signatures || []) as { statusCode?: string; signedAt?: number }[];
         const allSigned = sigList.length > 0 && sigList.every(s => s.statusCode === 'signed');
         if (!isComplete || !allSigned) {
           console.log(`[auto-sync-8821] Skip ${signatureRequestId} — is_complete=${isComplete}, signers=[${sigList.map(s => s.statusCode).join(',')}]`);
           skipped++;
           continue;
         }
+
+        // Actual signed time (latest signer). Used both as the idempotency key
+        // and the value written to signature_created_at (the old code wrote
+        // dsReq.createdAt — the REQUEST-creation time — which is wrong).
+        const signedTimes = sigList.map(s => s.signedAt).filter((t): t is number => !!t);
+        const signedAtSec = signedTimes.length ? Math.max(...signedTimes) : (dsReq.createdAt || 0);
+        const signedAtIso = new Date(signedAtSec * 1000).toISOString();
+
+        // Idempotency — and the FIX for the Laxmi-class gap. The old code
+        // skipped any entity that already had a signed_8821_url, but the
+        // 8821-auto-send flow sets that field to the UNSIGNED pre-fill when
+        // the form is sent for signature. So once a borrower signed, this
+        // cron skipped forever and never replaced the prefill with the real
+        // signed copy (18 completed entities found unsynced on 2026-06-04).
+        // New rule: re-sync UNLESS we've already recorded THIS signed time.
+        const existingSig = portalEntity.signature_created_at
+          ? new Date(portalEntity.signature_created_at).getTime()
+          : null;
+        if (existingSig !== null && Math.abs(existingSig - signedAtSec * 1000) < 2000) {
+          skipped++;
+          continue;
+        }
+
+        // Per-run cap — this entity needs a sync but we've hit the budget;
+        // defer it to the next daily run (idempotent, so it'll be picked up).
+        if (synced >= MAX_SYNCS_PER_RUN) { remaining++; continue; }
+
         // Download signed PDF
         const pdfBuffer = await downloadSignedPdf(signatureRequestId);
 
@@ -140,15 +170,24 @@ export async function GET(request: NextRequest) {
 
         const oldStatus = portalEntity.status || 'pending';
 
+        // Only ADVANCE status to 8821_signed from a pre-signature state. If the
+        // entity is already further down the pipeline (assigned/in_progress/
+        // irs_queue/completed/failed), leave status untouched — otherwise this
+        // sync knocks a completed entity back to 8821_signed and re-queues it.
+        const PRE_SIGNATURE = new Set(['pending', '8821_sent', 'awaiting_signature', '8821_pending', 'draft', 'created', 'new']);
+        const advanceStatus = PRE_SIGNATURE.has(oldStatus);
+
+        const update: Record<string, any> = {
+          signed_8821_url: storagePath,
+          signature_id: signatureRequestId,
+          signature_created_at: signedAtIso,
+        };
+        if (advanceStatus) update.status = '8821_signed';
+
         // Update entity with signed PDF info
         const { error: updateError } = await supabase
           .from('request_entities')
-          .update({
-            signed_8821_url: storagePath,
-            signature_id: signatureRequestId,
-            status: '8821_signed',
-            signature_created_at: new Date((dsReq.createdAt || 0) * 1000).toISOString(),
-          })
+          .update(update)
           .eq('id', portalEntity.id);
 
         if (updateError) {
@@ -158,8 +197,10 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // Notify processor
-        if (portalEntity.request_id) {
+        // Notify processor ONLY when status actually advanced (a real "your
+        // 8821 is signed" moment). Backfilling the signed copy onto an entity
+        // that's already completed must NOT re-notify the processor.
+        if (advanceStatus && portalEntity.request_id) {
           try {
             const { data: req } = await supabase
               .from('requests')
@@ -205,6 +246,7 @@ export async function GET(request: NextRequest) {
       synced,
       skipped,
       failed,
+      remaining,
       totalDropboxRequests: allRequests.length,
       processedAt: new Date().toISOString(),
       errors: errors.length > 0 ? errors : undefined,
