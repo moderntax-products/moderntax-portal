@@ -14,7 +14,12 @@
  * they're doing.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+// Explicit clock-ins keep themselves alive with a visibility heartbeat so a
+// long IRS PPS hold (no clicks for 30–90 min) isn't mistaken for "walked away".
+const HEARTBEAT_KINDS = ['manual', 'irs_direct_dial'];
+const HEARTBEAT_MS = 4 * 60_000; // 4 min — comfortably under the 20/30-min idle thresholds
 
 interface OpenSession {
   id: string;
@@ -54,6 +59,34 @@ export function ExpertTimeTrackerWidget() {
     const id = setInterval(refresh, 60_000);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // Keep the latest open sessions in a ref so the heartbeat interval (below)
+  // doesn't reset every 60s refresh.
+  const openRef = useRef<OpenSession[]>([]);
+  useEffect(() => { openRef.current = open; }, [open]);
+
+  // Visibility heartbeat: while the tab is visible, ping `extend` for each open
+  // explicit clock-in so its updated_at stays fresh and the idle cron doesn't
+  // close it mid-IRS-hold. If the expert hides/closes the tab, pings stop and
+  // the session idles out normally — so we never pay for a true walk-away.
+  useEffect(() => {
+    const beat = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      const live = openRef.current.filter(s => HEARTBEAT_KINDS.includes(s.kind));
+      live.forEach(s => {
+        fetch('/api/expert/time-log/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'extend', kind: s.kind }),
+          keepalive: true,
+        }).catch(() => {});
+      });
+    };
+    const id = setInterval(beat, HEARTBEAT_MS);
+    const onVis = () => { if (document.visibilityState === 'visible') beat(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
 
   const fire = useCallback(async (action: 'start' | 'stop', kind: 'irs_direct_dial' | 'manual') => {
     setLoading(true);

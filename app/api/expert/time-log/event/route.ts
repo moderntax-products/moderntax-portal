@@ -117,15 +117,17 @@ export async function POST(request: NextRequest) {
 
   if (action === 'start') {
     if (openSession) {
-      // Already open — treat as extend (idempotent)
+      // Already open — treat as extend (idempotent). Bump updated_at so the
+      // idle-cleanup cron measures idleness from this activity, not start_at.
       const newNotes = buildNotes(openSession.notes, entity_id, notes);
-      await (admin.from('expert_time_logs') as any).update({ notes: newNotes }).eq('id', openSession.id);
+      await (admin.from('expert_time_logs') as any).update({ notes: newNotes, updated_at: now }).eq('id', openSession.id);
       return NextResponse.json({ session_id: openSession.id, action: 'extended (was already open)' });
     }
     const insertedNotes = buildNotes(null, entity_id, notes);
     const { data: created, error: insErr } = await (admin.from('expert_time_logs') as any).insert({
       expert_id: expertId,
       start_at: now,
+      updated_at: now,
       end_at: null,
       break_minutes: 0,
       hours_worked: 0,
@@ -157,7 +159,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ session_id: created.id, action: 'auto-started (first event)' });
     }
     const newNotes = buildNotes(openSession.notes, entity_id);
-    await (admin.from('expert_time_logs') as any).update({ notes: newNotes }).eq('id', openSession.id);
+    // Bump updated_at — this is the activity ping the idle cron reads.
+    await (admin.from('expert_time_logs') as any).update({ notes: newNotes, updated_at: now }).eq('id', openSession.id);
     return NextResponse.json({ session_id: openSession.id, action: 'extended' });
   }
 

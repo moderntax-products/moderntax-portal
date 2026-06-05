@@ -7,10 +7,19 @@
  * compensates the expert for hours they aren't working).
  *
  * Rules:
- *  • sor_upload + manual + irs_direct_dial sessions idle >15 min → close
+ *  • Idle is measured from `updated_at` (the last activity ping), NOT from
+ *    start_at. The event route + the dashboard widget refresh updated_at on
+ *    every start/extend/heartbeat, so an actively-worked session stays open.
+ *    (Before this fix idle was measured from start_at, so EVERY session was
+ *    force-closed 15 min after it began — even while the expert was on a
+ *    30–90 min IRS PPS hold. That shredded real worked time. — Joel A. 6/04.)
+ *  • sor_upload idle >15 min (since last upload) → close
+ *  • manual / irs_direct_dial are EXPLICIT clock-ins: the expert punches out.
+ *    They only idle-close after a long quiet gap (20 / 30 min since the last
+ *    visibility heartbeat) — i.e. the expert closed the tab / walked away.
  *  • bland_call / retell_call sessions are closed by the webhook on
  *    call-completed; this cron catches webhook misses (idle >2 hr)
- *  • Hard cap: ANY session open >4 hr gets closed regardless of kind
+ *  • Hard cap: ANY session open >6 hr gets closed regardless of kind
  *
  * Scheduled every 15 min in vercel.json. Idempotent.
  */
@@ -24,13 +33,13 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 const IDLE_BY_KIND: Record<string, number> = {
-  sor_upload: 15,
-  manual: 15,
-  irs_direct_dial: 15,
-  bland_call: 120,    // webhook normally closes these
-  retell_call: 120,   // webhook normally closes these
+  sor_upload: 15,        // fire-and-forget; 15 min since last upload ping
+  manual: 20,            // explicit clock-in; only closes on a real quiet gap
+  irs_direct_dial: 30,   // explicit clock-in; tolerates long IRS PPS holds
+  bland_call: 120,       // webhook normally closes these
+  retell_call: 120,      // webhook normally closes these
 };
-const HARD_CAP_HOURS = 4;
+const HARD_CAP_HOURS = 6;
 
 export async function GET(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
@@ -41,7 +50,7 @@ export async function GET(request: NextRequest) {
   const nowIso = now.toISOString();
 
   const { data: open, error } = await sb.from('expert_time_logs')
-    .select('id, expert_id, source, start_at, notes')
+    .select('id, expert_id, source, start_at, updated_at, notes')
     .is('end_at', null) as { data: any[] | null; error: any };
   if (error) return NextResponse.json({ error: 'Query failed', detail: error.message }, { status: 500 });
 
@@ -50,13 +59,13 @@ export async function GET(request: NextRequest) {
 
   for (const s of open || []) {
     const startMs = new Date(s.start_at).getTime();
-    // Until the migration adds last_activity_at, idle is measured from start.
-    // That's conservative — overestimates idleness — which favors closing
-    // forgotten sessions rather than leaving them open.
-    const idleMinutes = (now.getTime() - startMs) / 1000 / 60;
+    // Last activity = updated_at (bumped on every start/extend/heartbeat in the
+    // event route). Fall back to start_at if updated_at is somehow null/older.
+    const lastActivityMs = Math.max(startMs, s.updated_at ? new Date(s.updated_at).getTime() : startMs);
+    const idleMinutes = (now.getTime() - lastActivityMs) / 1000 / 60;
     const totalHours = (now.getTime() - startMs) / 1000 / 3600;
     const kind = s.source || 'manual';
-    const idleThreshold = IDLE_BY_KIND[kind] ?? 15;
+    const idleThreshold = IDLE_BY_KIND[kind] ?? 20;
 
     let reason: string | null = null;
     if (totalHours >= HARD_CAP_HOURS) reason = 'session_max_duration';
@@ -68,15 +77,14 @@ export async function GET(request: NextRequest) {
     // the full 6 hours as billable (Matt's iCloud-expert orphan on 2026-05-22
     // logged 6.02h when it should have capped at 4.00h, blowing daily COGS).
     //
-    // For idle-timeout closures, the effective end is start + idle threshold
-    // (in minutes — same logic). The reasoning: we don't know what happened
-    // between the threshold and now, but the threshold is the latest moment
-    // we have any evidence of activity, so it's the most defensible bound.
+    // For idle-timeout closures, the effective end is the LAST ACTIVITY
+    // timestamp (updated_at): that's the latest moment we have real evidence
+    // the expert was working, so it's the most defensible billable bound.
     let effectiveEndMs: number;
     if (reason === 'session_max_duration') {
       effectiveEndMs = startMs + HARD_CAP_HOURS * 3600 * 1000;
     } else {
-      effectiveEndMs = startMs + idleThreshold * 60 * 1000;
+      effectiveEndMs = lastActivityMs;
     }
     const hours = Math.round(((effectiveEndMs - startMs) / 1000 / 3600) * 100) / 100;
     const auditNote = `[auto-closed by idle-cleanup ${nowIso} reason=${reason} capped_to=${hours}h]`;
