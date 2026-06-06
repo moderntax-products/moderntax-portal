@@ -14,12 +14,13 @@
  *    force-closed 15 min after it began — even while the expert was on a
  *    30–90 min IRS PPS hold. That shredded real worked time. — Joel A. 6/04.)
  *  • sor_upload idle >15 min (since last upload) → close
- *  • manual / irs_direct_dial are EXPLICIT clock-ins: the expert punches out.
- *    They only idle-close after a long quiet gap (20 / 30 min since the last
- *    visibility heartbeat) — i.e. the expert closed the tab / walked away.
+ *  • manual / irs_direct_dial are EXPLICIT clock-ins and are NEVER idle-closed.
+ *    The expert punches out by hand (authoritative). An expert on a long IRS
+ *    PPS hold makes no clicks and may background the tab, so ANY inactivity
+ *    timeout shreds real worked time — the exact bug Joel hit repeatedly.
  *  • bland_call / retell_call sessions are closed by the webhook on
  *    call-completed; this cron catches webhook misses (idle >2 hr)
- *  • Hard cap: ANY session open >6 hr gets closed regardless of kind
+ *  • Hard cap: ANY session open >6 hr gets closed (forgotten clock-out only)
  *
  * Scheduled every 15 min in vercel.json. Idempotent.
  */
@@ -32,13 +33,22 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
+// Idle-close thresholds (minutes) — ONLY for auto-instrumented kinds. Explicit
+// clock-ins (manual / irs_direct_dial) are intentionally absent: they are NEVER
+// idle-closed (see NEVER_IDLE_CLOSE below).
 const IDLE_BY_KIND: Record<string, number> = {
   sor_upload: 15,        // fire-and-forget; 15 min since last upload ping
-  manual: 20,            // explicit clock-in; only closes on a real quiet gap
-  irs_direct_dial: 30,   // explicit clock-in; tolerates long IRS PPS holds
   bland_call: 120,       // webhook normally closes these
   retell_call: 120,      // webhook normally closes these
 };
+
+// Explicit clock-ins the expert starts/stops by hand. These are NEVER closed by
+// inactivity — an expert on a 30–90 min IRS PPS hold makes no clicks and may
+// have the tab backgrounded (so even the dashboard heartbeat can't fire). The
+// only auto-close for these is the HARD_CAP backstop for a forgotten clock-out.
+// (Joel A. was repeatedly clocked out mid-call at 15 min — 6/04 & 6/05.)
+const NEVER_IDLE_CLOSE = new Set(['manual', 'irs_direct_dial']);
+
 const HARD_CAP_HOURS = 6;
 
 export async function GET(request: NextRequest) {
@@ -65,11 +75,15 @@ export async function GET(request: NextRequest) {
     const idleMinutes = (now.getTime() - lastActivityMs) / 1000 / 60;
     const totalHours = (now.getTime() - startMs) / 1000 / 3600;
     const kind = s.source || 'manual';
-    const idleThreshold = IDLE_BY_KIND[kind] ?? 20;
 
     let reason: string | null = null;
-    if (totalHours >= HARD_CAP_HOURS) reason = 'session_max_duration';
-    else if (idleMinutes >= idleThreshold) reason = 'idle_timeout';
+    if (totalHours >= HARD_CAP_HOURS) {
+      // Hard cap applies to every kind, incl. a forgotten manual clock-out.
+      reason = 'session_max_duration';
+    } else if (!NEVER_IDLE_CLOSE.has(kind)) {
+      const idleThreshold = IDLE_BY_KIND[kind] ?? 15;
+      if (idleMinutes >= idleThreshold) reason = 'idle_timeout';
+    }
     if (!reason) continue;
 
     // For hard-cap closures, the effective end is start + HARD_CAP_HOURS,
