@@ -61,8 +61,8 @@ export async function POST() {
 
   if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 });
 
-  const ratePdf = Number(client.billing_rate_pdf) || 59.98;
-  const rateCsv = Number(client.billing_rate_csv) || 69.98;
+  const ratePdf = Number(client.billing_rate_pdf) || 99.99;
+  const rateCsv = Number(client.billing_rate_csv) || 99.99;
 
   // Compute current month's billable total
   const now = new Date();

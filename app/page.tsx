@@ -9,6 +9,12 @@ import { AskAIPanel } from '@/components/AskAIPanel';
 import { PremiumSlaSurface } from '@/components/PremiumSlaSurface';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { TimezoneSetupGate } from '@/components/TimezoneSetupGate';
+import { PRICE_STANDARD } from '@/lib/pricing';
+
+// Clients created on/after this date are on the standard $99.99 plan and must
+// have a card on file to order (auto-billed per order). Earlier clients keep
+// their existing ordering flow (Mercury ACH / trial). (2026-06-06 directive)
+const STANDARD_PLAN_CUTOFF = '2026-06-06';
 
 export default async function DashboardPage({
   searchParams,
@@ -102,14 +108,15 @@ export default async function DashboardPage({
   // Per-client billing rates — drive both the manager officer-stat revenue
   // breakdown AND the dollar-amount labels on the dashboard. Defaults to the
   // standard tier rates if a client doesn't have overrides set.
-  let clientBillingRatePdf = 59.98;
-  let clientBillingRateCsv = 69.98;
+  let clientBillingRatePdf = PRICE_STANDARD; // $99.99 default for any client without an explicit contracted rate
+  let clientBillingRateCsv = PRICE_STANDARD;
+  let clientCreatedAt: string | null = null;
   // SLA tier — server-rendered into PremiumSlaSurface so the component
   // never silently fails on a client-side RLS error. Two-phase select
   // (with column-existence fallback) so pre-migration envs still load.
   let clientSlaTier: 'standard' | 'premium' | null = null;
   if (profile.client_id) {
-    const baseSelect = 'free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv';
+    const baseSelect = 'created_at, free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv';
     const fullSelect = `${baseSelect}, sla_tier`;
     let clientRecord: any = null;
     {
@@ -126,6 +133,7 @@ export default async function DashboardPage({
     }
     if (typeof clientRecord?.billing_rate_pdf === 'number') clientBillingRatePdf = clientRecord.billing_rate_pdf;
     if (typeof clientRecord?.billing_rate_csv === 'number') clientBillingRateCsv = clientRecord.billing_rate_csv;
+    clientCreatedAt = clientRecord?.created_at ?? null;
     if (clientRecord?.free_trial === false) clientFreeTrial = false;
     if (clientRecord?.monitoring_default_enabled === false) monitoringDefaultEnabled = false;
     if (clientRecord?.cash_flow_auto_attach === true) cashFlowAutoAttach = true;
@@ -181,12 +189,20 @@ export default async function DashboardPage({
   const TRIAL_FREE_PULLS = 3;
   const trialRemaining = Math.max(0, TRIAL_FREE_PULLS - totalCompletedEntities);
   const trialExhausted = trialRemaining === 0;
-  // Hard-block ordering ONLY when trial is used AND no Stripe card AND no
-  // recent paid invoice. Established Mercury ACH customers (who have a paid
-  // invoice in the last 90 days) keep ordering normally — manager still gets
-  // a softer nudge to add a Stripe card for in-app purchases.
-  const needsPaymentMethod = trialExhausted && !hasPaymentMethod && !hasRecentPaidInvoice;
-  const managerShouldAddCard = trialExhausted && !hasPaymentMethod && hasRecentPaidInvoice;
+  // New (standard-plan) clients — created on/after the cutoff — must have a
+  // card on file BEFORE they can order; every order is then auto-billed per
+  // order (Stripe). This is the $99.99 plan introduced 2026-06-06.
+  const isStandardPlanClient = !!clientCreatedAt && clientCreatedAt >= STANDARD_PLAN_CUTOFF;
+
+  // Hard-block ordering when:
+  //   • standard-plan (new) client without a card — card required up front, OR
+  //   • legacy client whose trial is used AND no card AND no recent paid invoice.
+  // Established Mercury ACH customers (paid invoice in last 90 days) keep
+  // ordering normally — manager still gets a softer nudge to add a card.
+  const needsPaymentMethod = isStandardPlanClient
+    ? !hasPaymentMethod
+    : (trialExhausted && !hasPaymentMethod && !hasRecentPaidInvoice);
+  const managerShouldAddCard = !isStandardPlanClient && trialExhausted && !hasPaymentMethod && hasRecentPaidInvoice;
 
   // Find the team's manager so processors can ping them via the upgrade CTAs'
   // "Ask your manager" mailto link. Picks the first manager by created_at.

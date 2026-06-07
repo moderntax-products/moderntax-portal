@@ -155,8 +155,8 @@ export async function GET(request: NextRequest) {
           .select('id, intake_method, request_entities(id, status, completed_at, gross_receipts)')
           .eq('client_id', client.id) as { data: any[] | null; error: any };
 
-        const ratePdf = client.billing_rate_pdf || 59.98;
-        const rateCsv = client.billing_rate_csv || 69.98;
+        const ratePdf = client.billing_rate_pdf || 99.99;
+        const rateCsv = client.billing_rate_csv || 99.99;
 
         // If free trial, identify first 3 completed entities all-time to exclude
         let freeEntityIds = new Set<string>();

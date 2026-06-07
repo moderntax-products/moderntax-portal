@@ -15,7 +15,7 @@
  * Auth: authenticated user whose profile.client_id owns the invoice (admins
  * and a valid CRON_SECRET bearer may pull any invoice — used for ops).
  *
- * Pricing: flat `clients.billing_rate_pdf` (default $59.98) per completed
+ * Pricing: flat `clients.billing_rate_pdf` (default $99.99) per completed
  * entity. Monitoring/catch-up are intentionally omitted here — these clients
  * are billed a flat per-entity rate and the entity subtotal equals the
  * invoice total. (Matt 2026-06-01: "they only get billed $59.98 flat for each
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
     const { data: client } = await admin.from('clients')
       .select('name, billing_rate_pdf').eq('id', invoice.client_id).single() as { data: any };
 
-    const rate = Number(client?.billing_rate_pdf ?? 59.98);
+    const rate = Number(client?.billing_rate_pdf ?? 99.99);
 
     // Derive the billing month from the invoice number (INV-YYYY-MM-...) — more
     // reliable than billing_period_start, which some legacy rows baked with the

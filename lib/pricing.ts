@@ -17,6 +17,19 @@
 // Standard transcript ordering — the legacy SBA-lender intake mix
 // ---------------------------------------------------------------------------
 
+/**
+ * Standard per-request transcript price for all NEW / non-grandfathered
+ * clients (2026-06-06). Net-new clients start here and must have a card on
+ * file to order (auto-billed per order). Only two legacy clients are
+ * grandfathered below their standard rate: Centerstone ($59.98 TR/ROA) and
+ * California Statewide ($79.98 RT/ROA/CIVPEN). Their rates live explicitly on
+ * their `clients.billing_rate_pdf/csv` rows; everyone else resolves to this.
+ */
+export const PRICE_STANDARD = 99.99;
+
+/** Slugs of the only clients grandfathered below PRICE_STANDARD. */
+export const GRANDFATHERED_CLIENT_SLUGS = ['centerstone', 'california-statewide-cdc', 'calstatewide', 'cal-statewide-cdc'];
+
 /** Per-entity pay-as-you-go transcript pull. Up to 3 years standard. */
 export const PRICE_PAYG = 79.98;
 
@@ -378,6 +391,21 @@ export function entityBillableRate(
     return { price: PRICE_REORDER, kind: 'reorder' };
   }
   return { price: clientRatePdf, kind: 'standard' };
+}
+
+/**
+ * Resolve a client's standard per-request rate by intake method. Reads the
+ * explicit `billing_rate_pdf` / `billing_rate_csv` on the client row and falls
+ * back to PRICE_STANDARD ($99.99) when unset — so any new client without an
+ * explicit contracted rate bills at the standard price. Grandfathered clients
+ * (Centerstone, Cal Statewide) carry their lower rate explicitly on the row.
+ */
+export function clientRequestRate(
+  client: { billing_rate_pdf?: number | null; billing_rate_csv?: number | null } | null | undefined,
+  intakeMethod: 'pdf' | 'csv' | string = 'pdf',
+): number {
+  const col = intakeMethod === 'csv' ? client?.billing_rate_csv : client?.billing_rate_pdf;
+  return typeof col === 'number' ? col : PRICE_STANDARD;
 }
 
 /** Resolve an SKU ID to its catalog entry. Throws if unknown — fail loud. */

@@ -120,8 +120,8 @@ export async function POST(request: NextRequest) {
 
     let totalEntities = 0;
     let totalAmount = 0;
-    const ratePdf = client.billing_rate_pdf || 59.98;
-    const rateCsv = client.billing_rate_csv || 69.98;
+    const ratePdf = client.billing_rate_pdf || 99.99;
+    const rateCsv = client.billing_rate_csv || 99.99;
 
     // --- Non-billable entity exclusion ---
     // Two sources of truth, evaluated in order:

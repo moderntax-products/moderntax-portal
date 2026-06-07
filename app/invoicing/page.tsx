@@ -49,8 +49,8 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
 
   if (!client) redirect('/');
 
-  const ratePdf = client.billing_rate_pdf || 59.98;
-  const rateCsv = client.billing_rate_csv || 69.98;
+  const ratePdf = client.billing_rate_pdf || 99.99;
+  const rateCsv = client.billing_rate_csv || 99.99;
   const isSubscription = client.billing_model === 'subscription';
   const subMonthly = Number(client.subscription_monthly_amount) || 0;
   const subIncluded = Number(client.subscription_included_entities) || 0;

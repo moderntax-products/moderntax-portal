@@ -124,7 +124,7 @@ async function issueMonthlyInvoice(
     return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '' };
   }
 
-  const ratePdf = Number(client.billing_rate_pdf || 59.98);
+  const ratePdf = Number(client.billing_rate_pdf || 99.99);
   const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
   const periodStartMs = Date.parse(`${periodStart}T00:00:00Z`);
   const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;

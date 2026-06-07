@@ -565,7 +565,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
       if (freeTrialSets[clientId]?.has(entity.id)) return;
 
       const completedDate = new Date(entity.completed_at);
-      const rate = req.intake_method === 'csv' ? (clientObj.billing_rate_csv || 69.98) : (clientObj.billing_rate_pdf || 59.98);
+      const rate = req.intake_method === 'csv' ? (clientObj.billing_rate_csv || 99.99) : (clientObj.billing_rate_pdf || 99.99);
 
       // All-time
       clientRevenueAllTime[clientId] += rate;
