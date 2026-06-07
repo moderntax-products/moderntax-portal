@@ -111,13 +111,18 @@ export default async function DashboardPage({
   let clientBillingRatePdf = PRICE_STANDARD; // $99.99 default for any client without an explicit contracted rate
   let clientBillingRateCsv = PRICE_STANDARD;
   let clientCreatedAt: string | null = null;
+  let clientCreditBalance = 0;
+  let clientCreditRate = PRICE_STANDARD;
   // SLA tier — server-rendered into PremiumSlaSurface so the component
   // never silently fails on a client-side RLS error. Two-phase select
   // (with column-existence fallback) so pre-migration envs still load.
   let clientSlaTier: 'standard' | 'premium' | null = null;
   if (profile.client_id) {
     const baseSelect = 'created_at, free_trial, monitoring_default_enabled, cash_flow_auto_attach, stripe_payment_method_id, payment_method_status, payment_method_brand, payment_method_last4, payment_method_type, billing_rate_pdf, billing_rate_csv';
-    const fullSelect = `${baseSelect}, sla_tier`;
+    // credit_* columns live behind migration-client-credits.sql. They're in
+    // fullSelect so the existing column-missing fallback to baseSelect keeps
+    // pre-migration envs loading (credit gating just stays off until applied).
+    const fullSelect = `${baseSelect}, sla_tier, credit_balance, credit_rate, credit_purchased_total`;
     let clientRecord: any = null;
     {
       const r = await supabase.from('clients').select(fullSelect).eq('id', profile.client_id).single() as { data: any; error: any };
@@ -134,6 +139,8 @@ export default async function DashboardPage({
     if (typeof clientRecord?.billing_rate_pdf === 'number') clientBillingRatePdf = clientRecord.billing_rate_pdf;
     if (typeof clientRecord?.billing_rate_csv === 'number') clientBillingRateCsv = clientRecord.billing_rate_csv;
     clientCreatedAt = clientRecord?.created_at ?? null;
+    if (typeof clientRecord?.credit_balance === 'number') clientCreditBalance = clientRecord.credit_balance;
+    if (typeof clientRecord?.credit_rate === 'number' && clientRecord.credit_rate > 0) clientCreditRate = clientRecord.credit_rate;
     if (clientRecord?.free_trial === false) clientFreeTrial = false;
     if (clientRecord?.monitoring_default_enabled === false) monitoringDefaultEnabled = false;
     if (clientRecord?.cash_flow_auto_attach === true) cashFlowAutoAttach = true;
@@ -193,14 +200,17 @@ export default async function DashboardPage({
   // card on file BEFORE they can order; every order is then auto-billed per
   // order (Stripe). This is the $99.99 plan introduced 2026-06-06.
   const isStandardPlanClient = !!clientCreatedAt && clientCreatedAt >= STANDARD_PLAN_CUTOFF;
+  // Standard-plan clients order out of a prepaid credit wallet: they must have
+  // a card on file AND enough credits to cover at least one request.
+  const hasEnoughCredits = clientCreditBalance >= clientCreditRate;
 
   // Hard-block ordering when:
-  //   • standard-plan (new) client without a card — card required up front, OR
+  //   • standard-plan (new) client without a card OR without enough credits, OR
   //   • legacy client whose trial is used AND no card AND no recent paid invoice.
   // Established Mercury ACH customers (paid invoice in last 90 days) keep
   // ordering normally — manager still gets a softer nudge to add a card.
   const needsPaymentMethod = isStandardPlanClient
-    ? !hasPaymentMethod
+    ? (!hasPaymentMethod || !hasEnoughCredits)
     : (trialExhausted && !hasPaymentMethod && !hasRecentPaidInvoice);
   const managerShouldAddCard = !isStandardPlanClient && trialExhausted && !hasPaymentMethod && hasRecentPaidInvoice;
 

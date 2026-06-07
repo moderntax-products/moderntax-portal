@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { getClassificationLabel, getClassificationColor } from '@/lib/mask';
 import { BillingSettingsForm } from '@/components/BillingSettingsForm';
 import { PayNowButton } from '@/components/PayNowButton';
+import { BuyCreditsModal } from '@/components/BuyCreditsModal';
 import { InvoiceBreakdownTable } from '@/components/InvoiceBreakdownTable';
 
 // Free trial: each new client gets 3 free entities — surfaced as
@@ -48,6 +49,18 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
     .single() as { data: any | null; error: any };
 
   if (!client) redirect('/');
+
+  // Prepaid credit wallet (migration-client-credits.sql). Guarded select so the
+  // page still loads if the columns aren't migrated yet.
+  let creditBalance: number | null = null;
+  let creditRate: number | null = null;
+  {
+    const cr = await supabase.from('clients').select('credit_balance, credit_rate').eq('id', profile.client_id).single() as { data: any; error: any };
+    if (!cr.error && cr.data) {
+      creditBalance = typeof cr.data.credit_balance === 'number' ? cr.data.credit_balance : 0;
+      creditRate = typeof cr.data.credit_rate === 'number' && cr.data.credit_rate > 0 ? cr.data.credit_rate : null;
+    }
+  }
 
   const ratePdf = client.billing_rate_pdf || 99.99;
   const rateCsv = client.billing_rate_csv || 99.99;
@@ -276,6 +289,7 @@ export default async function InvoicingPage({ searchParams }: PageProps) {
             <p className="text-gray-600 mt-1">{client.name} — Billing & Payment History</p>
           </div>
           <div className="flex items-center gap-3">
+            <BuyCreditsModal currentBalance={creditBalance} currentRate={creditRate} />
             <Link
               href="/"
               className="px-4 py-2 text-sm font-medium text-mt-dark border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"

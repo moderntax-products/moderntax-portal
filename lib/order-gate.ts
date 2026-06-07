@@ -56,7 +56,7 @@ export interface OrderGateResult {
    * - `mercury_required` — primary block, post-2026-05-14 policy
    * - `no_client` — clientId was null/missing
    */
-  reason?: 'mercury_required' | 'no_client';
+  reason?: 'mercury_required' | 'no_client' | 'card_required' | 'credits_required';
   /** HTTP status to return when allowed=false. */
   status?: number;
   /** Count of completed entities to date (for UI display only — no longer a bypass). */
@@ -208,17 +208,52 @@ export async function checkOrderGate(
     clientName: client?.name ?? null,
   };
 
+  // Sandbox / explicit bypass always pass (testing + negotiated exceptions).
+  if (isSandbox || hasBypass) {
+    return { allowed: true, ...baseResult };
+  }
+
+  // Standard-plan clients (created on/after the 2026-06-06 cutoff) order out of
+  // a prepaid credit wallet: they must have a card on file AND enough credits
+  // for at least one request. Guarded fetch so pre-migration envs degrade to
+  // the legacy rules below. (migration-client-credits.sql)
+  let createdAt: string | null = null;
+  let creditBalance = 0;
+  let creditRate = 99.99;
+  {
+    const cr = await adminSupabase.from('clients')
+      .select('created_at, credit_balance, credit_rate').eq('id', clientId).single();
+    if (!cr.error && cr.data) {
+      createdAt = (cr.data as any).created_at ?? null;
+      creditBalance = Number((cr.data as any).credit_balance) || 0;
+      creditRate = Number((cr.data as any).credit_rate) > 0 ? Number((cr.data as any).credit_rate) : 99.99;
+    } else {
+      const cr2 = await adminSupabase.from('clients').select('created_at').eq('id', clientId).single();
+      createdAt = cr2.data ? (cr2.data as any).created_at : null;
+    }
+  }
+  const STANDARD_PLAN_CUTOFF = '2026-06-06';
+  if (!!createdAt && createdAt >= STANDARD_PLAN_CUTOFF) {
+    if (hasPaymentMethod && creditBalance >= creditRate) {
+      return { allowed: true, ...baseResult };
+    }
+    return {
+      allowed: false,
+      reason: !hasPaymentMethod ? 'card_required' : 'credits_required',
+      status: 402,
+      ...baseResult,
+    };
+  }
+
   // Rule 3.5 (2026-06-01 trial overhaul) — trial converted + Stripe card active.
   // After auto-conversion the customer is on PAYG via Stripe off-session charges.
-  // They have no Mercury enrollment yet but are a paying customer. Allow ordering;
-  // the entity-completion webhook will auto-charge the card for each new pull.
   const hasTrialConverted = !!((client as any)?.trial_converted_at);
   if (hasTrialConverted && hasPaymentMethod) {
     return { allowed: true, ...baseResult };
   }
 
-  // Allow: sandbox OR explicit bypass OR Mercury enrolled OR trial allowance remaining.
-  if (isSandbox || hasBypass || hasMercuryEnrolled || trialRemaining > 0) {
+  // Legacy allow: Mercury enrolled OR trial allowance remaining.
+  if (hasMercuryEnrolled || trialRemaining > 0) {
     return { allowed: true, ...baseResult };
   }
 
