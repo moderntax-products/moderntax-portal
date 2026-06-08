@@ -466,6 +466,18 @@ export async function POST(request: NextRequest) {
           .select('id, entity_name, tid, tid_kind, form_type, status, signature_id, signer_email, signer_first_name, signer_last_name, address, city, state, zip_code')
           .eq('request_id', req.id) as { data: any[] | null; error: any };
 
+        // Admin-created orders draw down the client's prepaid credits too
+        // (Matt directive 2026-06-07). Debit at placement, exclude W&I,
+        // no-op for legacy/non-credit clients. Mirrors csv/pdf/intake.
+        if (createdEntities && createdEntities.length) {
+          try {
+            const { debitCreditsForEntities } = await import('@/lib/credits');
+            const billableIds = createdEntities.filter((e) => e.form_type !== 'W2_INCOME').map((e) => e.id);
+            const { charged } = await debitCreditsForEntities(adminSupabase, senderProfile.client_id!, billableIds);
+            if (charged) console.log(`[email-intake] Debited ${charged} request(s) from credit wallet`);
+          } catch (e) { console.warn('[email-intake] credit debit failed:', e); }
+        }
+
         if (createdEntities) {
           for (const entity of createdEntities) {
             if (!entity.tid) continue;

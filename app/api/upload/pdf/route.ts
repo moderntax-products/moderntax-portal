@@ -247,6 +247,16 @@ export async function POST(request: NextRequest) {
         .from('request_entities')
         .select('id, entity_name, form_type, years')
         .eq('request_id', req.id) as { data: any[] | null };
+      // Debit prepaid credits for this order (no-op for non-credit / legacy
+      // clients or pre-migration). Excludes W&I (W2_INCOME) entities.
+      if (createdForNotes && createdForNotes.length > 0) {
+        try {
+          const { debitCreditsForEntities } = await import('@/lib/credits');
+          const billableIds = createdForNotes.filter((e: any) => e.form_type !== 'W2_INCOME').map((e: any) => e.id);
+          const { charged } = await debitCreditsForEntities(noteAdmin, profile.client_id!, billableIds);
+          if (charged) console.log(`[pdf-upload] Debited ${charged} request(s) from credit wallet`);
+        } catch (e) { console.warn('[pdf-upload] credit debit failed:', e); }
+      }
       if (createdForNotes && createdForNotes.length > 0) {
         const requesterName = profile.full_name || user.email || 'Processor';
         const requesterRole = (['admin', 'expert', 'processor', 'manager'] as const)

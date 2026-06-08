@@ -124,7 +124,7 @@ async function issueMonthlyInvoice(
     return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '' };
   }
 
-  const ratePdf = Number(client.billing_rate_pdf || 59.98);
+  const ratePdf = Number(client.billing_rate_pdf || 99.99);
   const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
   const periodStartMs = Date.parse(`${periodStart}T00:00:00Z`);
   const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
@@ -166,14 +166,33 @@ async function issueMonthlyInvoice(
     }
   }
 
-  const { data: rawEntities } = await admin.from('request_entities')
-    .select('entity_name, form_type, completed_at, gross_receipts, requests!inner(loan_number, client_id, profiles!requests_requested_by_fkey(full_name))')
-    .eq('requests.client_id', clientId)
-    .eq('status', 'completed')
-    .gt('completed_at', new Date(entityCutoff).toISOString())
-    .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: EntityRow[] | null };
+  // Select credit_paid so entities already paid from the prepaid credit wallet
+  // are excluded from the Mercury invoice (no double-billing). Two-phase: if the
+  // column isn't migrated yet, fall back (no credit clients exist pre-migration,
+  // so there's nothing to exclude).
+  const entitySelectBase = 'entity_name, form_type, completed_at, gross_receipts, requests!inner(loan_number, client_id, profiles!requests_requested_by_fkey(full_name))';
+  let rawEntities: EntityRow[] | null = null;
+  {
+    const withCredit = await admin.from('request_entities')
+      .select(`${entitySelectBase}, credit_paid`)
+      .eq('requests.client_id', clientId)
+      .eq('status', 'completed')
+      .gt('completed_at', new Date(entityCutoff).toISOString())
+      .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: EntityRow[] | null; error: any };
+    if (withCredit.error && /credit_paid|column .* does not exist|PGRST/i.test(withCredit.error.message || '')) {
+      const fallback = await admin.from('request_entities')
+        .select(entitySelectBase)
+        .eq('requests.client_id', clientId)
+        .eq('status', 'completed')
+        .gt('completed_at', new Date(entityCutoff).toISOString())
+        .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: EntityRow[] | null };
+      rawEntities = fallback.data;
+    } else {
+      rawEntities = withCredit.data;
+    }
+  }
 
-  const entities = (rawEntities || []).filter(e => !e.gross_receipts?.pre_billed?.invoice_id);
+  const entities = (rawEntities || []).filter(e => !e.gross_receipts?.pre_billed?.invoice_id && !(e as any).credit_paid);
   L(`  Entities: ${entities.length} billable`);
 
   // ── Build processor groups ───────────────────────────────────────────────

@@ -17,6 +17,65 @@
 // Standard transcript ordering — the legacy SBA-lender intake mix
 // ---------------------------------------------------------------------------
 
+/**
+ * Standard per-request transcript price for all NEW / non-grandfathered
+ * clients (2026-06-06). Net-new clients start here and must have a card on
+ * file to order (auto-billed per order). Only two legacy clients are
+ * grandfathered below their standard rate: Centerstone ($59.98 TR/ROA) and
+ * California Statewide ($79.98 RT/ROA/CIVPEN). Their rates live explicitly on
+ * their `clients.billing_rate_pdf/csv` rows; everyone else resolves to this.
+ */
+export const PRICE_STANDARD = 99.99;
+
+/** Slugs of the only clients grandfathered below PRICE_STANDARD. */
+export const GRANDFATHERED_CLIENT_SLUGS = ['centerstone', 'california-statewide-cdc', 'calstatewide', 'cal-statewide-cdc'];
+
+/**
+ * Prepaid credit packs (2026-06-06). Standard-plan clients pre-buy a USD credit
+ * wallet; each request debits `ratePerRequest`. Buying more unlocks a lower
+ * per-request rate:
+ *   - $1,000 → $59.99/request (40% off the $99.99 standard)
+ *   - $2,000 → $39.99/request (60% off)
+ * The pack amount IS the dollars added to the wallet; the discount is expressed
+ * as the reduced per-request debit rate.
+ */
+export interface CreditPack {
+  id: 'credits-1000' | 'credits-2000';
+  amount: number;          // USD added to the wallet (= price charged)
+  ratePerRequest: number;  // per-request debit rate this purchase unlocks
+  discountPct: number;     // off PRICE_STANDARD, for display
+  label: string;
+}
+export const CREDIT_PACKS: CreditPack[] = [
+  { id: 'credits-1000', amount: 1000, ratePerRequest: 59.99, discountPct: 40, label: '$1,000 credits — 40% off ($59.99/request)' },
+  { id: 'credits-2000', amount: 2000, ratePerRequest: 39.99, discountPct: 60, label: '$2,000 credits — 60% off ($39.99/request)' },
+];
+
+export function getCreditPack(id: string): CreditPack | undefined {
+  return CREDIT_PACKS.find((p) => p.id === id);
+}
+
+/** The lower (better) of two per-request rates — used when stacking purchases. */
+export function bestCreditRate(currentRate: number | null | undefined, packRate: number): number {
+  const cur = typeof currentRate === 'number' && currentRate > 0 ? currentRate : PRICE_STANDARD;
+  return Math.min(cur, packRate);
+}
+
+/** Per-request debit rate for a client (their locked-in credit_rate, else standard). */
+export function creditRequestRate(client: { credit_rate?: number | null } | null | undefined): number {
+  const r = client?.credit_rate;
+  return typeof r === 'number' && r > 0 ? r : PRICE_STANDARD;
+}
+
+/** Can this client place `count` requests from their prepaid wallet right now? */
+export function hasCreditsToOrder(
+  client: { credit_balance?: number | null; credit_rate?: number | null } | null | undefined,
+  count = 1,
+): boolean {
+  const balance = Number(client?.credit_balance) || 0;
+  return balance >= creditRequestRate(client) * count;
+}
+
 /** Per-entity pay-as-you-go transcript pull. Up to 3 years standard. */
 export const PRICE_PAYG = 79.98;
 
@@ -378,6 +437,21 @@ export function entityBillableRate(
     return { price: PRICE_REORDER, kind: 'reorder' };
   }
   return { price: clientRatePdf, kind: 'standard' };
+}
+
+/**
+ * Resolve a client's standard per-request rate by intake method. Reads the
+ * explicit `billing_rate_pdf` / `billing_rate_csv` on the client row and falls
+ * back to PRICE_STANDARD ($99.99) when unset — so any new client without an
+ * explicit contracted rate bills at the standard price. Grandfathered clients
+ * (Centerstone, Cal Statewide) carry their lower rate explicitly on the row.
+ */
+export function clientRequestRate(
+  client: { billing_rate_pdf?: number | null; billing_rate_csv?: number | null } | null | undefined,
+  intakeMethod: 'pdf' | 'csv' | string = 'pdf',
+): number {
+  const col = intakeMethod === 'csv' ? client?.billing_rate_csv : client?.billing_rate_pdf;
+  return typeof col === 'number' ? col : PRICE_STANDARD;
 }
 
 /** Resolve an SKU ID to its catalog entry. Throws if unknown — fail loud. */

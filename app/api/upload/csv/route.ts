@@ -697,6 +697,17 @@ export async function POST(request: NextRequest) {
           .select('id, entity_name, tid, tid_kind, form_type, status, signature_id')
           .eq('request_id', req.id) as { data: any[] | null; error: any };
 
+        // Debit prepaid credits for this order (no-op for non-credit / legacy
+        // clients or pre-migration). Excludes W&I (W2_INCOME) entities.
+        if (createdEntities && createdEntities.length) {
+          try {
+            const { debitCreditsForEntities } = await import('@/lib/credits');
+            const billableIds = createdEntities.filter((e) => e.form_type !== 'W2_INCOME').map((e) => e.id);
+            const { charged } = await debitCreditsForEntities(admin, profile.client_id!, billableIds);
+            if (charged) console.log(`[csv-upload] Debited ${charged} request(s) from credit wallet`);
+          } catch (e) { console.warn('[csv-upload] credit debit failed:', e); }
+        }
+
         if (createdEntities) {
           for (const entity of createdEntities) {
             if (!entity.tid || entity.signature_id) continue;

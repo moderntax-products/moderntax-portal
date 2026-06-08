@@ -62,6 +62,63 @@ export async function POST(request: NextRequest) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
 
+        // -------------------------------------------------------------------
+        // Prepaid credit purchase ($1,000 → 40% off, $2,000 → 60% off)
+        // -------------------------------------------------------------------
+        // Adds the pack amount to the client's credit wallet, locks in the
+        // discounted per-request rate, and persists the card as the
+        // required card-on-file. Idempotent via credit_ledger.stripe_ref.
+        if (session.metadata?.flow === 'credit_purchase') {
+          const clientId = session.metadata.client_id;
+          const amount = Number(session.metadata.pack_amount) || (session.amount_total || 0) / 100;
+          const packRate = Number(session.metadata.pack_rate) || 99.99;
+          if (!clientId) { console.warn('[stripe-webhook] credit_purchase without client_id'); break; }
+
+          const { data: already } = await (admin.from('credit_ledger' as any) as any)
+            .select('id').eq('stripe_ref', session.id).maybeSingle();
+          if (already) { console.log(`[stripe-webhook] credit_purchase ${session.id} already processed`); break; }
+
+          const { data: c } = await admin.from('clients')
+            .select('credit_balance, credit_rate, credit_purchased_total').eq('id', clientId).single() as { data: any };
+          const newBalance = (Number(c?.credit_balance) || 0) + amount;
+          const newRate = Math.min(Number(c?.credit_rate) > 0 ? Number(c.credit_rate) : 99.99, packRate);
+          const newTotal = (Number(c?.credit_purchased_total) || 0) + amount;
+
+          // Persist the card on file (saved via setup_future_usage on the PI).
+          const stripe = getStripe();
+          const piId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
+          const pmUpdate: Record<string, any> = {};
+          if (piId) {
+            try {
+              const pi = await stripe.paymentIntents.retrieve(piId, { expand: ['payment_method'] });
+              const pm = pi.payment_method as Stripe.PaymentMethod | null;
+              if (pm && typeof pm !== 'string') {
+                pmUpdate.stripe_payment_method_id = pm.id;
+                pmUpdate.payment_method_type = pm.type;
+                pmUpdate.payment_method_brand = pm.card?.brand || pm.us_bank_account?.bank_name || null;
+                pmUpdate.payment_method_last4 = pm.card?.last4 || pm.us_bank_account?.last4 || null;
+                pmUpdate.payment_method_attached_at = new Date().toISOString();
+                pmUpdate.payment_method_status = 'active';
+                if (typeof pi.customer === 'string') {
+                  await stripe.customers.update(pi.customer, { invoice_settings: { default_payment_method: pm.id } });
+                }
+              }
+            } catch (e) { console.warn('[stripe-webhook] credit_purchase PM persist failed:', e); }
+          }
+
+          const { error: upErr } = await (admin.from('clients') as any)
+            .update({ credit_balance: newBalance, credit_rate: newRate, credit_purchased_total: newTotal, ...pmUpdate })
+            .eq('id', clientId);
+          if (upErr) { console.error(`[stripe-webhook] credit_purchase wallet update failed for ${clientId}:`, upErr.message); break; }
+
+          await (admin.from('credit_ledger' as any) as any).insert({
+            client_id: clientId, kind: 'purchase', amount, balance_after: newBalance,
+            stripe_ref: session.id, note: `${session.metadata.pack} purchase`,
+          });
+          console.log(`[stripe-webhook] credit_purchase: +$${amount} to ${clientId} → balance $${newBalance}, rate $${newRate}`);
+          break;
+        }
+
         // Tier upgrade flow (mode=payment for Tier B, mode=subscription for
         // Tier C). On success, flip the client's billing_model + rates
         // so the next auto-invoice run uses the new tier.

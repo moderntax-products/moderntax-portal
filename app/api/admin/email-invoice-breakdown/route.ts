@@ -148,8 +148,8 @@ async function handle(request: NextRequest) {
   const subscriptionMonthly = billingConfig?.subscription_monthly_amount || 0;
   const subscriptionIncluded = billingConfig?.subscription_included_entities || 0;
   const subscriptionOverageRate = billingConfig?.subscription_overage_rate || 0;
-  const ratePdf = billingConfig?.billing_rate_pdf || 59.98;
-  const rateCsv = billingConfig?.billing_rate_csv || 69.98;
+  const ratePdf = billingConfig?.billing_rate_pdf || 99.99;
+  const rateCsv = billingConfig?.billing_rate_csv || 99.99;
   const monthlyMonitoringRate = billingConfig?.billing_rate_monitoring || 25;
   // Per-client toggles (2026-05-27 — Centerstone flat-rate contract).
   // Either toggle OR the verificationOnly query flag suppresses the

@@ -318,6 +318,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Debit prepaid credits at order placement (no-op for legacy / non-credit
+    // clients or pre-migration). Excludes W&I (W2_INCOME). Mirrors csv/pdf intake.
+    if (createdEntities && createdEntities.length) {
+      try {
+        const { debitCreditsForEntities } = await import('@/lib/credits');
+        const billableIds = createdEntities.filter((e: any) => e.form_type !== 'W2_INCOME').map((e: any) => e.id);
+        const { charged } = await debitCreditsForEntities(supabase, client.id, billableIds);
+        if (charged) console.log(`[transcript-intake] Debited ${charged} request(s) from credit wallet`);
+      } catch (e) { console.warn('[transcript-intake] credit debit failed:', e); }
+    }
+
     // --- Usage stats ---
     const { count: usedCount } = await supabase
       .from('requests')

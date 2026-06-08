@@ -150,13 +150,28 @@ export async function GET(request: NextRequest) {
         // Also pull gross_receipts so we can skip entities pre-billed on a prior
         // invoice (8821_sent entities Matt invoiced in advance to close a month
         // before the borrower signed — see prebill flow in scripts/finalize-may-invoices.ts).
-        const { data: completedRequests } = await supabase
-          .from('requests')
-          .select('id, intake_method, request_entities(id, status, completed_at, gross_receipts)')
-          .eq('client_id', client.id) as { data: any[] | null; error: any };
+        // Pull credit_paid so credit-wallet-paid entities are excluded from the
+        // Mercury invoice. Two-phase: fall back if the column isn't migrated yet.
+        const _entCols = 'id, status, completed_at, gross_receipts';
+        let completedRequests: any[] | null = null;
+        {
+          const withCredit = await supabase
+            .from('requests')
+            .select(`id, intake_method, request_entities(${_entCols}, credit_paid)`)
+            .eq('client_id', client.id) as { data: any[] | null; error: any };
+          if (withCredit.error && /credit_paid|column .* does not exist|PGRST/i.test(withCredit.error.message || '')) {
+            const fb = await supabase
+              .from('requests')
+              .select(`id, intake_method, request_entities(${_entCols})`)
+              .eq('client_id', client.id) as { data: any[] | null };
+            completedRequests = fb.data;
+          } else {
+            completedRequests = withCredit.data;
+          }
+        }
 
-        const ratePdf = client.billing_rate_pdf || 59.98;
-        const rateCsv = client.billing_rate_csv || 69.98;
+        const ratePdf = client.billing_rate_pdf || 99.99;
+        const rateCsv = client.billing_rate_csv || 99.99;
 
         // If free trial, identify first 3 completed entities all-time to exclude
         let freeEntityIds = new Set<string>();
@@ -214,6 +229,7 @@ export async function GET(request: NextRequest) {
               const completedDate = new Date(entity.completed_at);
               if (completedDate < billableStart || completedDate > periodEndDate) return;
               if (entity.gross_receipts?.pre_billed?.invoice_id) return;
+      if (entity.credit_paid) return; // paid from prepaid credit wallet — not Mercury-billed
               periodEntities += 1;
             });
           });
@@ -266,6 +282,7 @@ export async function GET(request: NextRequest) {
               // pre_billed_at, amount } is set by scripts/finalize-may-invoices.ts
               // and any future ad-hoc pre-bill path.
               if (entity.gross_receipts?.pre_billed?.invoice_id) return;
+      if (entity.credit_paid) return; // paid from prepaid credit wallet — not Mercury-billed
 
               // Reorder SKU — flat $29.99 instead of the tier rate.
               // Stamped by the reorder-from-history admin route.
