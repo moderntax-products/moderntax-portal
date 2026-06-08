@@ -85,7 +85,9 @@ export async function GET(req: NextRequest) {
         hours_worked: hoursWorked,
         tins_completed: tins || 0,
         notes: noteSuffix,
-        auto_closed: true,
+        // NOTE: there is no `auto_closed` column on expert_time_logs — writing
+        // it made PostgREST reject the ENTIRE update, so this cron silently
+        // closed nothing. The audit trail lives in `notes` instead. (fixed 6/04)
       })
       .eq('id', row.id);
 

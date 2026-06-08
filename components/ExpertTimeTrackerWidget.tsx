@@ -55,6 +55,11 @@ export function ExpertTimeTrackerWidget() {
     return () => clearInterval(id);
   }, [refresh]);
 
+  // No keep-alive heartbeat is needed: explicit clock-ins (manual /
+  // irs_direct_dial) are NEVER idle-closed (only the 6h hard cap applies), so
+  // a long IRS hold can't be mistaken for "walked away". A heartbeat here would
+  // also race the extend→auto-create path and could spawn a phantom session.
+
   const fire = useCallback(async (action: 'start' | 'stop', kind: 'irs_direct_dial' | 'manual') => {
     setLoading(true);
     setError(null);
