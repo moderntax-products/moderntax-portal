@@ -20,6 +20,7 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { fireScheduledCall } from '@/lib/fire-call';
 import { loadPhonePool, isIrsOpenFor, pickFromNumber } from '@/lib/phone-pool';
 import { requireBearer } from '@/lib/auth-util';
+import { zonedWallClockToUtc } from '@/lib/expert-sla';
 
 export const maxDuration = 30;
 
@@ -192,8 +193,16 @@ async function scheduleFromAvailability(supabase: any, now: Date) {
           continue;
         }
 
-        // Build scheduled_for timestamp from date + start_time + timezone
-        const scheduledFor = new Date(`${slot.available_date}T${slot.start_time}:00`);
+        // Build scheduled_for timestamp from date + start_time IN THE SLOT'S
+        // TIMEZONE. The old code did `new Date("YYYY-MM-DDTHH:MM:00")`, which
+        // Vercel interprets as UTC — so a 7:00 AM PT availability fired as
+        // 7:00 AM UTC (= midnight PT) and the IRS callback landed hours before
+        // the expert expected it. They missed the 3 PPS retries. (MOD-204)
+        const scheduledFor = zonedWallClockToUtc(
+          slot.available_date,
+          slot.start_time,
+          slot.timezone || 'America/New_York',
+        );
         // If the slot time has already passed, schedule for right now
         const fireAt = scheduledFor < now ? now : scheduledFor;
 
