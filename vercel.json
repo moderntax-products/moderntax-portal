@@ -2,6 +2,10 @@
   "installCommand": "npm ci",
   "crons": [
     {
+      "path": "/api/cron/processor-delay-digest",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/trial-expiry",
       "schedule": "0 8 * * *"
     },
