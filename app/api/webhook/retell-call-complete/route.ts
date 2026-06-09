@@ -72,11 +72,21 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // Find session — Retell IDs are stored in the bland_call_id column (legacy
-  // naming; column was named before the Retell migration).
-  const { data: session } = await admin.from('irs_call_sessions' as any)
+  // naming; column was named before the Retell migration). Inbound callback
+  // resume calls have a fresh call_id that won't match the original outbound
+  // session, so fall back to metadata.session_id (set by the inbound webhook).
+  const metaSessionId: string | undefined = call.metadata?.session_id || body.metadata?.session_id;
+  const isCallbackResume = (call.metadata?.mode || body.metadata?.mode) === 'callback_resume';
+  let { data: session } = await admin.from('irs_call_sessions' as any)
     .select('id, status, callback_status, callback_mode, classified_outcome')
     .eq('bland_call_id', callId)
-    .single() as { data: any };
+    .maybeSingle() as { data: any };
+  if (!session && metaSessionId) {
+    const r = await admin.from('irs_call_sessions' as any)
+      .select('id, status, callback_status, callback_mode, classified_outcome')
+      .eq('id', metaSessionId).maybeSingle() as { data: any };
+    session = r.data;
+  }
 
   if (!session) {
     console.warn(`[retell-webhook] no session for ${callId} — possibly a smoke-test call`);
@@ -129,6 +139,11 @@ export async function POST(request: NextRequest) {
     updatePatch.callback_initiated_at = new Date().toISOString();
     // Hold the assigned AI callback number — the inbound handler resolves it.
     updatePatch.callback_state = 'waiting';
+  }
+  // This IS the inbound callback resume call — the loop is closing. Mark the
+  // callback completed; the release block below frees the number.
+  if (isCallbackResume) {
+    updatePatch.callback_state = 'completed';
   }
   // If the call ended without ever being marked complete, finalize it.
   if (session.status === 'ringing' || session.status === 'initiating') {
