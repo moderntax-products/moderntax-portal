@@ -59,8 +59,12 @@ export async function assignCallbackNumber(admin: Admin, expertId: string, sessi
       .eq('id', c.id).eq('status', 'available')
       .select('id, phone_number').maybeSingle() as { data: any };
     if (claimed) {
+      // Claim the number for this session now (so the agent can read it). The
+      // session's callback_state only flips to 'waiting' once the agent actually
+      // ACCEPTS the callback on the call (set by the completion webhook); if no
+      // callback is taken, the webhook releases the number.
       await admin.from('irs_call_sessions' as any)
-        .update({ callback_number_id: claimed.id, callback_state: 'waiting' } as any).eq('id', sessionId);
+        .update({ callback_number_id: claimed.id } as any).eq('id', sessionId);
       return { numberId: claimed.id, phoneNumber: claimed.phone_number, digits: toDigits(claimed.phone_number) };
     }
   }

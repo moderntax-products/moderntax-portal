@@ -127,6 +127,8 @@ export async function POST(request: NextRequest) {
   if (acceptedCallback && session.callback_status === 'waiting') {
     updatePatch.callback_status = 'accepted';
     updatePatch.callback_initiated_at = new Date().toISOString();
+    // Hold the assigned AI callback number — the inbound handler resolves it.
+    updatePatch.callback_state = 'waiting';
   }
   // If the call ended without ever being marked complete, finalize it.
   if (session.status === 'ringing' || session.status === 'initiating') {
@@ -135,6 +137,14 @@ export async function POST(request: NextRequest) {
   }
 
   await (admin.from('irs_call_sessions' as any) as any).update(updatePatch).eq('id', session.id);
+
+  // No callback was taken on this call → free any AI callback number we'd
+  // assigned at fire time so it returns to the pool. (No-op if none assigned /
+  // pool unmigrated.)
+  if (!acceptedCallback) {
+    try { const { releaseCallbackNumber } = await import('@/lib/callback-numbers'); await releaseCallbackNumber(admin, session.id); }
+    catch (e) { console.warn('[retell-webhook] callback number release failed:', e instanceof Error ? e.message : e); }
+  }
 
   console.log(
     `[retell-webhook] ${callId} → ${classifiedOutcome} | ` +

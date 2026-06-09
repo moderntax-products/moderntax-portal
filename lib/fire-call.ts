@@ -86,7 +86,21 @@ export async function fireScheduledCall(
   const callMode = locked.callback_mode === 'irs_callback' ? 'irs_callback'
     : locked.callback_mode === 'transfer' ? 'hold_and_transfer'
     : (locked.callback_phone ? 'hold_and_transfer' : 'ai_full');
-  const callbackPhone = locked.callback_phone || expertProfile.phone_number || undefined;
+  let callbackPhone = locked.callback_phone || expertProfile.phone_number || undefined;
+
+  // Autonomous-callback path: hand the agent an AI-answerable pool number so IRS
+  // texts/calls a number WE answer (not the expert's phone). Graceful — if the
+  // pool isn't provisioned/migrated or the expert is at the 5-callback cap,
+  // assignCallbackNumber returns null and we fall back to the expert's phone
+  // (legacy behavior), so this can't break live calling.
+  let assignedCallbackNumberId: string | null = null;
+  if (callMode === 'irs_callback') {
+    try {
+      const { assignCallbackNumber } = await import('./callback-numbers');
+      const assigned = await assignCallbackNumber(supabase as any, locked.expert_id, sessionId);
+      if (assigned) { callbackPhone = assigned.phoneNumber; assignedCallbackNumberId = assigned.numberId; }
+    } catch (e) { console.warn('[fire-call] callback number assign failed (using expert phone):', e instanceof Error ? e.message : e); }
+  }
 
   let callResponse;
   try {
@@ -114,6 +128,10 @@ export async function fireScheduledCall(
       forceFromTz: opts.forceFromTz || null,
     });
   } catch (err) {
+    // Free the assigned callback number — this attempt never reached IRS.
+    if (assignedCallbackNumberId) {
+      try { const { releaseCallbackNumber } = await import('./callback-numbers'); await releaseCallbackNumber(supabase as any, sessionId); } catch { /* best-effort */ }
+    }
     await rollbackToFailed(supabase, sessionId, err instanceof Error ? err.message : 'Provider call failed');
     throw err;
   }
