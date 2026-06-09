@@ -33,7 +33,7 @@ export type TidKind = 'EIN' | 'SSN';
 
 export type IntakeMethod = 'csv' | 'pdf' | 'manual' | 'api' | 'reorder';
 
-export type ProductType = 'transcript' | 'employment' | 'filing_compliance';
+export type ProductType = 'transcript' | 'employment' | 'filing_compliance' | 'claims_verification';
 
 export type UserRole = 'processor' | 'manager' | 'admin' | 'expert';
 

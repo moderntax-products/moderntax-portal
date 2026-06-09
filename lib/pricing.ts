@@ -289,6 +289,31 @@ export const CONSOLIDATION_REPORT_MIN_ENTITIES = 3;
 export const PRICE_FILING_COMPLIANCE = 29.99;
 
 // ---------------------------------------------------------------------------
+// Claims Verification — Insurance / Guardian Life offering (2026-06-10).
+// Income verification for claims: individual (1040 + W&I) + business
+// (1120/1065/941) transcripts, with an earned-vs-passive income split and an
+// Excel-template export for examiners. Two commercial shapes:
+//   - Pilot:       $2,499 prepaid, up to 45 verifications over 90 days.
+//   - Production:  $15,000 one-time white-glove integration, then per-transcript.
+// (Pilot fee credits toward integration within 30 days of pilot completion.)
+// ---------------------------------------------------------------------------
+
+/** Prepaid claims-verification pilot — flat, all-inclusive. */
+export const PRICE_CLAIMS_PILOT = 2499;
+/** Verifications included in the pilot bucket. */
+export const CLAIMS_PILOT_INCLUDED_VERIFICATIONS = 45;
+/** Pilot window (days). */
+export const CLAIMS_PILOT_DAYS = 90;
+/** One-time white-glove integration (Phase 2). */
+export const PRICE_CLAIMS_INTEGRATION = 15000;
+/** Per individual transcript (production). */
+export const PRICE_CLAIMS_INDIVIDUAL = 3.0;
+/** Per business transcript (production). */
+export const PRICE_CLAIMS_BUSINESS = 5.0;
+/** Contractual fulfillment guarantee (%). */
+export const CLAIMS_FULFILLMENT_GUARANTEE_PCT = 90;
+
+// ---------------------------------------------------------------------------
 // Unified invoice SKU catalog — single source of truth for Mercury line
 // items + Stripe Products. Used by:
 //   - scripts/register-invoice-skus-stripe.ts (creates Stripe Products
