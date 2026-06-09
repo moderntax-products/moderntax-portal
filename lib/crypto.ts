@@ -232,11 +232,14 @@ export function formatNATOSpelling(s: string): string {
     '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
     '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
   };
+  // Separators (-, _, .) in a SOR short ID are formatting, not spoken: a real
+  // practitioner reads "M-Parker-31" as "Mike, Papa, Alpha…, three, one" — never
+  // the word "dash". Drop them; the comma-join already gives a natural pause
+  // between characters. (This also keeps the agent from violating its own
+  // "never say dash/dot" speech rule, since this value is read verbatim.)
   return s.toUpperCase().split('').map(ch => {
     if (nato[ch]) return nato[ch];
     if (digits[ch]) return digits[ch];
-    if (ch === '-' || ch === '_') return 'dash';
-    if (ch === '.') return 'dot';
     return '';
   }).filter(Boolean).join(', ');
 }
