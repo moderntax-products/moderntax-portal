@@ -142,10 +142,27 @@ export async function POST(request: NextRequest) {
     `accepted=${acceptedCallback} | wait=${signals.announcedWaitMinutes || '-'}min`,
   );
 
+  // MOD-211 auto-retry: hand the finished call to the retry coordinator. This
+  // was the missing link — overflow_rejected/connection_failed calls never
+  // retried because nothing invoked it (0 retries across 154 sessions as of
+  // 2026-06). The coordinator maps the webhook outcome onto its own vocabulary,
+  // marks terminal successes, and fires a fresh from-number rotation on
+  // retryable outcomes. Wrapped so a retry hiccup never fails the webhook ack.
+  let retryAction: string | undefined;
+  try {
+    const { handleCompletedCall } = await import('@/lib/irs-call-retry');
+    const r = await handleCompletedCall(session.id);
+    retryAction = r.action;
+    if (r.action === 'retry_fired') console.log(`[retell-webhook] ${callId} → auto-retry fired (new session ${r.newSessionId})`);
+  } catch (e) {
+    console.error(`[retell-webhook] auto-retry coordinator failed for ${session.id}:`, e instanceof Error ? e.message : e);
+  }
+
   return NextResponse.json({
     received: true,
     session_id: session.id,
     classified_outcome: classifiedOutcome,
     callback_status_changed: acceptedCallback ? 'accepted' : 'unchanged',
+    retry_action: retryAction,
   });
 }

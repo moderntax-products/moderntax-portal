@@ -117,7 +117,7 @@ export async function handleCompletedCall(sessionId: string): Promise<{
   // hold_seconds for MOD-226 (agent_premature_hangup) detection.
   const { data: session, error: loadErr } = await (admin
     .from('irs_call_sessions' as any) as any)
-    .select('id, expert_id, parent_session_id, retry_count, max_retries, auto_retry_enabled, retry_terminal_state, from_number, status, concatenated_transcript, classified_outcome, caf_number, expert_name, expert_fax, expert_sor_id, disconnection_reason, hold_seconds')
+    .select('id, expert_id, parent_session_id, retry_count, max_retries, auto_retry_enabled, retry_terminal_state, from_number, status, concatenated_transcript, classified_outcome, caf_number, expert_name, expert_fax, expert_sor_id, hold_duration_seconds')
     .eq('id', sessionId)
     .maybeSingle();
   if (loadErr || !session) {
@@ -136,21 +136,33 @@ export async function handleCompletedCall(sessionId: string): Promise<{
   // duration), re-classify as agent_premature_hangup. This is the
   // self-correcting bridge between the old buggy classifier behavior
   // and the new strict-match logic.
-  const preset = s.classified_outcome as IrsCallOutcome | null;
-  let outcome: IrsCallOutcome = preset && KNOWN_OUTCOMES.has(preset)
-    ? preset
+  // The completion webhook writes its own outcome vocabulary
+  // (overflow_rejected / callback_offered / agent_answered). Map those onto the
+  // classifier's vocabulary so a known preset is honored; otherwise re-classify
+  // from the transcript. (disconnection_reason isn't persisted on the session,
+  // so MOD-226 leans on transcript + hold time only.)
+  const WEBHOOK_OUTCOME_MAP: Record<string, IrsCallOutcome> = {
+    overflow_rejected: 'high_volume_rejected',
+    callback_offered: 'callback_scheduled',
+    callback_scheduled: 'callback_scheduled',
+    agent_answered: 'agent_reached',
+    wait_too_long_no_callback: 'wait_too_long_no_callback',
+    dial_no_answer: 'connection_failed',
+  };
+  const rawPreset = s.classified_outcome || '';
+  const mapped = (KNOWN_OUTCOMES.has(rawPreset as IrsCallOutcome) ? rawPreset : WEBHOOK_OUTCOME_MAP[rawPreset]) as IrsCallOutcome | undefined;
+  let outcome: IrsCallOutcome = mapped
+    ? mapped
     : classifyCallOutcome({
         transcript: s.concatenated_transcript,
         status: s.status,
-        disconnectionReason: (s as any).disconnection_reason,
-        durationSeconds: (s as any).hold_seconds,
+        durationSeconds: (s as any).hold_duration_seconds,
       });
   if (outcome === 'high_volume_rejected') {
     const reclassified = classifyCallOutcome({
       transcript: s.concatenated_transcript,
       status: s.status,
-      disconnectionReason: (s as any).disconnection_reason,
-      durationSeconds: (s as any).hold_seconds,
+      durationSeconds: (s as any).hold_duration_seconds,
     });
     if (reclassified === 'agent_premature_hangup') {
       console.warn(`[MOD-226] session ${sessionId} preset was high_volume_rejected but no canonical IRS phrase in transcript + our side ended call → re-classifying as agent_premature_hangup`);
