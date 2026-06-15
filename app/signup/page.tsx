@@ -94,10 +94,21 @@ export default function SignupPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h2 className="text-xl font-bold text-mt-dark mb-2">Thanks — your request is in</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              We review every new account so each customer is set up correctly for their use case (SBA, employment verification, insurance, or other). Expect to hear from us within one business day with login instructions.
+            <h2 className="text-xl font-bold text-mt-dark mb-2">Thanks — one quick step to activate</h2>
+            <p className="text-sm text-gray-600 mb-5">
+              To approve your account, we do a short intro call so we can set you up correctly for your use case (SBA, employment verification, insurance, or other). <strong className="text-mt-dark">Book your demo below</strong> — we approve and send login access right after.
             </p>
+            <a
+              href="https://meetings.hubspot.com/matt-moderntax/moderntax-intro"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center justify-center gap-2 w-full bg-mt-green text-white font-semibold rounded-lg px-6 py-3 hover:bg-emerald-600 transition-colors mb-4"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Book your demo →
+            </a>
             <p className="text-xs text-gray-500 mb-6">
               Questions? Email <a href="mailto:matt@moderntax.io" className="text-mt-green hover:underline">matt@moderntax.io</a> — Matthew Parker, founder.
             </p>

@@ -153,7 +153,7 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
           </span>
           <span className="inline-flex items-center gap-1">
             <svg className="w-3.5 h-3.5 text-mt-green" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
-            3 free trial pulls
+            Prepaid credits — save up to 60%
           </span>
         </div>
       </section>
@@ -178,7 +178,7 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
               <Feature>Auto-sent 8821s via Dropbox Sign</Feature>
               <Feature>Return Transcripts + Records of Account</Feature>
               <Feature>Compliance flag screening</Feature>
-              <Feature>3 free trial pulls</Feature>
+              <Feature>Prepaid credits — as low as $39.99/pull</Feature>
             </ul>
             <a
               href="mailto:matt@moderntax.io?subject=Start%20on%20Tier%20A%20(PAYG)"
@@ -560,8 +560,8 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
           <Faq q="Is the Cash-Flow Pack acceptable for SBA submission?">
             The pack is a worksheet, not a substitute for the underwriter&rsquo;s full credit memo. SBA expects the lender to verify all add-back assumptions; the pack just removes the data-entry step.
           </Faq>
-          <Faq q="What's included in the trial?">
-            3 free entity verifications across your team — applies to any tier on signup. After 3, billing kicks in at your tier&rsquo;s per-pull rate.
+          <Faq q="How does pricing work?">
+            Prepaid credits power every order. Load $1,000 and your rate drops to $59.99/pull (40% off); load $2,000 for $39.99/pull (60% off). Add a card, buy credits, and your whole team can order.
           </Faq>
         </div>
       </section>
@@ -570,7 +570,7 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
       <section className="bg-mt-green/10 border-y border-mt-green/30 py-16 text-center">
         <h2 className="text-3xl font-bold text-mt-dark">Ready to extend each loan?</h2>
         <p className="mt-3 text-gray-600 max-w-xl mx-auto">
-          15-minute call walks you through the right tier + add-ons for your loan volume. We&rsquo;ll set up a free trial in real time.
+          15-minute call walks you through the right tier + add-ons for your loan volume. We&rsquo;ll get your team ordering with credits in real time.
         </p>
         <div className="mt-6 flex gap-3 justify-center flex-wrap">
           <a

@@ -4,16 +4,17 @@
  * Sends daily operations summary to all admins covering ModernTax's full
  * cross-timezone business day:
  *
- *   START: 4 AM Pacific (= 7 AM Eastern) — earliest expert/processor active
- *   END:   7 PM Eastern (= 4 PM Pacific) — last east-coast workday minute
+ *   START: 4 AM Pacific — earliest west-coast expert/processor active
+ *   END:   the cron fire time (~7:30 PM Pacific) — after the west-coast
+ *          workday ends, so the FULL day's completions are captured. The
+ *          "completed today" queries are gte(businessDayStart) with no upper
+ *          bound, so the window automatically runs 4 AM PT → cron time.
  *
- * That's the "daily activity window" Matt cares about. Anything fired during
- * this 12-hour span counts toward today's summary; activity outside that
- * window (overnight UTC, weekends, etc.) doesn't pollute the numbers.
- *
- * Cron schedule: 23:00 UTC daily (vercel.json) — that's 7 PM ET in EDT,
- * 6 PM ET in EST. Fires right at-or-just-before the east-coast cutoff so
- * the email lands in admin inboxes at end of business.
+ * Cron schedule: 03:30 UTC daily (vercel.json) — that's 8:30 PM PDT in summer,
+ * 7:30 PM PST in winter, i.e. ALWAYS after 7 PM Pacific. (Was 23:00 UTC = 4 PM
+ * PT, which fired before the west-coast day ended and clipped late completions.)
+ * Date label + window anchor are Pacific and day-rollover safe (see
+ * lib/business-day.ts), so firing past UTC midnight still labels the correct day.
  *
  * GET /api/cron/admin-daily-summary
  */

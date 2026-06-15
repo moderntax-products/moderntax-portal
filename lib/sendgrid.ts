@@ -2299,7 +2299,7 @@ export async function sendSignupApprovedEmail(
   <li>Take the <a href="${tourUrl}" style="color:#00C48C;">5-minute interactive tour</a> — walks you through ordering transcripts, the compliance flow, and (if you're a manager) billing setup.</li>
 </ol>
 
-<p>Your account starts with <strong>$239.94 in free transcript credits</strong> for the team — enough for your first 3 IRS pulls at no cost.</p>
+<p>To place your first order, add a card and load prepaid credits — the more you load, the lower your per-pull rate ($59.99/pull at $1,000, or $39.99/pull at $2,000). You can do it right from the billing page.</p>
 
 <p>Questions? Reply to this email and it lands directly in my inbox.</p>
 
@@ -2319,7 +2319,7 @@ Your ModernTax account is approved. You've been added to ${clientName}.
 Sign in: ${loginUrl}
 Take the 5-minute tour: ${tourUrl}
 
-Your account starts with $239.94 in free transcript credits — enough for 3 free IRS pulls.
+To place your first order, add a card and load prepaid credits — $59.99/pull at $1,000 loaded, or $39.99/pull at $2,000. Do it right from the billing page.
 
 Reply with any questions.
 
@@ -2339,6 +2339,77 @@ matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
     });
   } catch (error) {
     console.error('Failed to send approval welcome email:', error);
+    throw error;
+  }
+}
+
+/**
+ * Sign-up demo-booking email (fired automatically at sign-up).
+ *
+ * New accounts land in 'pending' and must book an intro demo to get approved.
+ * This is the user-facing prompt with the HubSpot booking link — sent right
+ * after sign-up so the path to activation is in their inbox, not just on the
+ * post-signup screen.
+ */
+const DEMO_BOOKING_URL = 'https://meetings.hubspot.com/matt-moderntax/moderntax-intro';
+
+export async function sendSignupDemoBookingEmail(
+  toEmail: string,
+  recipientName: string,
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send demo-booking email');
+    return;
+  }
+  const subject = 'One step to activate your ModernTax account';
+
+  const content = `
+<p>Hi ${escapeHtml(recipientName) || 'there'},</p>
+
+<p>Thanks for signing up for ModernTax.</p>
+
+<p>One quick step before we switch on your access: we do a short intro call to make sure we set you up correctly for your use case, and to answer any questions on how ordering and the 8821 authorization flow work.</p>
+
+<p><strong>Book your demo below</strong> — right after the call, I approve your account and send your login details.</p>
+
+<p style="margin-top:18px;">
+  <a href="${DEMO_BOOKING_URL}" style="display:inline-block;background:#00C48C;color:#ffffff;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none;">Book your demo →</a>
+</p>
+
+<p style="font-size:14px;color:#1f2937;margin-top:22px;">
+  Looking forward to it,<br>
+  Matthew Parker<br>
+  <span style="color:#6b7280;font-size:12px;">Founder, ModernTax · matt@moderntax.io</span>
+</p>
+`.trim();
+
+  const html = createEmailTemplate('One step to activate', content, { text: 'Book your demo', url: DEMO_BOOKING_URL });
+
+  const text = `Hi ${recipientName || 'there'},
+
+Thanks for signing up for ModernTax.
+
+One quick step before we switch on your access: we do a short intro call to set you up correctly for your use case and answer any questions on ordering + the 8821 authorization flow.
+
+Book your demo: ${DEMO_BOOKING_URL}
+
+Right after the call, I approve your account and send your login details.
+
+Looking forward to it,
+Matthew Parker
+Founder, ModernTax · matt@moderntax.io`.trim();
+
+  try {
+    await sgMail.send({
+      to: toEmail,
+      from: { email: fromEmail, name: 'Matthew Parker, ModernTax' },
+      subject,
+      html,
+      text,
+      replyTo: 'matt@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send demo-booking email:', error);
     throw error;
   }
 }

@@ -346,6 +346,16 @@ export async function POST(request: NextRequest) {
       console.error('[signup] Failed to write pending-approval audit row:', auditErr);
     }
 
+    // Email the new user their path to activation: book the intro demo.
+    // Non-blocking — signup still succeeds if delivery fails (the post-signup
+    // screen shows the same booking CTA as a backstop).
+    try {
+      const { sendSignupDemoBookingEmail } = await import('@/lib/sendgrid');
+      await sendSignupDemoBookingEmail(email.trim().toLowerCase(), fullName.trim());
+    } catch (demoErr) {
+      console.error('[signup] Failed to send demo-booking email:', demoErr);
+    }
+
     // Notify admins via SendGrid — non-blocking so signup still succeeds
     // if email delivery fails. Best-effort; admin queue UI is the primary
     // surface, this is just a courtesy heads-up.
