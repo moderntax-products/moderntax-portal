@@ -216,6 +216,19 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
+      // Don't backfill noise: skip creating rows for Mercury test invoices or
+      // already-Cancelled invoices (they have no AR/revenue meaning and would
+      // clutter the dashboard). We still UPDATE existing linked rows above.
+      if (String(inv.invoiceNumber || '').startsWith('TEST-') || inv.status === 'Cancelled') {
+        clientReport.mercuryInvoices.push({
+          mercuryInvoiceId: inv.id, invoiceNumber: inv.invoiceNumber, amount: inv.amount,
+          status: inv.status, invoiceDate: inv.invoiceDate, dueDate: inv.dueDate,
+          moderntaxInvoiceId: null, action: 'skipped-error', error: 'skipped: test/cancelled, not created',
+        });
+        report.totals.skipped += 1;
+        continue;
+      }
+
       // Create a new invoice row mirroring Mercury
       const periodStart = inv.servicePeriodStartDate || inv.invoiceDate;
       const periodEnd   = inv.servicePeriodEndDate   || inv.invoiceDate;

@@ -51,17 +51,9 @@ export async function POST(request: NextRequest) {
       customer: customerId,
       // Save the card for future top-ups + as the required card-on-file.
       payment_intent_data: { setup_future_usage: 'off_session' },
-      line_items: [{
-        price_data: {
-          currency: 'usd',
-          unit_amount: Math.round(pack.amount * 100),
-          product_data: {
-            name: `ModernTax Credits — ${pack.label}`,
-            description: `Adds $${pack.amount.toLocaleString()} to your prepaid credit wallet and unlocks the $${pack.ratePerRequest}/request rate (${pack.discountPct}% off the $99.99 standard).`,
-          },
-        },
-        quantity: 1,
-      }],
+      // Reference the real Stripe catalog Price (SKU) — clean reporting +
+      // product-level analytics, and price changes don't need a code deploy.
+      line_items: [{ price: pack.stripePriceId, quantity: 1 }],
       success_url: `${baseUrl}/invoicing?credits=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/invoicing?credits=cancel`,
       metadata: {

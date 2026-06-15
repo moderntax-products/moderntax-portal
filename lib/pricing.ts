@@ -45,10 +45,11 @@ export interface CreditPack {
   ratePerRequest: number;  // per-request debit rate this purchase unlocks
   discountPct: number;     // off PRICE_STANDARD, for display
   label: string;
+  stripePriceId: string;   // real Stripe catalog Price (live), used at checkout
 }
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: 'credits-1000', amount: 1000, ratePerRequest: 59.99, discountPct: 40, label: '$1,000 credits — 40% off ($59.99/request)' },
-  { id: 'credits-2000', amount: 2000, ratePerRequest: 39.99, discountPct: 60, label: '$2,000 credits — 60% off ($39.99/request)' },
+  { id: 'credits-1000', amount: 1000, ratePerRequest: 59.99, discountPct: 40, label: '$1,000 credits — 40% off ($59.99/request)', stripePriceId: 'price_1ThYStC5CWw7JDiWy1A1VsBR' },
+  { id: 'credits-2000', amount: 2000, ratePerRequest: 39.99, discountPct: 60, label: '$2,000 credits — 60% off ($39.99/request)', stripePriceId: 'price_1ThYTGC5CWw7JDiWmANKLR6o' },
 ];
 
 export function getCreditPack(id: string): CreditPack | undefined {
