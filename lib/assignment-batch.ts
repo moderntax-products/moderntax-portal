@@ -26,6 +26,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generate8821PDF, buildDesigneeFromProfile, validateExpertDesigneeCreds } from './8821-pdf';
+import { slaDeadlineMs } from './expert-sla';
 
 export const BATCH_MIN_ENTITIES = 1;       // operationally we want 3-5, but allow 1+
 export const BATCH_MAX_ENTITIES = 8;       // hard upper bound — cognitive overload risk
@@ -253,7 +254,7 @@ export async function acceptBatch(
   // Any credentialed expert may accept. Load + validate the claimer's creds.
   const { data: expertProfile } = await admin
     .from('profiles')
-    .select('id, role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
+    .select('id, role, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code, iana_timezone')
     .eq('id', expertId)
     .single() as { data: any };
   if (!expertProfile || expertProfile.role !== 'expert') {
@@ -271,6 +272,12 @@ export async function acceptBatch(
   // rows back. This sets the accepting expert as the batch owner.
   const acceptedAt = new Date();
   const completionDeadline = new Date(acceptedAt.getTime() + COMPLETION_WINDOW_MS).toISOString();
+  // SLA clock starts NOW — when the expert accepts the expert-ready 8821 — not at
+  // assignment creation. 24 business hours (12h/day, weekdays) in the expert's tz.
+  const slaDeadlineIso = (() => {
+    const ms = slaDeadlineMs(acceptedAt.getTime(), 24, expertProfile.iana_timezone || undefined);
+    return ms ? new Date(ms).toISOString() : null;
+  })();
   const { data: claimedBatch } = await admin
     .from('assignment_batches')
     .update({
@@ -294,6 +301,7 @@ export async function acceptBatch(
       expert_id: expertId,
       status: 'assigned',
       expert_clock_started_at: acceptedAt.toISOString(),
+      sla_deadline: slaDeadlineIso,
     } as any)
     .eq('batch_id', batchId)
     .eq('status', 'pending_acceptance');
