@@ -78,7 +78,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
   const [downloading8821, setDownloading8821] = useState(false);
 
   const handleDownload8821 = async () => {
-    if (!entity.admin_uploaded_8821_url) return;
+    if (!entity.admin_uploaded_8821_url && !entity.signed_8821_url) return;
     setDownloading8821(true);
     setDownloadError(null);
     try {
@@ -187,7 +187,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
           {/* Experts only ever get the ADMIN-prepared 8821 (their designee +
               re-wet-signed). Until the admin posts it, show a clear pending
               state instead of a download button to a wrong/e-signed form. */}
-          {entity.admin_uploaded_8821_url ? (
+          {(entity.admin_uploaded_8821_url || entity.signed_8821_url) ? (
             <button
               onClick={handleDownload8821}
               disabled={downloading8821}

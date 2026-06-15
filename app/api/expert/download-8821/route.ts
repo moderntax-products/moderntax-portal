@@ -49,23 +49,48 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Experts download ONLY the admin-prepared 8821 (admin_uploaded_8821_url) —
-    // the copy an admin posts with the expert's correct designee credentials,
-    // re-wet-signed (not the DocuSign-flattened processor original). Serving the
-    // processor's original / an e-signed copy caused experts to reject the work
-    // and skip IRS calls — Joel Abernathy missed a scheduled IRS callback this
-    // way (2026-06-03). If the admin copy isn't posted yet, return a clear
-    // "pending" state rather than handing over the wrong form.
+    // The expert is served the 8821 copy that names THEIR CAF as a designee —
+    // serving a wrong-designee form (the processor's e-signed original, or
+    // another expert's copy) made Joel reject work + miss an IRS callback
+    // (2026-06-03). Prefer the admin-posted expert copy; otherwise AUTO-RECOGNIZE
+    // a signed_8821_url whose designee matches THIS expert's CAF (the Clearfirm
+    // auto-flow lands the expert-credentialed form there), and cache the approval
+    // so we don't re-parse on every download.
     const { data: entity } = await (adminSupabase
       .from('request_entities') as any)
-      .select('admin_uploaded_8821_url, entity_name')
+      .select('admin_uploaded_8821_url, signed_8821_url, entity_name')
       .eq('id', entityId)
-      .single() as { data: { admin_uploaded_8821_url: string | null; entity_name: string } | null };
+      .single() as { data: { admin_uploaded_8821_url: string | null; signed_8821_url: string | null; entity_name: string } | null };
 
-    if (!entity || !entity.admin_uploaded_8821_url) {
+    if (!entity) {
+      return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+    }
+
+    let downloadPath = entity.admin_uploaded_8821_url;
+
+    if (!downloadPath && entity.signed_8821_url) {
+      const { data: me } = await adminSupabase
+        .from('profiles').select('caf_number').eq('id', user.id).maybeSingle() as { data: { caf_number: string | null } | null };
+      if (me?.caf_number) {
+        try {
+          const dl = await adminSupabase.storage.from('uploads').download(entity.signed_8821_url);
+          if (dl.data) {
+            const { verify8821Designee } = await import('@/lib/verify-8821-designee');
+            const check = await verify8821Designee(Buffer.from(await dl.data.arrayBuffer()), me.caf_number);
+            if (check.ok) {
+              downloadPath = entity.signed_8821_url;
+              await (adminSupabase.from('request_entities') as any)
+                .update({ admin_uploaded_8821_url: entity.signed_8821_url }).eq('id', entityId);
+            }
+          }
+        } catch (e) { console.error('[download-8821] auto-recognize failed:', e); }
+      }
+    }
+
+    if (!downloadPath) {
       return NextResponse.json(
         {
-          error: 'Your 8821 is being prepared by an admin and isn’t ready to download yet. It will appear here once the admin posts the expert copy with your designee credentials.',
+          error: 'Your 8821 is being prepared by an admin and isn’t ready to download yet. It will appear here once the expert copy with your designee credentials is posted.',
           code: 'admin_8821_pending',
         },
         { status: 409 }
@@ -75,7 +100,7 @@ export async function GET(request: NextRequest) {
     // Generate a signed URL (valid for 1 hour)
     const { data: signedUrlData, error: signError } = await adminSupabase.storage
       .from('uploads')
-      .createSignedUrl(entity.admin_uploaded_8821_url, 3600);
+      .createSignedUrl(downloadPath, 3600);
 
     if (signError || !signedUrlData?.signedUrl) {
       console.error('Failed to create signed URL:', signError);
@@ -96,7 +121,7 @@ export async function GET(request: NextRequest) {
         resourceId: entityId,
         details: {
           file_kind: 'admin_uploaded_8821',
-          file_path: entity.admin_uploaded_8821_url,
+          file_path: downloadPath,
           entity_name: entity.entity_name,
           assignment_id: assignment.id,
           role: 'expert',

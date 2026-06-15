@@ -192,6 +192,35 @@ export async function POST(request: NextRequest) {
 
     // Upload file to Supabase storage
     const buffer = Buffer.from(await file.arrayBuffer());
+
+    // CAF-match guardrail: an admin-override upload IS the expert copy, so it
+    // must name the assigned expert's CAF as a designee. Reject a wrong-designee
+    // form before it ever reaches the expert — the failure that made Joel
+    // Abernathy reject work + miss an IRS callback (2026-06-03).
+    if (writesAdminOverride) {
+      const { data: asn } = await adminSupabase
+        .from('expert_assignments')
+        .select('profiles!expert_assignments_expert_id_fkey(full_name, caf_number)')
+        .eq('entity_id', entityId)
+        .in('status', ['assigned', 'in_progress'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: any };
+      const expert = asn?.profiles;
+      if (expert?.caf_number) {
+        const { verify8821Designee } = await import('@/lib/verify-8821-designee');
+        const check = await verify8821Designee(buffer, expert.caf_number);
+        if (!check.ok) {
+          return NextResponse.json({
+            error: `This 8821 names designee CAF(s) [${check.designeeCafs.join(', ') || 'none found'}], which don't include the assigned expert ${expert.full_name}'s CAF ${expert.caf_number}. Re-prepare the 8821 with their credentials before uploading.`,
+            code: 'designee_caf_mismatch',
+            designeeCafs: check.designeeCafs,
+            expertCaf: expert.caf_number,
+          }, { status: 422 });
+        }
+      }
+    }
+
     const suffix = writesAdminOverride ? 'admin-override.pdf' : 'signed-8821.pdf';
     const filePath = `8821/${entityId}/${Date.now()}-${suffix}`;
 
