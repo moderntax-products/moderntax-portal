@@ -22,6 +22,7 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
 import { createBatch, BATCH_MAX_ENTITIES } from '@/lib/assignment-batch';
 import { validateExpertDesigneeCreds } from '@/lib/8821-pdf';
+import { extractDesigneeCafs, normalizeCaf } from '@/lib/verify-8821-designee';
 
 export const maxDuration = 60;
 export const runtime = 'nodejs';
@@ -73,7 +74,7 @@ export async function GET(request: NextRequest) {
     .in('entity_id', ready.map(e => e.id))
     .in('status', ['pending_acceptance', 'assigned', 'in_progress']);
   const blockedIds = new Set((activeAssns || []).map((a: any) => a.entity_id));
-  const pool: PoolEntity[] = ready
+  let pool: PoolEntity[] = ready
     .filter(e => !blockedIds.has(e.id))
     .map(e => ({
       id: e.id,
@@ -93,6 +94,69 @@ export async function GET(request: NextRequest) {
     .from('profiles')
     .select('id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
     .eq('role', 'expert') as { data: any[] | null };
+
+  // ─── Designee-based auto-assignment (deterministic, no manual work) ──────
+  // The 8821 names the expert via their CAF as a designee — so assign straight
+  // to that expert. Runs BEFORE the busy/round-robin logic so a designated
+  // expert receives their entity even if they already have a batch. ModernTax's
+  // shared master CAF is excluded (it's a designee on every form, not a match).
+  const MASTER_CAF = normalizeCaf('0316-30210R');
+  const cafToExpert = new Map<string, any>();
+  for (const ex of experts || []) {
+    const n = normalizeCaf(ex.caf_number);
+    if (n && n !== MASTER_CAF) cafToExpert.set(n, ex);
+  }
+  const signedUrlById = new Map<string, string>(
+    ready.filter(e => e.signed_8821_url).map(e => [e.id, e.signed_8821_url as string]),
+  );
+  const designeeByExpert = new Map<string, { expert: any; entities: PoolEntity[] }>();
+  if (cafToExpert.size > 0) {
+    for (const e of pool) {
+      const url = signedUrlById.get(e.id);
+      if (!url) continue; // W2/API entities have no 8821 to read — leave for round-robin
+      try {
+        const dl = await admin.storage.from('uploads').download(url);
+        if (!dl.data) continue;
+        const cafs = await extractDesigneeCafs(Buffer.from(await dl.data.arrayBuffer()));
+        const matched = cafs.map((c: string) => cafToExpert.get(normalizeCaf(c))).find(Boolean);
+        if (matched) {
+          const slot = designeeByExpert.get(matched.id) || { expert: matched, entities: [] };
+          slot.entities.push(e);
+          designeeByExpert.set(matched.id, slot);
+        }
+      } catch (err) {
+        console.error('[auto-assign] designee parse failed for', e.id, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+  const designeeAssignedIds = new Set<string>();
+  let designeeAssignedCount = 0;
+  for (const { expert, entities } of designeeByExpert.values()) {
+    for (let i = 0; i < entities.length; i += BATCH_MAX_ENTITIES) {
+      const chunk = entities.slice(i, i + BATCH_MAX_ENTITIES);
+      const result = await createBatch(admin, {
+        expertId: expert.id,
+        entityIds: chunk.map(c => c.id),
+        offeredBy: expert.id,
+        notes: 'Auto-assigned by 8821 designee',
+      });
+      if (result.ok) {
+        chunk.forEach(c => designeeAssignedIds.add(c.id));
+        designeeAssignedCount += chunk.length;
+        try {
+          const { sendExpertAssignmentNotification } = await import('@/lib/sendgrid');
+          await sendExpertAssignmentNotification(expert.email, chunk.map(c => c.entity_name), chunk.length);
+        } catch (notifyErr) {
+          console.warn('[auto-assign] designee notification failed (non-fatal):', notifyErr);
+        }
+      } else {
+        console.error('[auto-assign] designee createBatch failed for', expert.email, ':', result.error);
+      }
+    }
+  }
+  // Designee-assigned entities leave the pool before the round-robin.
+  pool = pool.filter(e => !designeeAssignedIds.has(e.id));
+  skipped.designee_assigned = designeeAssignedCount;
 
   const credsComplete = (experts || []).filter(e => validateExpertDesigneeCreds(e).length === 0);
   skipped.experts_incomplete_creds = (experts || []).length - credsComplete.length;
