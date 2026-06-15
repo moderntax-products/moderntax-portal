@@ -47,8 +47,9 @@ export async function GET(request: NextRequest) {
 
   // 1. Active, undelivered entities, joined to their request + client + processor.
   const { data: entities, error } = await (admin.from('request_entities') as any)
-    .select('id, entity_name, status, updated_at, request_id, requests!inner(id, loan_number, created_at, clients(name), profiles!requests_requested_by_fkey(full_name, email))')
+    .select('id, entity_name, status, updated_at, request_id, requests!inner(id, status, loan_number, created_at, clients(name), profiles!requests_requested_by_fkey(full_name, email))')
     .in('status', ACTIVE_IRS_STATUSES)
+    .neq('requests.status', 'cancelled')
     .limit(2000) as { data: any[] | null; error: any };
   if (error) return NextResponse.json({ error: 'Query failed', detail: error.message }, { status: 500 });
 
@@ -62,11 +63,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, overdue: 0, message: 'No orders past the 24h delivery threshold.' });
   }
 
-  // 2. Latest internal note per overdue entity (freshest IRS status).
+  // 2. Latest IRS-STATUS note per overdue entity. Only status-bearing kinds are
+  //    relayable. NEVER 'instruction' (internal order directions like "request
+  //    ROA + 941 for 2024"), nor 'question'/'answer' (internal Q&A) — relaying
+  //    those to the processor leaks internal workflow dressed up as IRS status.
   const ids = overdue.map((e) => e.id);
+  const RELAYABLE_NOTE_KINDS = ['status_update', 'note'];
   const { data: notes } = await (admin.from('entity_notes' as any) as any)
     .select('entity_id, author_role, body, kind, created_at')
     .in('entity_id', ids)
+    .in('kind', RELAYABLE_NOTE_KINDS)
     .order('created_at', { ascending: false }) as { data: any[] | null };
   const latestNoteByEntity = new Map<string, any>();
   for (const n of notes || []) {

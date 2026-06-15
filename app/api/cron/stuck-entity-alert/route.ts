@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
       .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', '8821_sent')
       .not('requests.clients.slug', 'ilike', '%-sandbox')
+      .neq('requests.status', 'cancelled')
       .lt('updated_at', fiveDaysAgo) as { data: any[] | null; error: any };
 
     if (err1) console.error('Error querying unsigned 8821s:', err1.message);
@@ -61,6 +62,7 @@ export async function GET(request: NextRequest) {
       .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', 'irs_queue')
       .not('requests.clients.slug', 'ilike', '%-sandbox')
+      .neq('requests.status', 'cancelled')
       .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
     if (err2) console.error('Error querying irs_queue entities:', err2.message);
@@ -71,6 +73,7 @@ export async function GET(request: NextRequest) {
       .select('id, entity_name, status, updated_at, request_id, requests!inner(loan_number, clients!inner(slug))')
       .eq('status', 'processing')
       .not('requests.clients.slug', 'ilike', '%-sandbox')
+      .neq('requests.status', 'cancelled')
       .lt('updated_at', fortyEightHoursAgo) as { data: any[] | null; error: any };
 
     if (err3) console.error('Error querying processing entities:', err3.message);
