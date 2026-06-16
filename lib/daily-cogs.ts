@@ -54,11 +54,12 @@ const FIXED_MONTHLY = {
   vercel_pro: 20,          // 1 seat
   supabase_pro: 25,        // Pro tier
   github_org: 4,           // Free org + a Pro seat amortized
-  dropbox_sign_plan: 75,   // Mid-tier API plan; per-signature on top
+  dropbox_sign_plan: 60,   // Flat $60/mo plan (signatures included) — own line
   quickbooks: 70,          // Online Essentials
   domain: 2,               // moderntax.io annual ÷ 12
-  // Note: SendGrid base plan ($15-90) is folded into the per-email cost below
-  //  since their pricing is usage-tiered. Net daily fixed = ~$196 ÷ 30 = ~$6.53/day.
+  sendgrid_plan: 34.95,    // SendGrid flat monthly plan (amortized on its own line)
+  claude_max_plus: 200,    // Claude Max Plus base — usage top-ups billed on top
+  faxplus_plan: 34.99,     // Fax.plus flat monthly plan (IRS 8821 fax delivery)
 } as const;
 
 /** Per-unit usage rates (update when vendor pricing changes). */
@@ -91,63 +92,43 @@ export async function computeDailyCogs(
     (FIXED_MONTHLY.vercel_pro +
       FIXED_MONTHLY.supabase_pro +
       FIXED_MONTHLY.github_org +
-      FIXED_MONTHLY.dropbox_sign_plan +
       FIXED_MONTHLY.quickbooks +
       FIXED_MONTHLY.domain) / 30;
   items.push({
     category: 'infrastructure',
     label: 'Infrastructure (fixed amortized)',
     amount: round2(dailyFixed),
-    detail: 'Vercel Pro + Supabase Pro + GitHub + Dropbox Sign base + QuickBooks + domain, monthly ÷ 30',
+    detail: 'Vercel Pro + Supabase Pro + GitHub + QuickBooks + domain, monthly ÷ 30',
   });
 
-  // ─── 2. Email (SendGrid usage) ───────────────────────────────────────────
-  // Until SendGrid event webhook is plumbed, we approximate by counting
-  // every email-sending audit log event today. If none, estimate from
-  // completions × ~2 emails (admin + customer per completion).
-  try {
-    const { count: emailCount } = await supabase
-      .from('sendgrid_events')
-      .select('*', { count: 'exact', head: true })
-      .eq('event', 'processed')
-      .gte('created_at', dayStartUtc)
-      .lt('created_at', dayEndUtc);
-    const emails = emailCount || 0;
-    const emailCost = emails * UNIT_RATES.sendgrid_per_email;
-    items.push({
-      category: 'email',
-      label: 'SendGrid (transactional emails)',
-      amount: round2(emailCost),
-      detail: emails > 0
-        ? `${emails} emails × $${UNIT_RATES.sendgrid_per_email.toFixed(3)}/email`
-        : 'No event webhook telemetry yet — estimate $0',
-    });
-    if (emails === 0) warnings.push('SendGrid event webhook not wired — email cost shown as $0');
-  } catch (err) {
-    items.push({ category: 'email', label: 'SendGrid', amount: 0, detail: '(query failed)' });
-    warnings.push(`Email cost: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
+  // ─── 2. Email (SendGrid) ─────────────────────────────────────────────────
+  // SendGrid is a flat $34.95/month plan (transactional volume is within it),
+  // so book it as real amortized cost — not a usage estimate that read $0
+  // without the (unwired) event webhook.
+  items.push({
+    category: 'email',
+    label: 'SendGrid (transactional emails)',
+    amount: round2(FIXED_MONTHLY.sendgrid_plan / 30),
+    detail: `SendGrid plan $${FIXED_MONTHLY.sendgrid_plan.toFixed(2)}/mo ÷ 30 (flat; volume included)`,
+  });
 
-  // ─── 3. E-sign (Dropbox Sign per-signature) ──────────────────────────────
-  // Counts request_entities where signature_id was first populated today.
-  try {
-    const { data: signedToday } = await supabase
-      .from('request_entities')
-      .select('id, signature_created_at')
-      .gte('signature_created_at', dayStartUtc)
-      .lt('signature_created_at', dayEndUtc)
-      .not('signature_id', 'is', null);
-    const signs = signedToday?.length || 0;
-    items.push({
-      category: 'esign',
-      label: 'Dropbox Sign (per-signature)',
-      amount: round2(signs * UNIT_RATES.dropbox_sign_per_signature),
-      detail: `${signs} 8821 e-signatures × $${UNIT_RATES.dropbox_sign_per_signature.toFixed(2)}/sig (on top of monthly plan)`,
-    });
-  } catch (err) {
-    items.push({ category: 'esign', label: 'Dropbox Sign', amount: 0, detail: '(query failed)' });
-    warnings.push(`E-sign cost: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
+  // ─── 3. E-sign (Dropbox Sign) ────────────────────────────────────────────
+  // Flat $60/month plan (signatures included), so book it amortized — not a
+  // per-signature charge on top.
+  items.push({
+    category: 'esign',
+    label: 'Dropbox Sign (e-signatures)',
+    amount: round2(FIXED_MONTHLY.dropbox_sign_plan / 30),
+    detail: `Dropbox Sign plan $${FIXED_MONTHLY.dropbox_sign_plan.toFixed(2)}/mo ÷ 30 (flat; signatures included)`,
+  });
+
+  // ─── 3b. Fax (Fax.plus — IRS 8821 fax delivery) ──────────────────────────
+  items.push({
+    category: 'esign',
+    label: 'Fax.plus (IRS fax delivery)',
+    amount: round2(FIXED_MONTHLY.faxplus_plan / 30),
+    detail: `Fax.plus plan $${FIXED_MONTHLY.faxplus_plan.toFixed(2)}/mo ÷ 30 (flat; faxes included)`,
+  });
 
   // ─── 4. Voice AI (Bland + Retell IRS calls) ──────────────────────────────
   try {
@@ -175,35 +156,16 @@ export async function computeDailyCogs(
     warnings.push(`Voice cost: ${err instanceof Error ? err.message : 'unknown'}`);
   }
 
-  // ─── 5. AI extraction (Anthropic — Convert-8821 + processor-AI) ──────────
-  // No per-call audit logging yet; approximate from new requests today (each
-  // potentially triggers ≤1 conversion + processor questions).
-  // Conservative placeholder: zero unless ANTHROPIC_API_KEY is configured.
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const { count: newReqs } = await supabase
-        .from('requests')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', dayStartUtc)
-        .lt('created_at', dayEndUtc);
-      const estimated = (newReqs || 0) * UNIT_RATES.anthropic_per_extraction;
-      items.push({
-        category: 'ai_extraction',
-        label: 'Anthropic (vision + processor-AI)',
-        amount: round2(estimated),
-        detail: `~${newReqs || 0} potential extractions × $${UNIT_RATES.anthropic_per_extraction.toFixed(2)} (estimate — no per-call telemetry yet)`,
-      });
-    } catch {
-      items.push({ category: 'ai_extraction', label: 'Anthropic', amount: 0, detail: '(estimate unavailable)' });
-    }
-  } else {
-    items.push({
-      category: 'ai_extraction',
-      label: 'Anthropic (vision + processor-AI)',
-      amount: 0,
-      detail: 'API key not configured',
-    });
-  }
+  // ─── 5. AI (Claude — vision on convert-8821 + processor-AI) ──────────────
+  // Claude Max Plus base plan ($200/mo) booked amortized. Usage top-ups are
+  // billed on top but aren't metered here yet — flagged as the one telemetry gap.
+  items.push({
+    category: 'ai_extraction',
+    label: 'Claude (vision + processor-AI)',
+    amount: round2(FIXED_MONTHLY.claude_max_plus / 30),
+    detail: `Claude Max Plus $${FIXED_MONTHLY.claude_max_plus.toFixed(2)}/mo ÷ 30 (base; usage top-ups billed on top, not yet metered)`,
+  });
+  warnings.push('Claude usage top-ups (beyond the $200/mo base) are not metered — AI line is base-only');
 
   // ─── 6. Payment rails (Stripe + Mercury, % of revenue) ───────────────────
   // We don't yet split by payment method per invoice; approximate as a
