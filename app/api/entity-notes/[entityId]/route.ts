@@ -27,9 +27,13 @@ export const dynamic = 'force-dynamic';
 
 interface PageProps { params: Promise<{ entityId: string }> }
 
-const VALID_KINDS = ['note', 'instruction', 'status_update', 'question', 'answer'];
+// 'support' = processor-raised customer-service ticket (and admin replies to
+// it). Routed to/from the CS inbox rather than the assigned expert — see
+// notifyOpposite. The DB CHECK constraint is widened to match in
+// supabase/migration-entity-notes-support.sql.
+const VALID_KINDS = ['note', 'instruction', 'status_update', 'question', 'answer', 'support'];
 
-export async function GET(_request: NextRequest, { params }: PageProps) {
+export async function GET(request: NextRequest, { params }: PageProps) {
   try {
     const cookieStore = await cookies();
     const sb = createServerRouteClient(cookieStore);
@@ -64,9 +68,17 @@ export async function GET(_request: NextRequest, { params }: PageProps) {
       }
     }
 
-    const { data, error } = await (admin.from('entity_notes' as any) as any)
+    // Optional ?kind= filter. The processor-facing SupportTicketPanel passes
+    // ?kind=support so it ONLY ever loads support-ticket notes — never the
+    // admin↔expert instruction/status chatter on the same entity.
+    const kindParam = request.nextUrl.searchParams.get('kind');
+    const kindFilter = kindParam && VALID_KINDS.includes(kindParam) ? kindParam : null;
+
+    let listQuery = (admin.from('entity_notes' as any) as any)
       .select('id, author_id, author_role, author_name, body, kind, created_at')
-      .eq('entity_id', entityId)
+      .eq('entity_id', entityId);
+    if (kindFilter) listQuery = listQuery.eq('kind', kindFilter);
+    const { data, error } = await listQuery
       // 2026-05-28 Matt — most recent at the top. Reverse-chrono matches
       // how everyone scans the thread: the latest status_update / answer
       // / question is what you care about, not the original intake note.
@@ -238,19 +250,31 @@ async function notifyOpposite(
 
   const expertEmail = assn?.profiles?.email || null;
   const expertName  = assn?.profiles?.full_name || 'Expert';
-  // Originating processor identity is still computed for context but no
-  // longer used as a recipient — 2026-05-28 directive sends expert notes
-  // only to admin, and processor/manager notes still route directly to
-  // the expert (no processor recipient needed in that direction either).
-  // Kept commented for documentation; remove the lookup once we're sure
-  // no future routing needs it.
-  // const processorEmail = ent.requests?.profiles?.email || null;
-  // const processorName  = ent.requests?.profiles?.full_name || 'Processor';
+  // Originating processor (request.requested_by) — the customer-service
+  // counterpart for 'support' tickets: a processor raises one and the admin
+  // reply goes back here.
+  const processorEmail = ent.requests?.profiles?.email || null;
+  const processorName  = ent.requests?.profiles?.full_name || 'there';
+
+  // Customer-service inbox for processor-raised support tickets.
+  const SUPPORT_INBOX = 'support@moderntax.io';
+  const isSupport = kind === 'support';
 
   let toEmail: string | null;
   let toName: string;
   const ccEmails: string[] = [];
-  if (authorRole === 'admin') {
+  if (isSupport && (authorRole === 'processor' || authorRole === 'manager')) {
+    // Processor-raised customer-service ticket → CS inbox (NOT the expert),
+    // CC Matt so it can't be missed. This is the repurposed channel.
+    toEmail = SUPPORT_INBOX;
+    toName = 'ModernTax Support';
+    ccEmails.push('matt@moderntax.io');
+  } else if (isSupport && authorRole === 'admin') {
+    // Admin replying to a support ticket → back to the originating processor.
+    toEmail = processorEmail;
+    toName = processorName;
+    ccEmails.push('matt@moderntax.io');
+  } else if (authorRole === 'admin') {
     toEmail = expertEmail;
     toName = expertName;
   } else if (authorRole === 'expert') {
@@ -271,10 +295,21 @@ async function notifyOpposite(
   }
   if (!toEmail) return;
 
-  // Portal link: deep-link to whichever surface the recipient uses
-  const portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager')
-    ? 'https://portal.moderntax.io/expert'
-    : `https://portal.moderntax.io/request/${ent.requests?.id || ''}`;
+  // Portal link: deep-link to whichever surface the recipient uses.
+  // Support tickets always land on the request page (processor view) for the
+  // processor and on the admin request page for the admin.
+  const adminRequestLink = `https://portal.moderntax.io/admin/requests/${ent.requests?.id || ''}`;
+  const processorRequestLink = `https://portal.moderntax.io/request/${ent.requests?.id || ''}`;
+  let portalLink: string;
+  if (isSupport) {
+    // Processor raised it → admin/CS opens the admin request page; admin
+    // replied → processor opens their request page.
+    portalLink = (authorRole === 'processor' || authorRole === 'manager') ? adminRequestLink : processorRequestLink;
+  } else {
+    portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager')
+      ? 'https://portal.moderntax.io/expert'
+      : processorRequestLink;
+  }
 
   // Anonymize cross-org identities for note notifications.
   // Driver: 2026-05-28 Matt — note-by-note evolution:
@@ -291,14 +326,37 @@ async function notifyOpposite(
   const clientName = ent.requests?.clients?.name || 'Client';
   let displayAuthorName: string;
   let displayRoleSuffix: string;
-  if (authorRole === 'processor' || authorRole === 'manager') {
-    displayAuthorName = clientName;
-    displayRoleSuffix = '';
-  } else {
+  let subject: string;
+  let intro: string;       // sentence describing what happened
+  let linkLabel: string;   // call-to-action on the portal link
+  if (isSupport && (authorRole === 'processor' || authorRole === 'manager')) {
+    // CS ticket → admin sees the real customer identity (not masked).
     displayAuthorName = authorName;
-    displayRoleSuffix = ` (${authorRole})`;
+    displayRoleSuffix = ` (${clientName})`;
+    subject = `[Support · ${ent.entity_name}] ${authorName} — ${clientName}`;
+    intro = `raised a customer-service request on <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (${ent.requests.loan_number})` : ''}`;
+    linkLabel = 'Open the ticket in the admin portal';
+  } else if (isSupport && authorRole === 'admin') {
+    // CS reply → the customer sees "ModernTax Support", not an individual.
+    displayAuthorName = 'ModernTax Support';
+    displayRoleSuffix = '';
+    subject = `[Support reply · ${ent.entity_name}] ModernTax Support`;
+    intro = `replied to your support request on <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (${ent.requests.loan_number})` : ''}`;
+    linkLabel = 'View your request';
+  } else {
+    if (authorRole === 'processor' || authorRole === 'manager') {
+      displayAuthorName = clientName;
+      displayRoleSuffix = '';
+    } else {
+      displayAuthorName = authorName;
+      displayRoleSuffix = ` (${authorRole})`;
+    }
+    subject = `[Note: ${ent.entity_name}] ${displayAuthorName} posted${kind !== 'note' ? ` (${kind})` : ''}`;
+    intro = `added a ${kind === 'note' ? 'note' : `<em>${kind}</em>`} to <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}`;
+    linkLabel = 'Reply on the entity record';
   }
-  const subject = `[Note: ${ent.entity_name}] ${displayAuthorName} posted${kind !== 'note' ? ` (${kind})` : ''}`;
+  // Plain-text intro mirrors the HTML one without tags.
+  const introText = intro.replace(/<[^>]+>/g, '');
 
   await sgMail.send({
     to: toEmail,
@@ -306,20 +364,19 @@ async function notifyOpposite(
     from: { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' },
     subject,
     text:
-`${displayAuthorName}${displayRoleSuffix} just added a note to ${ent.entity_name}${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:
+`${displayAuthorName}${displayRoleSuffix} ${introText}:
 
 ${body}
 
-Type: ${kind}
-Reply on the entity record: ${portalLink}
+${linkLabel}: ${portalLink}
 
 — ModernTax Portal`,
     html: `
 <div style="font-family:-apple-system,sans-serif;max-width:600px;line-height:1.5;color:#1a2845;">
   <p>Hi ${toName.split(' ')[0]},</p>
-  <p><strong>${displayAuthorName}</strong> just added a ${kind === 'note' ? 'note' : `<em>${kind}</em>`} to <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (loan ${ent.requests.loan_number})` : ''}:</p>
+  <p><strong>${displayAuthorName}</strong>${displayRoleSuffix} ${intro}:</p>
   <blockquote style="margin:12px 0;padding:12px 16px;background:#f3f4f6;border-left:3px solid #295c9e;color:#1f2937;white-space:pre-wrap;">${body.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]!))}</blockquote>
-  <p><a href="${portalLink}" style="color:#295c9e;font-weight:600;">Reply on the entity record →</a></p>
+  <p><a href="${portalLink}" style="color:#295c9e;font-weight:600;">${linkLabel} →</a></p>
 </div>`,
   });
 }

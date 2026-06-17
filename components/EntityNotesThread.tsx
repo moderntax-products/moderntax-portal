@@ -19,10 +19,10 @@ import { useEffect, useState, useCallback } from 'react';
 interface Note {
   id: string;
   author_id: string;
-  author_role: 'admin' | 'expert';
+  author_role: 'admin' | 'expert' | 'processor' | 'manager';
   author_name: string;
   body: string;
-  kind: 'note' | 'instruction' | 'status_update' | 'question' | 'answer';
+  kind: 'note' | 'instruction' | 'status_update' | 'question' | 'answer' | 'support';
   created_at: string;
 }
 
@@ -40,6 +40,8 @@ const KIND_OPTIONS: { value: Note['kind']; label: string }[] = [
   { value: 'status_update', label: 'Status update' },
   { value: 'question',      label: 'Question' },
   { value: 'answer',        label: 'Answer' },
+  // Support reply → routes to the processor/customer (not the expert).
+  { value: 'support',       label: 'Support reply (→ customer)' },
 ];
 
 const KIND_BADGE: Record<Note['kind'], string> = {
@@ -48,11 +50,14 @@ const KIND_BADGE: Record<Note['kind'], string> = {
   status_update: 'bg-blue-100 text-blue-900',
   question:      'bg-violet-100 text-violet-900',
   answer:        'bg-emerald-100 text-emerald-900',
+  support:       'bg-rose-100 text-rose-900',
 };
 
 const ROLE_BADGE: Record<Note['author_role'], string> = {
-  admin:  'bg-indigo-100 text-indigo-900',
-  expert: 'bg-emerald-100 text-emerald-900',
+  admin:    'bg-indigo-100 text-indigo-900',
+  expert:   'bg-emerald-100 text-emerald-900',
+  processor:'bg-rose-100 text-rose-900',
+  manager:  'bg-rose-100 text-rose-900',
 };
 
 export function EntityNotesThread({ entityId, canPost = true, viewerRole = 'admin' }: Props) {

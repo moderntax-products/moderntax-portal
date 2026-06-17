@@ -8,6 +8,7 @@ import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
+import { SupportTicketPanel } from '@/components/SupportTicketPanel';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
@@ -459,6 +460,9 @@ export default async function RequestDetailPage({ params }: Props) {
                         </div>
                       );
                     })()}
+
+                    {/* Customer-service channel — processor ↔ ModernTax Support */}
+                    <SupportTicketPanel entityId={entity.id} entityName={entity.entity_name} />
                   </div>
                 ))}
               </div>
