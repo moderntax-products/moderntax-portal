@@ -358,10 +358,19 @@ async function notifyOpposite(
   // Plain-text intro mirrors the HTML one without tags.
   const introText = intro.replace(/<[^>]+>/g, '');
 
+  // Sender: support tickets send from active-accounts@moderntax.io — the
+  // established deliverable sender for all the app's transactional mail — so
+  // they clear the support@ group's posting filters and don't get rejected
+  // as an unknown no-reply@ sender. Other note kinds keep the historical
+  // no-reply@ "ModernTax Portal" identity.
+  const fromIdentity = isSupport
+    ? { email: 'active-accounts@moderntax.io', name: 'ModernTax Support' }
+    : { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' };
+
   await sgMail.send({
     to: toEmail,
     cc: ccEmails.length > 0 ? ccEmails : undefined,
-    from: { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' },
+    from: fromIdentity,
     subject,
     text:
 `${displayAuthorName}${displayRoleSuffix} ${introText}:
