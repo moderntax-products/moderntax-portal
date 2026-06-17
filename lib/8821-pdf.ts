@@ -208,26 +208,33 @@ function getSection3Individual(years: string): Section3Row[] {
 }
 
 function getSection3Business(years: string): Section3Row[] {
-  // CRITICAL: column C (years) is a SINGLE-LINE field, 128pt wide ×
-  // 12pt tall. Anything past ~21 chars truncates and the IRS rejects
-  // the form because the year range is unclear (Joel Abernathy
-  // 2026-05-26 — j&j mechanical 8821 showed "2022-20" because we'd
-  // stuffed "1st, 2nd, 3rd, 4th quarters\n2022, 2023, 2024" into a
-  // single-line cell that can only render the first line).
+  // Every Section 3 cell (type/form/year/specific) is a SINGLE-LINE field,
+  // ~12pt tall, so values must render on ONE line. Two failure modes have
+  // bitten us here, both fixed:
   //
-  // Fix: drop the quarters-prefix line entirely. IRS already knows
-  // 941 is quarterly from column B ("Form Number: 941/943/944/..."),
-  // so saying "1st, 2nd, 3rd, 4th quarters" in column C is redundant
-  // padding that breaks the years rendering. Now just the years list,
-  // which fits the cell at standard font size.
+  //  1. Column C (years), 128pt wide — anything past ~21 chars truncates and
+  //     the IRS rejects the form (Joel Abernathy 2026-05-26, j&j mechanical
+  //     showed "2022-20"). Fixed by dropping the redundant quarters prefix.
+  //
+  //  2. Column B (form numbers), 130pt wide — the withholding/excise row lists
+  //     8 form numbers (941/943/944/945/6672/720/8804/CIV PEN, 37 chars). At
+  //     the template's fixed 8pt that overflows and CENTER-CLIPS to
+  //     "…943/944/945/6672/720/8804/CIV P" — Joel 2026-06-17, Harmony Home
+  //     Medical: "941 gets cut off as does CIV PEN."
+  //
+  // These values MUST stay single-line (no embedded "\n" — the cells are one
+  // line tall, so a newline just hides the second half). The caller auto-fits
+  // the font size of the type/form columns to the cell width (see the
+  // Section 3 fit pass in generate8821PDF), which keeps the long withholding
+  // row fully legible instead of clipping it.
   return [
     {
-      type: 'Withholding/Civil Penalty/\nExcise Tax',
-      form: '941/943/944/945/6672/\n720/8804/CIV PEN',
+      type: 'Withholding/Civil Penalty/Excise Tax',
+      form: '941/943/944/945/6672/720/8804/CIV PEN',
       years,
       specific: 'N/A',
     },
-    { type: 'Unemployment/Heavy Use/\nCivil Penalty', form: '940/2290/CIV PEN', years, specific: 'N/A' },
+    { type: 'Unemployment/Heavy Use/Civil Penalty', form: '940/2290/CIV PEN', years, specific: 'N/A' },
     { type: 'Income', form: '1065/1120/1120S/990/1041', years, specific: 'N/A' },
   ];
 }
@@ -348,6 +355,25 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     );
   }
 
+  // The Section 3 "Tax Form Number" column (f1_21 row 1, f1_25 row 2) carries
+  // long slash-separated lists. The withholding/excise row —
+  // "941/943/944/945/6672/720/8804/CIV PEN" (37 chars) — overflows the 130pt
+  // cell and CENTER-CLIPS to "…6672/720/8804/CIV P" (Joel Abernathy 2026-06-17,
+  // Harmony Home Medical: "941 gets cut off as does CIV PEN").
+  //
+  // pdf-lib's field appearance generator IGNORES a reduced per-field font size
+  // for this template (the AcroForm regenerates the cell at the baked 8pt no
+  // matter what setFontSize/DA say — verified by inspecting the regenerated
+  // /AP stream). So, exactly like the Section 1 fields below, we DON'T fill the
+  // form-number cells via the AcroForm for the business template; instead we
+  // draw them manually onto the page at a font size auto-fitted to the cell
+  // width (see the Section 3 form-number overlay after this loop). The
+  // shorter type/year/specific columns render fine through the field and are
+  // left alone. Individual + expert-supplied templates have short/own form
+  // lists, so the field path is kept for them.
+  const drawFormColumnManually = !isIndividual && !expertTemplateBytes;
+  const MANUAL_FORM_FIELDS = new Set(['f1_21', 'f1_25']);
+
   // Fill every matching field. We iterate the form fields and match by
   // the SHORT name (the last segment of the dotted path, with [0] stripped)
   // — same logic the prior Python implementation used. This makes the
@@ -358,12 +384,78 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     const short = fullName.split('.').pop()?.replace(/\[0\]$/, '') || fullName;
     const value = fieldMap[short];
     if (value === undefined) continue;
+    // For the form-number cells we draw manually, EMPTY the field rather than
+    // skipping it. These cells carry a baked default value ("1120, 1120S, 1065")
+    // that the viewer renders via the field annotation — which sits ABOVE page
+    // content, so it would show straight through our white-mask overlay. Setting
+    // it to "" clears that default so only the manual overlay shows.
+    const manualForm = drawFormColumnManually && MANUAL_FORM_FIELDS.has(short);
     try {
       const textField = form.getTextField(fullName);
-      textField.setText(value);
-      filledCount += 1;
+      textField.setText(manualForm ? '' : value);
+      if (!manualForm) filledCount += 1;
     } catch {
       // Field exists but isn't a text field (checkbox / radio) — skip.
+    }
+  }
+
+  if (filledCount === 0) {
+    throw new Error(
+      `pdf-lib found ${fields.length} fields but none matched the expected names (f1_6, f1_7, ...). ` +
+      `Field name format may have changed. Sample names: ${fields.slice(0, 5).map(f => f.getName()).join(', ')}.`,
+    );
+  }
+
+  // Flatten — values become part of the visual layer; the form is no longer
+  // interactive. This is what we want for download-and-print and for Dropbox
+  // Sign (signature placement happens on top of flat text).
+  //
+  // BUT: on the business template the manual Section 3 white-mask overlay below
+  // depends on rectangle fills rendering correctly, and flatten() THROWS partway
+  // on these templates ("Could not find page for PDFRef …"). A failed flatten
+  // leaves the page graphics state corrupted — subsequent rectangle FILLS stop
+  // rendering (text still draws), so the white mask vanishes and the baked form
+  // defaults bleed through ("941/943/944120/dt20S0/1865…"). Since flatten has
+  // ALWAYS thrown on these public templates (it's been a no-op in production all
+  // along — the forms render via field appearances regardless), we simply skip
+  // it whenever we rely on the manual mask. Other paths keep the attempt.
+  if (!drawFormColumnManually) {
+    try {
+      form.flatten();
+    } catch (err) {
+      // Some PDFs choke on flatten; non-fatal — values are still in the
+      // form layer and most readers render them anyway.
+      console.warn('[8821-pdf] form.flatten() failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+  }
+
+  // ─── Section 3 form-number overlay (business template) ────────────────────
+  // Draw the "Tax Form Number" cells for rows 1-2 directly on the page,
+  // white-masking the template's baked defaults underneath, at a font size
+  // fitted to the 130pt cell so the full list is legible (never clipped).
+  // Cell rects read from the template (stable across both v2 templates):
+  //   f1_21 (row 1) x187 y384 w130 h12   ·   f1_25 (row 2) x187 y360 w130 h12
+  if (drawFormColumnManually) {
+    try {
+      const { StandardFonts, rgb } = await import('pdf-lib');
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const page = pdfDoc.getPage(0);
+      const cells: Array<{ y: number; text: string }> = [
+        { y: 384, text: rows[0]?.form || '' },
+        { y: 360, text: rows[1]?.form || '' },
+      ];
+      const CELL_X = 187, CELL_W = 130, USABLE = CELL_W - 8; // ~4pt inset each side
+      for (const { y, text } of cells) {
+        if (!text) continue;
+        // White mask over the cell interior (inset 1pt to preserve grid borders).
+        page.drawRectangle({ x: CELL_X + 1, y: y + 1, width: CELL_W - 2, height: 10, color: rgb(1, 1, 1) });
+        // Largest size ≤ 8pt that fits the usable width, floored at 5.5pt.
+        const w1 = font.widthOfTextAtSize(text, 1) || 1;
+        const size = Math.max(5.5, Math.min(8, Math.floor((USABLE / w1) * 2) / 2));
+        page.drawText(text, { x: CELL_X + 2, y: y + 3, size, font, color: rgb(0, 0, 0) });
+      }
+    } catch (overlayErr) {
+      console.warn('[8821-pdf] Section 3 form-number overlay failed (non-fatal):', overlayErr instanceof Error ? overlayErr.message : overlayErr);
     }
   }
 
@@ -441,24 +533,6 @@ export async function generate8821PDF(options: Fill8821Options): Promise<Buffer>
     } catch (overlayErr) {
       console.warn('[8821-pdf] Section 1 overlay failed (non-fatal):', overlayErr instanceof Error ? overlayErr.message : overlayErr);
     }
-  }
-
-  if (filledCount === 0) {
-    throw new Error(
-      `pdf-lib found ${fields.length} fields but none matched the expected names (f1_6, f1_7, ...). ` +
-      `Field name format may have changed. Sample names: ${fields.slice(0, 5).map(f => f.getName()).join(', ')}.`,
-    );
-  }
-
-  // Flatten — values become part of the visual layer; the form is no
-  // longer interactive. This is what we want for download-and-print and
-  // for Dropbox Sign (signature placement happens on top of flat text).
-  try {
-    form.flatten();
-  } catch (err) {
-    // Some PDFs choke on flatten; non-fatal — values are still in the
-    // form layer and most readers render them anyway.
-    console.warn('[8821-pdf] form.flatten() failed (non-fatal):', err instanceof Error ? err.message : err);
   }
 
   const pdfBytes = await pdfDoc.save();
