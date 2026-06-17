@@ -431,8 +431,12 @@ export default async function RequestDetailPage({ params }: Props) {
                           <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
                             Transcript Downloads
                             <span className="ml-2 text-xs font-normal text-gray-500 normal-case tracking-normal">
-                              {dedup.length} file{dedup.length === 1 ? '' : 's'} matching your request
-                              ({entity.form_type} for {(entity.years || []).join(', ')})
+                              {filtered.yearFallbackApplied ? (
+                                <>{dedup.length} {entity.form_type} transcript file{dedup.length === 1 ? '' : 's'} on file</>
+                              ) : (
+                                <>{dedup.length} file{dedup.length === 1 ? '' : 's'} matching your request
+                                  ({entity.form_type} for {(entity.years || []).join(', ')})</>
+                              )}
                             </span>
                           </h4>
                           <div className="space-y-2">

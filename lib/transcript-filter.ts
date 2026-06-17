@@ -111,6 +111,13 @@ export interface RequestedFilterResult {
     differentForm: number;       // any other off-form pull
     yearOutOfScope: number;      // right form, wrong year
   };
+  /**
+   * True when the year filter would have hidden EVERY transcript (no
+   * file matched the requested years) and we fell back to showing the
+   * same-form, year-mismatched transcripts instead. See the fail-open
+   * guard in filterRequestedTranscripts().
+   */
+  yearFallbackApplied: boolean;
 }
 
 export function filterRequestedTranscripts(
@@ -120,12 +127,16 @@ export function filterRequestedTranscripts(
 ): RequestedFilterResult {
   const requested: string[] = [];
   const internalOnly: string[] = [];
+  // Same-form transcripts whose year wasn't in the requested set. Tracked
+  // separately so we can fall back to them if the year filter would
+  // otherwise leave the processor with nothing to download.
+  const yearOutOfScopeUrls: string[] = [];
   const summary = { bonusErcSweep: 0, differentForm: 0, yearOutOfScope: 0 };
 
   if (!requestedFormType || !requestedYears || requestedYears.length === 0) {
     // No basis for filtering — return everything as "requested" to avoid
     // hiding valid data from the processor when the entity row is incomplete.
-    return { requested: urls, internalOnly: [], internalSummary: summary };
+    return { requested: urls, internalOnly: [], internalSummary: summary, yearFallbackApplied: false };
   }
 
   // Normalize the requested form for comparison. The DB stores 1120S without
@@ -176,11 +187,35 @@ export function filterRequestedTranscripts(
 
     if (parsed.year && !requestedYears.includes(parsed.year)) {
       internalOnly.push(url);
+      yearOutOfScopeUrls.push(url);
       internalUniqueKeys.yearOutOfScope.add(triple);
       continue;
     }
 
     requested.push(url);
+  }
+
+  // Fail-open guard: if the year filter hid EVERY transcript (processor would
+  // see nothing to download) but we DID pull same-form transcripts for other
+  // years, show those instead of hiding a paid deliverable. This is the case
+  // where the entity's recorded request year is wrong/stale — e.g. Green
+  // Diamond Landscaping (Cal Statewide, 2026-06-16) recorded years=["2026"]
+  // for a 1120S, but the only transcripts on file (and the only ones that CAN
+  // exist) are 2022/2023/2024, so all 6 were hidden and Sonja saw only the
+  // 8821. A same-form transcript is the actual product — never an internal
+  // discovery bonus (those are off-form, e.g. 941, and stay hidden). Only
+  // triggers when `requested` is empty, so it never over-shows when the
+  // requested years legitimately matched something.
+  let yearFallbackApplied = false;
+  if (requested.length === 0 && yearOutOfScopeUrls.length > 0) {
+    const fallback = new Set(yearOutOfScopeUrls);
+    requested.push(...yearOutOfScopeUrls);
+    // These are now shown, so drop them from the hidden set + its summary.
+    for (let i = internalOnly.length - 1; i >= 0; i--) {
+      if (fallback.has(internalOnly[i])) internalOnly.splice(i, 1);
+    }
+    internalUniqueKeys.yearOutOfScope.clear();
+    yearFallbackApplied = true;
   }
 
   // Materialize summary counts from the unique-triples sets (de-duplicates
@@ -189,7 +224,7 @@ export function filterRequestedTranscripts(
   summary.differentForm = internalUniqueKeys.differentForm.size;
   summary.yearOutOfScope = internalUniqueKeys.yearOutOfScope.size;
 
-  return { requested, internalOnly, internalSummary: summary };
+  return { requested, internalOnly, internalSummary: summary, yearFallbackApplied };
 }
 
 /**
