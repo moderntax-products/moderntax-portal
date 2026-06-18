@@ -48,6 +48,17 @@ export const dynamic = 'force-dynamic';
 /** Keep in sync with /api/admin/processor-entity-history. */
 const SIGNED_8821_VALID_DAYS = 120;
 
+/**
+ * Clients that pay FULL price for reorders rather than the $29.99 pilot SKU.
+ * The reorder discount (PRICE_REORDER) was introduced to drive pilot volume;
+ * Centerstone is billed at their standard verification rate for reorders.
+ * For these clients we stamp lineage only (no discount SKU), so
+ * entityBillableRate() falls through to the client's full PDF rate.
+ * (Encoded by slug to avoid a clients-table migration; promote to a
+ * per-client column if the list grows.)
+ */
+const REORDER_FULL_PRICE_CLIENT_SLUGS = new Set(['centerstone']);
+
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
   const sb = createServerRouteClient(cookieStore);
@@ -112,6 +123,12 @@ export async function POST(request: NextRequest) {
   if (!processorProfile.client_id) {
     return NextResponse.json({ error: 'Processor has no client_id — cannot reorder' }, { status: 400 });
   }
+
+  // Reorder billing policy: full-price clients bill at their standard rate;
+  // others get the $29.99 pilot SKU. Resolved by client slug.
+  const { data: clientRow } = await admin.from('clients')
+    .select('slug').eq('id', processorProfile.client_id).single() as { data: { slug: string } | null };
+  const reorderFullPrice = REORDER_FULL_PRICE_CLIENT_SLUGS.has(clientRow?.slug || '');
 
   const { data: sourceEntity } = await admin.from('request_entities')
     .select(`
@@ -216,15 +233,28 @@ export async function POST(request: NextRequest) {
     state: sourceEntity.state,
     zip_code: sourceEntity.zip_code,
     status: canReuse8821 ? '8821_signed' : 'pending',
-    gross_receipts: {
-      reorder: {
-        sku: 'reorder-from-history',
-        price: 29.99,
-        source_entity_id: sourceEntity.id,
-        source_request_id: sourceEntity.requests.id,
-        marked_at: new Date().toISOString(),
-      },
-    },
+    // Billing: full-price clients (e.g. Centerstone) bill reorders at their
+    // standard verification rate — stamp lineage only (no discount SKU) so
+    // entityBillableRate() falls through to the client's full PDF rate. Pilot
+    // clients keep the $29.99 reorder-from-history SKU.
+    gross_receipts: reorderFullPrice
+      ? {
+          reorder_lineage: {
+            source_entity_id: sourceEntity.id,
+            source_request_id: sourceEntity.requests.id,
+            marked_at: new Date().toISOString(),
+            full_price: true,
+          },
+        }
+      : {
+          reorder: {
+            sku: 'reorder-from-history',
+            price: 29.99,
+            source_entity_id: sourceEntity.id,
+            source_request_id: sourceEntity.requests.id,
+            marked_at: new Date().toISOString(),
+          },
+        },
   };
   if (canReuse8821) {
     newEntityRow.signed_8821_url = sourceEntity.signed_8821_url;
