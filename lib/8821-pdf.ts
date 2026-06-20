@@ -78,14 +78,23 @@ export interface Fill8821Options {
 // ---------------------------------------------------------------------------
 
 export const DESIGNEES: Record<string, DesigneeInfo> = {
+  // Generic ModernTax firm designee — no named individual (LaTonya removed
+  // 2026-06-20 per Matt: "use generic ModernTax, leave CAF placeholder blank
+  // as it can change"). NOTE: the CAF is intentionally NON-blank here — it
+  // retains the ModernTax firm master CAF, because this default feeds the
+  // taxpayer-SIGNED 8821 prefill in the lender flow, and a signed 8821 with a
+  // blank designee CAF is rejected by the IRS. The per-case CAF still gets
+  // overridden by the assigned expert's real CAF via buildDesigneeFromProfile.
+  // (The 2848 generator DOES leave CAF blank — there the practitioner completes
+  // it at signing in the Part II declaration.)
   default: {
-    name: 'LaTonya Holmes C/O ModernTax Inc',
-    address: '2 Embarcadero, 2nd Floor',
+    name: 'ModernTax Inc',
+    address: '2 Embarcadero, 8th Floor',
     city: 'San Francisco',
     state: 'CA',
     zip: '94111',
-    ptin: '0316-30210',
-    caf: '0315-23541R',
+    ptin: 'P01809554',
+    caf: '0316-30210R',
     phone: '650-741-1085',
     fax: '415-900-4436',
   },
