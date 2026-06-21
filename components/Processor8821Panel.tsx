@@ -204,6 +204,37 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
     }
   };
 
+  // Pre-filled Form 2848 (Power of Attorney) download. Unlike the 8821 it needs
+  // no form-type/year inputs — the route derives Section 3 from the entity and
+  // uses the generic ModernTax representative (blank CAF, Part II left blank).
+  const handleDownload2848 = async () => {
+    setDownloading(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/entity/2848-prefill?entityId=${encodeURIComponent(entity.id)}`);
+      if (!res.ok) {
+        let detail = 'Failed to generate the pre-filled 2848.';
+        try { const j = await res.json(); detail = j.error || j.detail || detail; } catch { /* non-JSON */ }
+        setMessage({ type: 'error', text: detail });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safe = (entity.entity_name || 'entity').replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40);
+      a.download = `2848-${safe}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Download failed' });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const handleUpload = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) {
@@ -336,6 +367,18 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             {downloading ? 'Generating…' : `Download Pre-filled 8821 — ${templateLabel}`}
+          </button>
+          <button
+            type="button"
+            onClick={handleDownload2848}
+            disabled={downloading}
+            title="Power of Attorney — taxpayer info pre-filled, generic ModernTax representative (CAF + Part II completed at signing)"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            {downloading ? 'Generating…' : 'Download Pre-filled 2848 (POA)'}
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-1.5">
