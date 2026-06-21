@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
+import { businessHoursElapsed } from '@/lib/federal-holidays';
 import sgMail from '@sendgrid/mail';
 
 export const runtime = 'nodejs';
@@ -56,7 +57,10 @@ export async function GET(request: NextRequest) {
   // Filter to orders older than the threshold (by order placement = request.created_at).
   const overdue = (entities || []).filter((e) => {
     const created = e.requests?.created_at ? new Date(e.requests.created_at).getTime() : null;
-    return created !== null && created < now - DELAY_THRESHOLD_HOURS * 3600 * 1000;
+    if (created === null) return false;
+    // Count BUSINESS hours only — weekends + federal US holidays (e.g.
+    // Juneteenth) are not our delivery delay and must not trip the flag.
+    return businessHoursElapsed(created, now) >= DELAY_THRESHOLD_HOURS;
   });
 
   if (overdue.length === 0) {
@@ -87,7 +91,7 @@ export async function GET(request: NextRequest) {
       entity: e.entity_name,
       loan: e.requests?.loan_number || '—',
       status: e.status,
-      ageH: Math.round((now - createdMs) / 3600 / 1000),
+      ageH: Math.round(businessHoursElapsed(createdMs, now)),
       client: e.requests?.clients?.name || 'Unknown client',
       processor: e.requests?.profiles?.full_name || e.requests?.profiles?.email || 'Unknown',
       note: latestNoteByEntity.get(e.id) || null,
@@ -107,7 +111,7 @@ export async function GET(request: NextRequest) {
   const rowHtml = (r: Row) => `
     <tr>
       <td style="padding:8px;border-bottom:1px solid #eee;"><strong>${esc(r.entity)}</strong><br/><span style="color:#6b7280;font-size:12px;">${esc(r.client)} · ${esc(r.processor)}</span></td>
-      <td style="padding:8px;border-bottom:1px solid #eee;white-space:nowrap;">${r.status}<br/><span style="color:#b45309;font-size:12px;">${r.ageH}h old</span></td>
+      <td style="padding:8px;border-bottom:1px solid #eee;white-space:nowrap;">${r.status}<br/><span style="color:#b45309;font-size:12px;">${r.ageH}h business-time</span></td>
       <td style="padding:8px;border-bottom:1px solid #eee;font-size:13px;color:#1f2937;">${r.note ? `<em>${esc(r.note.kind)}:</em> ${esc(r.note.body)}` : '<span style="color:#9ca3af;">no internal note yet</span>'}</td>
     </tr>`;
 
@@ -119,7 +123,8 @@ export async function GET(request: NextRequest) {
 
   const html = `
 <div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:720px;margin:0 auto;color:#1a2845;line-height:1.5;">
-  <h2 style="margin:0 0 4px;">⏱ Orders past 24h — ${rows.length} undelivered</h2>
+  <h2 style="margin:0 0 4px;">⏱ Orders past 24 business-hrs — ${rows.length} undelivered</h2>
+  <p style="color:#9ca3af;font-size:11px;margin:0 0 8px;">Business hours only — weekends &amp; federal US holidays excluded.</p>
   <p style="color:#6b7280;margin:0 0 16px;">${withStatus.length} have a live IRS-status note to relay · ${noStatus.length} have no internal note yet (worth pinging the expert).</p>
 
   <table style="border-collapse:collapse;width:100%;font-size:13px;">
