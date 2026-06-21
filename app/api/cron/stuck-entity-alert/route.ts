@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import sgMail from '@sendgrid/mail';
 import { requireBearer } from '@/lib/auth-util';
+import { businessDaysElapsed } from '@/lib/federal-holidays';
 
 interface StuckEntity {
   entity_name: string;
@@ -78,21 +79,25 @@ export async function GET(request: NextRequest) {
 
     if (err3) console.error('Error querying processing entities:', err3.message);
 
-    // Helper to calculate stuck duration
-    const daysBetween = (dateStr: string): number => {
-      return Math.floor((now.getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
-    };
-    const hoursBetween = (dateStr: string): number => {
-      return Math.floor((now.getTime() - new Date(dateStr).getTime()) / (1000 * 60 * 60));
-    };
+    // Business-day-aware stall thresholds — weekends + federal holidays do NOT
+    // count toward "stuck" time. The SQL cutoffs above are loose pre-filters;
+    // these are the real gate, preserving the prior calendar-day intent
+    // ("unsigned ~5 days", "stalled ~2 days") as BUSINESS days.
+    const nowMs = now.getTime();
+    const bizDays = (dateStr: string): number => businessDaysElapsed(new Date(dateStr).getTime(), nowMs);
+    const stuckLabel = (dateStr: string): string => `${bizDays(dateStr).toFixed(1)} business days`;
+
+    const unsignedStuck = (unsigned8821s || []).filter((e: any) => bizDays(e.updated_at) >= 5);
+    const waitingStuck = (waitingForExpert || []).filter((e: any) => bizDays(e.updated_at) >= 2);
+    const stalledStuck = (processingStalled || []).filter((e: any) => bizDays(e.updated_at) >= 2);
 
     // ---- Enrichment FIRST so the closure in mapEntities can resolve them.
     // (Earlier version had the maps declared after mapEntities ran, which
     // hit a TDZ error: "Cannot access 'expertMap' before initialization".)
     const allStuckEntityIds = [
-      ...(unsigned8821s || []),
-      ...(waitingForExpert || []),
-      ...(processingStalled || []),
+      ...unsignedStuck,
+      ...waitingStuck,
+      ...stalledStuck,
     ].map((e: any) => e.id);
 
     const expertMap = new Map<string, string>();
@@ -110,9 +115,9 @@ export async function GET(request: NextRequest) {
     }
 
     const allRequestIds = [
-      ...(unsigned8821s || []),
-      ...(waitingForExpert || []),
-      ...(processingStalled || []),
+      ...unsignedStuck,
+      ...waitingStuck,
+      ...stalledStuck,
     ].map((e: any) => e.request_id).filter(Boolean);
 
     const clientNameMap = new Map<string, string>();
@@ -139,9 +144,9 @@ export async function GET(request: NextRequest) {
       }));
     };
 
-    const unsignedList = mapEntities(unsigned8821s, (d) => `${daysBetween(d)} days`);
-    const waitingList = mapEntities(waitingForExpert, (d) => `${hoursBetween(d)} hours`);
-    const stalledList = mapEntities(processingStalled, (d) => `${hoursBetween(d)} hours`);
+    const unsignedList = mapEntities(unsignedStuck, stuckLabel);
+    const waitingList = mapEntities(waitingStuck, stuckLabel);
+    const stalledList = mapEntities(stalledStuck, stuckLabel);
 
     const totalStuck = unsignedList.length + waitingList.length + stalledList.length;
 

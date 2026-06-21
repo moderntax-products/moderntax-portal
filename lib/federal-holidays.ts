@@ -87,3 +87,53 @@ export function isBusinessDay(dateStr: string): boolean {
   if (dow === 0 || dow === 6) return false;
   return !isFederalHoliday(dateStr);
 }
+
+// ── calendar business-DAY elapsed ─────────────────────────────────────────
+// Distinct from expert-sla's businessHoursElapsed (which counts the 7am–7pm
+// work window). This counts full wall-clock time on business days, expressed
+// in DAYS — for "stall"/"days-pending" flags whose thresholds are calendar
+// days (e.g. "stuck 2 days", "unsigned 5 days") but which must not count
+// weekends or federal holidays toward the total.
+
+const DAY_TZ = 'America/New_York';
+
+/** YYYY-MM-DD that `tz` considers the date at instant `ms`. */
+function isoDateInTz(ms: number, tz: string): string {
+  return new Date(ms).toLocaleDateString('en-CA', { timeZone: tz });
+}
+
+/** UTC epoch-ms of 00:00 (midnight) in `tz` on the given YYYY-MM-DD. */
+function tzMidnightMs(dateStr: string, tz: string): number {
+  const probe = new Date(`${dateStr}T00:00:00Z`);
+  const tzHour = Number(
+    probe.toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false, hourCycle: 'h23' }),
+  );
+  return probe.getTime() + ((24 - tzHour) % 24) * 3_600_000;
+}
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Business days elapsed between two instants — counts full wall-clock time on
+ * Mon–Fri non-holiday days, divided by 24h. Weekend + holiday spans contribute
+ * zero. Use for calendar-day "stall"/"days-pending" thresholds (a value of
+ * 2.0 ≈ two business days have passed).
+ */
+export function businessDaysElapsed(startMs: number, endMs: number, tz: string = DAY_TZ): number {
+  if (!(endMs > startMs)) return 0;
+  let totalMs = 0;
+  let cur = startMs;
+  let guard = 0;
+  while (cur < endMs && guard++ < 4000) {
+    const dateStr = isoDateInTz(cur, tz);
+    const nextMidnight = tzMidnightMs(addDays(dateStr, 1), tz);
+    const segEnd = Math.min(endMs, nextMidnight);
+    if (isBusinessDay(dateStr) && segEnd > cur) totalMs += segEnd - cur;
+    cur = nextMidnight;
+  }
+  return totalMs / 86_400_000;
+}

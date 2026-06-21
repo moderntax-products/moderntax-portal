@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import sgMail from '@sendgrid/mail';
 import { requireBearer } from '@/lib/auth-util';
+import { businessDaysElapsed } from '@/lib/federal-holidays';
 
 if (process.env.SENDGRID_API_KEY) sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -114,6 +115,10 @@ export async function GET(request: NextRequest) {
     const client = e.requests?.clients;
     if (!proc?.email) continue;
     const sigCreated = new Date(e.signature_created_at);
+    // Wait FIRST_FOLLOWUP_AFTER_DAYS *business* days before nagging — weekends
+    // and federal holidays don't count, so an 8821 sent Fri before a holiday
+    // isn't followed up on Monday. (Display still shows true calendar age.)
+    if (businessDaysElapsed(sigCreated.getTime(), now.getTime()) < FIRST_FOLLOWUP_AFTER_DAYS) continue;
     const daysPending = Math.floor((now.getTime() - sigCreated.getTime()) / 86400000);
     let bucket = byProcessor.get(proc.email);
     if (!bucket) {
