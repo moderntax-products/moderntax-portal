@@ -11,10 +11,13 @@
  *      was signed AND verified to carry the assigned expert's credentials
  *      — CAF, name, address, PTIN, phone). Null = not yet running.
  *   2. Saturday + Sunday do NOT count.
- *   3. Time before 7am or at/after 7pm in the EXPERT'S local wall clock
- *      does NOT count. So weekday usable window = [07:00, 19:00) local.
- *      DST-aware: the wall clock follows whatever timezone is current
- *      (Pacific expert in April uses PDT, in January uses PST).
+ *   3. Federal US holidays do NOT count (added 2026-06-20 — e.g. an order
+ *      placed on Juneteenth shouldn't burn SLA budget). Observed dates come
+ *      from lib/federal-holidays.
+ *   4. Time before 7am or at/after 7pm in the EXPERT'S local wall clock
+ *      does NOT count. So a usable business day = [07:00, 19:00) local,
+ *      Mon–Fri, excluding federal holidays. DST-aware: the wall clock follows
+ *      whatever timezone is current (Pacific expert in April uses PDT, Jan PST).
  *
  * Concretely: a 24-hour SLA = 12 hours/day × 2 weekdays. An 8821
  * verified Friday at 17:00 local has 2 hours of budget that day, then
@@ -25,6 +28,8 @@
  * tz with [start, end] in absolute time, summing the overlaps. Slow if
  * the spans are huge (>1 year), fine for our scale (max ~weeks).
  */
+
+import { isFederalHoliday } from './federal-holidays';
 
 const DEFAULT_EXPERT_TZ = 'America/Los_Angeles';
 const BUSINESS_HOUR_START = 7;   // 07:00 local
@@ -115,6 +120,9 @@ export function zonedWallClockToUtc(dateStr: string, timeStr: string, tz: string
 function businessWindowForDay(instantMs: number, tz: string): { start: number; end: number } | null {
   const parts = partsInTz(new Date(instantMs), tz);
   if (parts.weekday === 0 || parts.weekday === 6) return null; // Sun/Sat
+  // Federal holidays (in the expert's local date) are not business days.
+  const dateStr = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+  if (isFederalHoliday(dateStr)) return null;
   const start = tzWallClockToUtcMs(parts.year, parts.month, parts.day, BUSINESS_HOUR_START, 0, tz);
   const end = tzWallClockToUtcMs(parts.year, parts.month, parts.day, BUSINESS_HOUR_END, 0, tz);
   return { start, end };

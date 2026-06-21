@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
-import { businessHoursElapsed } from '@/lib/federal-holidays';
+import { businessHoursElapsed } from '@/lib/expert-sla';
 import sgMail from '@sendgrid/mail';
 
 export const runtime = 'nodejs';

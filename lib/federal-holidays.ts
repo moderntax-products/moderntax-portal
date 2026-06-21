@@ -1,20 +1,17 @@
 /**
- * US federal holiday + business-hour helpers.
+ * US federal holiday calendar.
  *
- * "Past due" / delay flags must not count weekends OR federal US holidays as
- * elapsed delivery time. Driver: 2026-06-19 was Juneteenth (a Friday federal
- * holiday) — an order placed that day showed "39h old" by Saturday and got
- * flagged as past the 24h delivery threshold, even though zero business time
- * had elapsed (Fri holiday + Sat/Sun weekend).
+ * Business-hour / SLA / past-due math must not count federal US holidays as
+ * elapsed work time. Driver: 2026-06-19 was Juneteenth (a Friday federal
+ * holiday) — an order placed that day showed "41h old" by Saturday and got
+ * flagged as past the delivery threshold, even though zero business time had
+ * elapsed. This module is the holiday CALENDAR; the 7am–7pm business-window
+ * math that consumes it lives in lib/expert-sla.ts (the single source of truth
+ * for business-hours elapsed, now holiday-aware).
  *
- * Federal holidays computed per the OPM observance rules (a holiday on a
- * Saturday is observed the preceding Friday; on a Sunday, the following
- * Monday). All day classification is done in a fixed business timezone
- * (Eastern by default — federal/IRS context) so it's stable regardless of
- * where the server runs.
+ * Holidays follow OPM observance rules: a holiday on a Saturday is observed the
+ * preceding Friday; on a Sunday, the following Monday.
  */
-
-const DEFAULT_BUSINESS_TZ = 'America/New_York';
 
 function ymd(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -89,49 +86,4 @@ export function isBusinessDay(dateStr: string): boolean {
   const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
   if (dow === 0 || dow === 6) return false;
   return !isFederalHoliday(dateStr);
-}
-
-// ── timezone-aware day boundaries ─────────────────────────────────────────
-
-/** YYYY-MM-DD that `tz` considers the date at instant `ms`. */
-function isoDateInTz(ms: number, tz: string): string {
-  return new Date(ms).toLocaleDateString('en-CA', { timeZone: tz });
-}
-
-/** UTC epoch-ms of 00:00 (midnight) in `tz` on the given YYYY-MM-DD. */
-function tzMidnightMs(dateStr: string, tz: string): number {
-  const probe = new Date(`${dateStr}T00:00:00Z`);
-  const tzHour = Number(
-    probe.toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false, hourCycle: 'h23' }),
-  );
-  // At UTC midnight, tz shows `tzHour`; advancing UTC by (24 - tzHour) lands tz on its own midnight.
-  const offsetHours = (24 - tzHour) % 24;
-  return probe.getTime() + offsetHours * 3600 * 1000;
-}
-
-function addDays(dateStr: string, n: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-/**
- * Hours of wall-clock time between two instants that fall on BUSINESS days
- * (Mon–Fri, excluding federal holidays), in the given timezone. Weekend and
- * holiday spans contribute zero. Use this instead of `(now - start)/3600000`
- * for any past-due / delay threshold.
- */
-export function businessHoursElapsed(startMs: number, endMs: number, tz: string = DEFAULT_BUSINESS_TZ): number {
-  if (!(endMs > startMs)) return 0;
-  let total = 0;
-  let cur = startMs;
-  let guard = 0;
-  while (cur < endMs && guard++ < 4000) {
-    const dateStr = isoDateInTz(cur, tz);
-    const nextMidnight = tzMidnightMs(addDays(dateStr, 1), tz);
-    const segEnd = Math.min(endMs, nextMidnight);
-    if (isBusinessDay(dateStr) && segEnd > cur) total += segEnd - cur;
-    cur = nextMidnight; // always advances (nextMidnight > cur within dateStr)
-  }
-  return total / 3_600_000;
 }
