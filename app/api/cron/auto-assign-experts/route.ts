@@ -95,6 +95,29 @@ export async function GET(request: NextRequest) {
     .select('id, email, full_name, caf_number, ptin, phone_number, fax_number, address, city, state, zip_code')
     .eq('role', 'expert') as { data: any[] | null };
 
+  // Experts who already let an offer for a given entity EXPIRE or DECLINED it.
+  // We must never re-offer the same entity to the same expert — otherwise a
+  // designated expert who doesn't accept gets re-offered every cron run forever
+  // (the LaTonya Holmes loop: pending→expired→pending→… hourly, wasting jobs).
+  // Excluding them makes assignment "offer once per verifier, then move to the
+  // next available verifier."
+  const poolIds = pool.map(e => e.id);
+  const declinedExpertsByEntity = new Map<string, Set<string>>();
+  if (poolIds.length > 0) {
+    const { data: priorAssns } = await admin
+      .from('expert_assignments')
+      .select('entity_id, expert_id, status')
+      .in('entity_id', poolIds)
+      .in('status', ['expired', 'declined']) as { data: any[] | null };
+    for (const a of priorAssns || []) {
+      const set = declinedExpertsByEntity.get(a.entity_id) || new Set<string>();
+      set.add(a.expert_id);
+      declinedExpertsByEntity.set(a.entity_id, set);
+    }
+  }
+  const hasDeclined = (entityId: string, expertId: string): boolean =>
+    declinedExpertsByEntity.get(entityId)?.has(expertId) === true;
+
   // ─── Designee-based auto-assignment (deterministic, no manual work) ──────
   // The 8821 names the expert via their CAF as a designee — so assign straight
   // to that expert. Runs BEFORE the busy/round-robin logic so a designated
@@ -119,10 +142,14 @@ export async function GET(request: NextRequest) {
         if (!dl.data) continue;
         const cafs = await extractDesigneeCafs(Buffer.from(await dl.data.arrayBuffer()));
         const matched = cafs.map((c: string) => cafToExpert.get(normalizeCaf(c))).find(Boolean);
-        if (matched) {
+        // Don't re-offer to a designee who already let this entity's offer
+        // expire/declined it — leave it for round-robin (next available verifier).
+        if (matched && !hasDeclined(e.id, matched.id)) {
           const slot = designeeByExpert.get(matched.id) || { expert: matched, entities: [] };
           slot.entities.push(e);
           designeeByExpert.set(matched.id, slot);
+        } else if (matched) {
+          skipped.designee_already_declined = (skipped.designee_already_declined || 0) + 1;
         }
       } catch (err) {
         console.error('[auto-assign] designee parse failed for', e.id, err instanceof Error ? err.message : err);
@@ -213,7 +240,13 @@ export async function GET(request: NextRequest) {
   const offerCount = Math.min(available.length, batchesToOffer.length);
   for (let i = 0; i < offerCount; i++) {
     const expert = available[i];
-    const batchEntities = batchesToOffer[i];
+    // Never re-offer an entity to an expert who already expired/declined it —
+    // those stay in the pool for a different verifier on a later run.
+    const batchEntities = batchesToOffer[i].filter(e => !hasDeclined(e.id, expert.id));
+    if (batchEntities.length === 0) {
+      skipped.roundrobin_all_previously_declined = (skipped.roundrobin_all_previously_declined || 0) + 1;
+      continue;
+    }
 
     const result = await createBatch(admin, {
       expertId: expert.id,
