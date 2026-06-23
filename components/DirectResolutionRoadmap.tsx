@@ -45,7 +45,7 @@ export function DirectResolutionRoadmap({ resolution }: { resolution: Resolution
   return (
     <div className="bg-white rounded-lg shadow border border-gray-200 p-8 mb-6">
       <h2 className="text-lg font-bold text-mt-dark mb-1">Your resolution roadmap</h2>
-      <p className="text-sm text-gray-600 mb-5">Here's exactly what we're doing to resolve your situation and protect you from collection.</p>
+      <p className="text-sm text-gray-600 mb-5">Here&apos;s exactly what we&apos;re doing to resolve your situation and protect you from collection.</p>
 
       <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6 flex items-start gap-3">
         <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -54,7 +54,7 @@ export function DirectResolutionRoadmap({ resolution }: { resolution: Resolution
         <p className="text-sm text-amber-900">
           <span className="font-semibold">Why this matters:</span> {states.length ? states.join(' and ') : 'your state(s)'} will not approve a payment
           plan until <span className="font-semibold">all of your outstanding federal returns are filed</span>. Getting these filed is what
-          stops wage garnishment and active collection — so it's our first priority.
+          stops wage garnishment and active collection — so it&apos;s our first priority.
         </p>
       </div>
 
@@ -65,8 +65,8 @@ export function DirectResolutionRoadmap({ resolution }: { resolution: Resolution
             <div className="flex items-center gap-2"><h3 className="text-sm font-semibold text-mt-dark">File your delinquent federal returns</h3>{tag(1)}</div>
             <p className="text-sm text-gray-600 mt-0.5">
               {years.length
-                ? <>We're preparing your missing returns for <span className="font-medium">{years.join(', ')}</span>. We've already pulled your IRS wage records, so we only need a few details from you.</>
-                : <>We're preparing your missing federal returns.</>}
+                ? <>We&apos;re preparing your missing returns for <span className="font-medium">{years.join(', ')}</span>. We&apos;ve already pulled your IRS wage records, so we only need a few details from you.</>
+                : <>We&apos;re preparing your missing federal returns.</>}
             </p>
           </div>
         </div>
@@ -77,8 +77,8 @@ export function DirectResolutionRoadmap({ resolution }: { resolution: Resolution
             <div className="flex items-center gap-2"><h3 className="text-sm font-semibold text-mt-dark">Resolve your federal balance</h3>{tag(2)}</div>
             <p className="text-sm text-gray-600 mt-0.5">
               {fb?.amount != null
-                ? <>Your {fb.year} balance is <span className="font-medium">{fmt(fb.amount)}</span>{fb.status ? ` (currently ${fb.status})` : ''}. Once all returns are filed we'll address this with the IRS.</>
-                : <>Once your returns are filed we'll address any federal balance with the IRS.</>}
+                ? <>Your {fb.year} balance is <span className="font-medium">{fmt(fb.amount)}</span>{fb.status ? ` (currently ${fb.status})` : ''}. Once all returns are filed we&apos;ll address this with the IRS.</>
+                : <>Once your returns are filed we&apos;ll address any federal balance with the IRS.</>}
             </p>
           </div>
         </div>
@@ -88,7 +88,7 @@ export function DirectResolutionRoadmap({ resolution }: { resolution: Resolution
           <div>
             <div className="flex items-center gap-2"><h3 className="text-sm font-semibold text-mt-dark">Set up your state payment plan{states.length > 1 ? 's' : ''}</h3>{tag(3)}</div>
             <p className="text-sm text-gray-600 mt-0.5">
-              With every federal return filed, we'll establish your payment plan{states.length > 1 ? 's' : ''} with {states.length ? states.join(' and ') : 'your state'} —
+              With every federal return filed, we&apos;ll establish your payment plan{states.length > 1 ? 's' : ''} with {states.length ? states.join(' and ') : 'your state'} —
               the step that takes you out of garnishment risk and into good standing.
             </p>
           </div>

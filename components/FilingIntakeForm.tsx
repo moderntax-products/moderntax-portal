@@ -81,7 +81,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
           <span className="w-9 h-9 rounded-full bg-mt-green text-white flex items-center justify-center text-lg">✓</span>
           <div>
             <h2 className="text-lg font-bold text-mt-dark">Filing authorized — thank you</h2>
-            <p className="text-sm text-gray-600">We're preparing your returns and will send each one to you to review &amp; sign before filing.{authorizedAt ? ` Authorized ${new Date(authorizedAt).toLocaleDateString()}.` : ''}</p>
+            <p className="text-sm text-gray-600">We&apos;re preparing your returns and will send each one to you to review &amp; sign before filing.{authorizedAt ? ` Authorized ${new Date(authorizedAt).toLocaleDateString()}.` : ''}</p>
           </div>
         </div>
       </div>
@@ -94,7 +94,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
   return (
     <div className="bg-white rounded-lg shadow border border-gray-200 p-8 mb-6">
       <h2 className="text-lg font-bold text-mt-dark mb-1">Complete your filing intake</h2>
-      <p className="text-sm text-gray-600 mb-5">We've pre-filled what we already have from your IRS records — just confirm and fill the few gaps so we can prepare your returns. Full SSN, bank, and IP-PIN are collected separately through our secure link.</p>
+      <p className="text-sm text-gray-600 mb-5">We&apos;ve pre-filled what we already have from your IRS records — just confirm and fill the few gaps so we can prepare your returns. Full SSN, bank, and IP-PIN are collected separately through our secure link.</p>
 
       <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-xs text-green-800 mb-5">From your authorization: <strong>{seed.name}</strong> · SSN {seed.ssnMask} · {seed.email}</div>
 
@@ -119,7 +119,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
           </div>
         ))}
       </div>
-      <label className="flex items-start gap-2 text-sm mt-3"><input type="checkbox" className="mt-1" checked={confirmIncome} onChange={(e) => setConfirmIncome(e.target.checked)} /><span>These W-2s are complete — or I've noted other income below.</span></label>
+      <label className="flex items-start gap-2 text-sm mt-3"><input type="checkbox" className="mt-1" checked={confirmIncome} onChange={(e) => setConfirmIncome(e.target.checked)} /><span>These W-2s are complete — or I&apos;ve noted other income below.</span></label>
 
       {anyMarried && (
         <div className="mt-4 border-t border-gray-200 pt-3">
@@ -133,7 +133,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
       )}
 
       <h3 className="text-sm font-semibold text-mt-dark mt-6 mb-1">Dependents</h3>
-      <p className="text-xs text-gray-500 mb-2">Children/relatives you supported — this can lower or refund what's owed.</p>
+      <p className="text-xs text-gray-500 mb-2">Children/relatives you supported — this can lower or refund what&apos;s owed.</p>
       {deps.map((d, i) => (
         <div key={i} className="grid grid-cols-12 gap-2 mb-2">
           <input className={`${inp} col-span-3`} placeholder="Name" value={d.name} onChange={(e) => { const n = [...deps]; n[i].name = e.target.value; setDeps(n); }} />
@@ -178,7 +178,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
         </div>
         <div><label className={lbl}>IRS Identity Protection PIN?</label>
           <select className={inp} value={ipPin} onChange={(e) => setIpPin(e.target.value)}>
-            <option value="">Select…</option><option>No</option><option>Not sure</option><option>Yes — I'll provide it securely</option>
+            <option value="">Select…</option><option>No</option><option>Not sure</option><option>Yes — I&apos;ll provide it securely</option>
           </select>
         </div>
       </div>
@@ -186,7 +186,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
       <div className="mt-7 border-t border-gray-200 pt-5">
         <label className="flex items-start gap-3 text-sm">
           <input type="checkbox" className="mt-1" checked={authorize} onChange={(e) => setAuthorize(e.target.checked)} />
-          <span>I authorize ModernTax to prepare my delinquent federal returns ({seed.years.map((y) => y.year).join(', ')}) from this information and my IRS records. I understand I'll review and sign each completed return before it's filed, and that filing is a $50-per-return fee with my $100 deposit applied as credit.</span>
+          <span>I authorize ModernTax to prepare my delinquent federal returns ({seed.years.map((y) => y.year).join(', ')}) from this information and my IRS records. I understand I&apos;ll review and sign each completed return before it&apos;s filed, and that filing is a $50-per-return fee with my $100 deposit applied as credit.</span>
         </label>
         {error && <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">{error}</div>}
         {msg && <div className="mt-3 text-xs text-green-800 bg-green-50 border border-green-200 rounded p-2">{msg}</div>}
