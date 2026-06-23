@@ -9,6 +9,7 @@ import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
 import { SupportTicketPanel } from '@/components/SupportTicketPanel';
+import { FilingIntakeForm } from '@/components/FilingIntakeForm';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
@@ -283,6 +284,29 @@ export default async function RequestDetailPage({ params }: Props) {
                         </span>
                       </div>
                     </div>
+
+                    {/* ModernTax Direct — taxpayer filing intake + authorization */}
+                    {(() => {
+                      const fs = (entity.gross_receipts as any)?.filing_seed;
+                      if (!fs?.years?.length) return null;
+                      const fi = (entity.gross_receipts as any)?.filing_intake || {};
+                      return (
+                        <FilingIntakeForm
+                          entityId={entity.id}
+                          seed={{
+                            name: entity.entity_name,
+                            email: entity.signer_email || '',
+                            ssnMask: maskTid(entity.tid, entity.tid_kind),
+                            address: [entity.address, entity.city, entity.state, entity.zip_code].filter(Boolean).join(', '),
+                            years: fs.years,
+                            states: fs.states || [],
+                          }}
+                          saved={fi.answers || null}
+                          authorized={!!fi.authorized}
+                          authorizedAt={fi.authorized_at || null}
+                        />
+                      );
+                    })()}
 
                     {/* Processor 8821 Panel — template downloads + upload */}
                     <Processor8821Panel
