@@ -8,6 +8,7 @@ import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
+import { FilingFeePayment } from '@/components/FilingFeePayment';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
@@ -457,6 +458,22 @@ export default async function RequestDetailPage({ params }: Props) {
                             </p>
                           )}
                         </div>
+                      );
+                    })()}
+
+                    {/* Back-year filing fee — shown after the returns are completed */}
+                    {(() => {
+                      const f = (entity.gross_receipts as any)?.filing;
+                      const completed = entity.status === 'completed' || request.status === 'completed';
+                      if (!f?.years_filed || !completed) return null;
+                      return (
+                        <FilingFeePayment
+                          entityId={entity.id}
+                          entityName={entity.entity_name}
+                          yearsFiled={Number(f.years_filed)}
+                          feePerYear={Number(f.fee_per_year) || 50}
+                          paid={!!f.fee_paid}
+                        />
                       );
                     })()}
                   </div>

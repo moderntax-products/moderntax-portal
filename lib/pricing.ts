@@ -288,6 +288,16 @@ export const CONSOLIDATION_REPORT_MIN_ENTITIES = 3;
  */
 export const PRICE_FILING_COMPLIANCE = 29.99;
 
+/**
+ * Back-year return filing (ModernTax Direct) — flat $50 per prior-year return
+ * we prepare and file for a direct taxpayer client (e.g. Marquis Steadman's
+ * delinquent 2020/2022/2023/2025 1040s). Billed per year filed, paid by the
+ * client through the portal AFTER the returns are completed (see
+ * /api/billing/filing-fee-checkout + components/FilingFeePayment). Matt
+ * 2026-06-23.
+ */
+export const PRICE_BACKYEAR_FILING = 50.00;
+
 // ---------------------------------------------------------------------------
 // Unified invoice SKU catalog — single source of truth for Mercury line
 // items + Stripe Products. Used by:
