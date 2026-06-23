@@ -19,13 +19,17 @@ interface Props {
   entityName: string;
   yearsFiled: number;
   feePerYear: number;
+  /** Account credit applied (e.g. the ModernTax Direct deposit). */
+  creditApplied?: number;
   paid?: boolean;
 }
 
-export function FilingFeePayment({ entityId, entityName, yearsFiled, feePerYear, paid }: Props) {
+export function FilingFeePayment({ entityId, entityName, yearsFiled, feePerYear, creditApplied = 0, paid }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const total = yearsFiled * feePerYear;
+  const gross = yearsFiled * feePerYear;
+  const credit = Math.min(creditApplied, gross);
+  const total = gross - credit;
 
   const pay = async () => {
     setLoading(true); setError(null);
@@ -64,6 +68,11 @@ export function FilingFeePayment({ entityId, entityName, yearsFiled, feePerYear,
           <p className="text-sm text-gray-600 mt-0.5">
             {yearsFiled} back-year return{yearsFiled === 1 ? '' : 's'} filed for {entityName} · ${feePerYear.toFixed(2)}/year
           </p>
+          {credit > 0 && (
+            <p className="text-xs text-gray-500 mt-1">
+              ${gross.toFixed(2)} − ${credit.toFixed(2)} account credit
+            </p>
+          )}
         </div>
         <div className="text-right">
           <div className="text-2xl font-bold text-mt-dark">${total.toFixed(2)}</div>

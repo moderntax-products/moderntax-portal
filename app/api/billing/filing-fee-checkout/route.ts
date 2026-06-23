@@ -65,7 +65,18 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(yearsFiled) || yearsFiled <= 0) {
       return NextResponse.json({ error: 'No billable filing years recorded on this entity yet.' }, { status: 409 });
     }
-    const amount = Math.round(PRICE_BACKYEAR_FILING * yearsFiled * 100); // cents
+    const gross = PRICE_BACKYEAR_FILING * yearsFiled;
+
+    // Apply the client's account credit (e.g. the ModernTax Direct deposit) —
+    // the 8821 pull + intake are free, so the deposit offsets the filing fee.
+    const { data: client } = await admin.from('clients')
+      .select('credit_balance').eq('id', entity.requests?.client_id).single() as { data: { credit_balance: number | null } | null };
+    const credit = Math.max(0, Number(client?.credit_balance) || 0);
+    const creditApplied = Math.min(credit, gross);
+    const net = Math.round((gross - creditApplied) * 100); // cents
+    if (net <= 0) {
+      return NextResponse.json({ error: 'Fee is fully covered by account credit — no payment needed (mark it paid + draw down credit).', gross, creditApplied }, { status: 409 });
+    }
 
     const stripe = getStripe();
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
@@ -77,13 +88,14 @@ export async function POST(request: NextRequest) {
       line_items: [{
         price_data: {
           currency: 'usd',
-          unit_amount: Math.round(PRICE_BACKYEAR_FILING * 100),
+          unit_amount: net,
           product_data: {
             name: `Prior-year return filing — ${entity.entity_name}`,
-            description: `${yearsFiled} back-year federal return${yearsFiled === 1 ? '' : 's'} prepared & filed by ModernTax`,
+            description: `${yearsFiled} back-year federal return${yearsFiled === 1 ? '' : 's'} × $${PRICE_BACKYEAR_FILING.toFixed(2)}`
+              + (creditApplied > 0 ? ` (less $${creditApplied.toFixed(2)} account credit)` : ''),
           },
         },
-        quantity: yearsFiled,
+        quantity: 1,
       }],
       success_url: `${baseUrl}/request/${entity.requests?.id}?paid=1`,
       cancel_url: `${baseUrl}/request/${entity.requests?.id}?cancel=1`,
@@ -94,11 +106,12 @@ export async function POST(request: NextRequest) {
         client: entity.requests?.clients?.name || '',
         years_filed: String(yearsFiled),
         fee_per_year: String(PRICE_BACKYEAR_FILING),
+        credit_applied: String(creditApplied),
       },
     });
 
     if (!checkout.url) return NextResponse.json({ error: 'Stripe did not return a URL' }, { status: 500 });
-    return NextResponse.json({ url: checkout.url, sessionId: checkout.id, amount: amount / 100, years: yearsFiled });
+    return NextResponse.json({ url: checkout.url, sessionId: checkout.id, gross, creditApplied, amount: net / 100, years: yearsFiled });
   } catch (err: any) {
     console.error('[filing-fee-checkout]', err);
     return NextResponse.json({ error: err?.message || 'Checkout failed' }, { status: 500 });

@@ -9,6 +9,7 @@ import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
 import { Processor8821Panel } from '@/components/Processor8821Panel';
 import { FilingFeePayment } from '@/components/FilingFeePayment';
+import { DirectResolutionRoadmap } from '@/components/DirectResolutionRoadmap';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
@@ -64,10 +65,11 @@ export default async function RequestDetailPage({ params }: Props) {
   // Their re-pulls go through a fresh full-price new request instead.
   const { data: clientCfg } = await supabase
     .from('clients')
-    .select('disable_monitoring')
+    .select('disable_monitoring, credit_balance')
     .eq('id', request.client_id)
-    .single() as { data: { disable_monitoring: boolean | null } | null };
+    .single() as { data: { disable_monitoring: boolean | null; credit_balance: number | null } | null };
   const hideMonitoringUi = !!clientCfg?.disable_monitoring;
+  const accountCredit = Number(clientCfg?.credit_balance) || 0;
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
@@ -228,7 +230,11 @@ export default async function RequestDetailPage({ params }: Props) {
             {request.request_entities && request.request_entities.length > 0 ? (
               <div className="grid gap-6">
                 {(request.request_entities as RequestEntity[]).map((entity) => (
-                  <div key={entity.id} className="bg-white rounded-lg shadow p-8">
+                  <div key={entity.id}>
+                    {(entity.gross_receipts as any)?.resolution && (
+                      <DirectResolutionRoadmap resolution={(entity.gross_receipts as any).resolution} />
+                    )}
+                    <div className="bg-white rounded-lg shadow p-8">
                     <div className="flex justify-between items-start mb-6">
                       <div>
                         <h3 className="text-lg font-semibold text-mt-dark">{entity.entity_name}</h3>
@@ -472,10 +478,12 @@ export default async function RequestDetailPage({ params }: Props) {
                           entityName={entity.entity_name}
                           yearsFiled={Number(f.years_filed)}
                           feePerYear={Number(f.fee_per_year) || 50}
+                          creditApplied={accountCredit}
                           paid={!!f.fee_paid}
                         />
                       );
                     })()}
+                    </div>
                   </div>
                 ))}
               </div>
