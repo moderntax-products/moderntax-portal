@@ -152,7 +152,9 @@ export async function POST(request: NextRequest) {
     assignedClientName = created.name;
   }
 
-  const assignedRole = role === 'processor' ? 'processor' : 'manager';
+  // 'direct_user' = a ModernTax Direct taxpayer — limited to their own case
+  // (status, intake, payment, support chat); no team/billing/management.
+  const assignedRole = ['processor', 'direct_user'].includes(role) ? role : 'manager';
 
   // Update profile: assign client + role, mark approved
   const { error: profileErr } = await (admin.from('profiles' as any) as any)

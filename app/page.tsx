@@ -76,6 +76,20 @@ export default async function DashboardPage({
     redirect('/expert');
   }
 
+  // ModernTax Direct users are limited to their own case — no client dashboard,
+  // no team/billing/management. Bounce them straight to their request (status,
+  // intake, payment, support chat all live there).
+  if (profile.role === 'direct_user' && profile.client_id) {
+    const { data: ownReq } = await supabase
+      .from('requests')
+      .select('id')
+      .eq('client_id', profile.client_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle() as { data: { id: string } | null };
+    if (ownReq?.id) redirect(`/request/${ownReq.id}`);
+  }
+
   // Fetch requests scoped by role:
   // - Processor: only own requests
   // - Manager/Admin: all client requests

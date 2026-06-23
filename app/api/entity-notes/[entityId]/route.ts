@@ -48,7 +48,7 @@ export async function GET(request: NextRequest, { params }: PageProps) {
     // directive): admin OR assigned expert OR processor/manager on the
     // entity's client. Same as the RLS policies.
     const admin = createAdminClient();
-    if (role !== 'admin' && role !== 'expert' && role !== 'processor' && role !== 'manager') {
+    if (role !== 'admin' && role !== 'expert' && role !== 'processor' && role !== 'manager' && role !== 'direct_user') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     if (role === 'expert') {
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest, { params }: PageProps) {
         .maybeSingle() as { data: any };
       if (!assn) return NextResponse.json({ error: 'No assignment on this entity' }, { status: 403 });
     }
-    if (role === 'processor' || role === 'manager') {
+    if (role === 'processor' || role === 'manager' || role === 'direct_user') {
       // Must belong to the entity's client
       const { data: ent } = await admin.from('request_entities')
         .select('requests!inner(client_id)')
@@ -110,7 +110,7 @@ export async function GET(request: NextRequest, { params }: PageProps) {
     //     the individual.
     //   - Admin sees everything with real names.
     //   - The requester's own posts are never masked.
-    const isProcessorLike = role === 'processor' || role === 'manager';
+    const isProcessorLike = role === 'processor' || role === 'manager' || role === 'direct_user';
     const isExpert = role === 'expert';
     let clientNameForMask = 'Client';
     if (isExpert) {
@@ -148,7 +148,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
     const { entityId } = await params;
     const { data: profile } = await sb.from('profiles').select('role, full_name, email, client_id').eq('id', user.id).single() as { data: { role: string; full_name: string | null; email: string; client_id: string | null } | null };
     const role = profile?.role;
-    if (!profile || !['admin', 'expert', 'processor', 'manager'].includes(role || '')) {
+    if (!profile || !['admin', 'expert', 'processor', 'manager', 'direct_user'].includes(role || '')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -168,7 +168,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
         .maybeSingle() as { data: any };
       if (!assn) return NextResponse.json({ error: 'No assignment on this entity' }, { status: 403 });
     }
-    if (role === 'processor' || role === 'manager') {
+    if (role === 'processor' || role === 'manager' || role === 'direct_user') {
       const { data: ent } = await admin.from('request_entities')
         .select('requests!inner(client_id)')
         .eq('id', entityId).single() as { data: any };
@@ -201,7 +201,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
     }
 
     // Fire-and-forget notification to the OTHER party
-    notifyOpposite(admin, entityId, role as 'admin' | 'expert' | 'processor' | 'manager', authorName, noteBody, kind).catch((e) =>
+    notifyOpposite(admin, entityId, role as 'admin' | 'expert' | 'processor' | 'manager' | 'direct_user', authorName, noteBody, kind).catch((e) =>
       console.warn('[entity-notes] notify failed:', e?.message || e),
     );
 
@@ -228,7 +228,7 @@ export async function POST(request: NextRequest, { params }: PageProps) {
 async function notifyOpposite(
   admin: ReturnType<typeof createAdminClient>,
   entityId: string,
-  authorRole: 'admin' | 'expert' | 'processor' | 'manager',
+  authorRole: 'admin' | 'expert' | 'processor' | 'manager' | 'direct_user',
   authorName: string,
   body: string,
   kind: string,
@@ -263,7 +263,7 @@ async function notifyOpposite(
   let toEmail: string | null;
   let toName: string;
   const ccEmails: string[] = [];
-  if (isSupport && (authorRole === 'processor' || authorRole === 'manager')) {
+  if (isSupport && (authorRole === 'processor' || authorRole === 'manager' || authorRole === 'direct_user')) {
     // Processor-raised customer-service ticket → CS inbox (NOT the expert),
     // CC Matt so it can't be missed. This is the repurposed channel.
     toEmail = SUPPORT_INBOX;
@@ -304,9 +304,9 @@ async function notifyOpposite(
   if (isSupport) {
     // Processor raised it → admin/CS opens the admin request page; admin
     // replied → processor opens their request page.
-    portalLink = (authorRole === 'processor' || authorRole === 'manager') ? adminRequestLink : processorRequestLink;
+    portalLink = (authorRole === 'processor' || authorRole === 'manager' || authorRole === 'direct_user') ? adminRequestLink : processorRequestLink;
   } else {
-    portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager')
+    portalLink = (authorRole === 'admin' || authorRole === 'processor' || authorRole === 'manager' || authorRole === 'direct_user')
       ? 'https://portal.moderntax.io/expert'
       : processorRequestLink;
   }
@@ -329,7 +329,7 @@ async function notifyOpposite(
   let subject: string;
   let intro: string;       // sentence describing what happened
   let linkLabel: string;   // call-to-action on the portal link
-  if (isSupport && (authorRole === 'processor' || authorRole === 'manager')) {
+  if (isSupport && (authorRole === 'processor' || authorRole === 'manager' || authorRole === 'direct_user')) {
     // CS ticket → admin sees the real customer identity (not masked).
     displayAuthorName = authorName;
     displayRoleSuffix = ` (${clientName})`;
@@ -344,7 +344,7 @@ async function notifyOpposite(
     intro = `replied to your support request on <strong>${ent.entity_name}</strong>${ent.requests?.loan_number ? ` (${ent.requests.loan_number})` : ''}`;
     linkLabel = 'View your request';
   } else {
-    if (authorRole === 'processor' || authorRole === 'manager') {
+    if (authorRole === 'processor' || authorRole === 'manager' || authorRole === 'direct_user') {
       displayAuthorName = clientName;
       displayRoleSuffix = '';
     } else {

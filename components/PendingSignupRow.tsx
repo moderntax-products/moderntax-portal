@@ -50,7 +50,7 @@ export function PendingSignupRow({ profile, audit, clients }: Props) {
   const [clientChoice, setClientChoice] = useState<string>(initialClientChoice);
   const [newClientName, setNewClientName] = useState(audit.company_name || '');
   const [newClientDomain, setNewClientDomain] = useState(audit.company_domain || '');
-  const [role, setRole] = useState<'manager' | 'processor'>('manager');
+  const [role, setRole] = useState<'manager' | 'processor' | 'direct_user'>('manager');
   const [showRejectBox, setShowRejectBox] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
@@ -244,8 +244,16 @@ export function PendingSignupRow({ profile, audit, clients }: Props) {
                 >
                   Processor
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setRole('direct_user')}
+                  disabled={submitting}
+                  className={`px-3 py-1.5 font-semibold border-l border-gray-300 ${role === 'direct_user' ? 'bg-mt-dark text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                >
+                  Direct user
+                </button>
               </div>
-              <p className="text-xs text-gray-500 ml-2">Manager = can invite teammates + see billing.</p>
+              <p className="text-xs text-gray-500 ml-2">Manager = invite + billing · Processor = submit/manage requests · Direct user = own case only (status, intake, pay, chat).</p>
             </div>
           </div>
         )}
