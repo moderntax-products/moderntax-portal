@@ -13,6 +13,7 @@ import { FilingIntakeForm } from '@/components/FilingIntakeForm';
 import { FilingFeePayment } from '@/components/FilingFeePayment';
 import { DirectResolutionRoadmap } from '@/components/DirectResolutionRoadmap';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
+import { LogoutButton } from '@/components/LogoutButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
 
@@ -73,6 +74,15 @@ export default async function RequestDetailPage({ params }: Props) {
   const hideMonitoringUi = !!clientCfg?.disable_monitoring;
   const accountCredit = Number(clientCfg?.credit_balance) || 0;
 
+  // ModernTax Direct taxpayer: a limited, client-facing view. They see status,
+  // the resolution roadmap, the filing intake, the filing-fee payment, and the
+  // support chat — NOTHING internal. So we hide every operator/processor panel
+  // (entity edit, 8821/2848 generator, signed-8821 download, raw Financial Data
+  // dump, transcript-monitoring upsell) and the internal Notes (which carry our
+  // master CAF + resolution strategy). They also can't reach the dashboard, so
+  // the header gives them a Sign Out instead of a looping "Back to Dashboard".
+  const isDirectUser = profile.role === 'direct_user';
+
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'submitted': case '8821_sent': return 'bg-blue-100 text-blue-800';
@@ -129,15 +139,23 @@ export default async function RequestDetailPage({ params }: Props) {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <CancelRequestButton
-                requestId={request.id}
-                loanNumber={request.loan_number}
-                status={request.status}
-                isAdmin={profile.role === 'admin'}
-              />
-              <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium">
-                &larr; Back to Dashboard
-              </Link>
+              {isDirectUser ? (
+                // Direct taxpayer: no dashboard to go back to (they'd just be
+                // redirected here), and no cancel — just a way to sign out.
+                <LogoutButton />
+              ) : (
+                <>
+                  <CancelRequestButton
+                    requestId={request.id}
+                    loanNumber={request.loan_number}
+                    status={request.status}
+                    isAdmin={profile.role === 'admin'}
+                  />
+                  <Link href="/" className="text-gray-600 hover:text-gray-900 font-medium">
+                    &larr; Back to Dashboard
+                  </Link>
+                </>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -276,16 +294,18 @@ export default async function RequestDetailPage({ params }: Props) {
                         )}
                       </div>
                       <div className="flex items-center gap-3">
-                        <EditEntityButton
-                          entityId={entity.id}
-                          entityName={entity.entity_name}
-                          currentSignerEmail={entity.signer_email}
-                          currentAddress={entity.address}
-                          currentCity={entity.city}
-                          currentState={entity.state}
-                          currentZipCode={entity.zip_code}
-                          status={entity.status}
-                        />
+                        {!isDirectUser && (
+                          <EditEntityButton
+                            entityId={entity.id}
+                            entityName={entity.entity_name}
+                            currentSignerEmail={entity.signer_email}
+                            currentAddress={entity.address}
+                            currentCity={entity.city}
+                            currentState={entity.state}
+                            currentZipCode={entity.zip_code}
+                            status={entity.status}
+                          />
+                        )}
                         <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${getStatusBadgeColor(entity.status)}`}>
                           {formatStatus(entity.status)}
                         </span>
@@ -316,22 +336,24 @@ export default async function RequestDetailPage({ params }: Props) {
                     })()}
 
                     {/* Processor 8821 Panel — template downloads + upload */}
-                    <Processor8821Panel
-                      entity={{
-                        id: entity.id,
-                        entity_name: entity.entity_name,
-                        form_type: entity.form_type,
-                        status: entity.status,
-                        signed_8821_url: entity.signed_8821_url,
-                        signer_email: entity.signer_email,
-                        years: entity.years,
-                        tid_kind: entity.tid_kind,
-                      }}
-                      requestId={request.id}
-                    />
+                    {!isDirectUser && (
+                      <Processor8821Panel
+                        entity={{
+                          id: entity.id,
+                          entity_name: entity.entity_name,
+                          form_type: entity.form_type,
+                          status: entity.status,
+                          signed_8821_url: entity.signed_8821_url,
+                          signer_email: entity.signer_email,
+                          years: entity.years,
+                          tid_kind: entity.tid_kind,
+                        }}
+                        requestId={request.id}
+                      />
+                    )}
 
                     {/* Signed 8821 */}
-                    {entity.signed_8821_url && (
+                    {!isDirectUser && entity.signed_8821_url && (
                       <div className="mb-4">
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3 mb-2">
                           <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -352,7 +374,7 @@ export default async function RequestDetailPage({ params }: Props) {
                     )}
 
                     {/* Entity Transcript Order */}
-                    {entity.gross_receipts && (entity.gross_receipts as any)?.entity_transcript_order?.requested && (
+                    {!isDirectUser && entity.gross_receipts && (entity.gross_receipts as any)?.entity_transcript_order?.requested && (
                       <div className={`rounded-lg p-4 mb-4 border ${(entity.gross_receipts as any)?.entity_transcript?.filingRequirements ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
@@ -374,8 +396,8 @@ export default async function RequestDetailPage({ params }: Props) {
                       </div>
                     )}
 
-                    {/* Financial Data */}
-                    {entity.gross_receipts && typeof entity.gross_receipts === 'object' && !(entity.gross_receipts as any)?.entity_transcript_order && (
+                    {/* Financial Data — internal raw gross_receipts dump; never shown to the taxpayer */}
+                    {!isDirectUser && entity.gross_receipts && typeof entity.gross_receipts === 'object' && !(entity.gross_receipts as any)?.entity_transcript_order && (
                       <div className="bg-gray-50 rounded-lg p-6 mb-4">
                         <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Financial Data</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -394,7 +416,7 @@ export default async function RequestDetailPage({ params }: Props) {
                     )}
 
                     {/* Compliance Score */}
-                    {entity.compliance_score !== null && entity.compliance_score !== undefined && (
+                    {!isDirectUser && entity.compliance_score !== null && entity.compliance_score !== undefined && (
                       <div className="bg-green-50 rounded-lg p-6 mb-4 border border-green-200">
                         <div className="flex items-center justify-between">
                           <div>
@@ -483,7 +505,7 @@ export default async function RequestDetailPage({ params }: Props) {
                               );
                             })}
                           </div>
-                          {internalNote && (
+                          {!isDirectUser && internalNote && (
                             <p className="mt-4 text-xs text-gray-500 italic border-t border-gray-100 pt-3">
                               {internalNote}
                             </p>
@@ -525,7 +547,7 @@ export default async function RequestDetailPage({ params }: Props) {
           {/* Transcript Monitoring — hidden for clients with
               disable_monitoring=true (Centerstone-style flat-rate
               contracts where re-pulls go through full new requests). */}
-          {!hideMonitoringUi && <MonitoringPanel
+          {!hideMonitoringUi && !isDirectUser && <MonitoringPanel
             requestId={request.id}
             entities={(request.request_entities || []).map((e: RequestEntity) => ({
               id: e.id,
@@ -536,8 +558,8 @@ export default async function RequestDetailPage({ params }: Props) {
             }))}
           />}
 
-          {/* Notes */}
-          {request.notes && (
+          {/* Notes — internal (carries master CAF + resolution strategy); never shown to the taxpayer */}
+          {!isDirectUser && request.notes && (
             <div className="bg-white rounded-lg shadow p-8">
               <h2 className="text-lg font-bold text-mt-dark mb-4">Notes</h2>
               <div className="bg-gray-50 rounded-lg p-4">

@@ -148,7 +148,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={noDeps} onChange={(e) => setNoDeps(e.target.checked)} />No dependents</label>
       </div>
 
-      <h3 className="text-sm font-semibold text-mt-dark mt-6 mb-1">State residency ({seed.states.join(' &amp; ') || 'NC & SC'})</h3>
+      <h3 className="text-sm font-semibold text-mt-dark mt-6 mb-1">State residency ({seed.states.join(' & ') || 'NC & SC'})</h3>
       <div className="space-y-2">
         {seed.years.map((y) => (
           <div key={y.year} className="grid grid-cols-12 gap-2 items-center text-sm">
