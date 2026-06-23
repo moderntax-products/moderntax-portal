@@ -119,6 +119,59 @@ export async function POST(request: NextRequest) {
           break;
         }
 
+        // -------------------------------------------------------------------
+        // ModernTax Direct back-year filing fee ($50 × years, less account
+        // credit). On success: mark the entity's fee paid, draw down the
+        // client's credit_balance by the credit applied, and append to the
+        // entity's payment ledger so additional Direct payments (state filing,
+        // etc.) accumulate over the engagement. Idempotent via the ledger's
+        // stripe_ref = session.id.
+        // -------------------------------------------------------------------
+        if (session.metadata?.flow === 'backyear_filing') {
+          const entityId = session.metadata.entity_id;
+          if (!entityId) { console.warn('[stripe-webhook] backyear_filing without entity_id'); break; }
+          const amountPaid = (session.amount_total || 0) / 100;
+          const creditApplied = Number(session.metadata.credit_applied) || 0;
+
+          const { data: already } = await (admin.from('credit_ledger' as any) as any)
+            .select('id').eq('stripe_ref', session.id).maybeSingle();
+          if (already) { console.log(`[stripe-webhook] backyear_filing ${session.id} already processed`); break; }
+
+          const { data: ent } = await admin.from('request_entities')
+            .select('gross_receipts, requests!inner(client_id)').eq('id', entityId).single() as { data: any };
+          const clientId = ent?.requests?.client_id || null;
+          const gr = ent?.gross_receipts || {};
+          const payments = Array.isArray(gr.payments) ? gr.payments : [];
+          payments.push({
+            kind: 'backyear_filing', amount: amountPaid, credit_applied: creditApplied,
+            years_filed: Number(session.metadata.years_filed) || null,
+            stripe_ref: session.id, paid_at: new Date().toISOString(),
+          });
+          const newGr = {
+            ...gr,
+            filing: { ...(gr.filing || {}), fee_paid: true, fee_paid_at: new Date().toISOString(), fee_paid_amount: amountPaid },
+            payments,
+          };
+          await (admin.from('request_entities') as any).update({ gross_receipts: newGr }).eq('id', entityId);
+
+          let balanceAfter: number | null = null;
+          if (clientId && creditApplied > 0) {
+            const { data: c } = await admin.from('clients').select('credit_balance').eq('id', clientId).single() as { data: any };
+            balanceAfter = Math.max(0, (Number(c?.credit_balance) || 0) - creditApplied);
+            await (admin.from('clients') as any).update({ credit_balance: balanceAfter }).eq('id', clientId);
+            await (admin.from('credit_ledger' as any) as any).insert({
+              client_id: clientId, kind: 'redemption', amount: -creditApplied, balance_after: balanceAfter,
+              stripe_ref: `${session.id}:credit`, note: 'Account credit applied to filing fee',
+            });
+          }
+          await (admin.from('credit_ledger' as any) as any).insert({
+            client_id: clientId, kind: 'filing_fee', amount: amountPaid, balance_after: balanceAfter,
+            stripe_ref: session.id, note: `Back-year filing fee — ${session.metadata.years_filed || '?'} yrs (entity ${entityId.slice(0, 8)})`,
+          });
+          console.log(`[stripe-webhook] backyear_filing: paid $${amountPaid} (credit $${creditApplied}) for entity ${entityId}`);
+          break;
+        }
+
         // Tier upgrade flow (mode=payment for Tier B, mode=subscription for
         // Tier C). On success, flip the client's billing_model + rates
         // so the next auto-invoice run uses the new tier.
