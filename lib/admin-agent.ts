@@ -150,6 +150,75 @@ function escalateFallback(reason: string): AgentDecision {
   };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Proactive outreach — the agent reaches OUT to whoever owes a task (an expert
+// sitting on an overdue SLA, a processor with an unsigned 8821), speaking like
+// a normal support agent. Modeled on the admin→expert/processor note voice.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface OutreachContext {
+  audience: 'expert' | 'processor';
+  recipientName: string;
+  entityName: string;
+  loanNumber: string | null;
+  formType: string | null;
+  years: string[] | null;
+  /** What's going on, in plain facts — e.g. "past the 24h turnaround SLA". */
+  situation: string;
+  /** The concrete ask — e.g. "wrap it up today or tell us if you're blocked". */
+  ask: string;
+}
+
+/** Plain-text, support-voice fallback used when the AI is unavailable. */
+function outreachFallback(ctx: OutreachContext): string {
+  const who = ctx.recipientName ? `Hi ${ctx.recipientName.split(' ')[0]},` : 'Hi,';
+  const ref = `${ctx.entityName}${ctx.loanNumber ? ` (loan ${ctx.loanNumber})` : ''}`;
+  return `${who} just checking in on ${ref} — ${ctx.situation}. ${ctx.ask} Happy to help if anything's in the way. — ModernTax Support`;
+}
+
+/**
+ * Compose a brief, warm check-in message for proactive outreach. Always returns
+ * a sendable string (AI when available, grounded template otherwise) so a nudge
+ * never silently fails.
+ */
+export async function composeOutreach(ctx: OutreachContext): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return outreachFallback(ctx);
+
+  const system = [
+    'You are ModernTax Support sending a brief in-portal check-in note to a',
+    `${ctx.audience} on our team's workflow. Speak like a warm, professional HUMAN support agent —`,
+    'never a bot, never a cold templated reminder. 1–3 sentences. Reference the specific entity/loan',
+    'and the situation, make ONE clear and kind ask, and offer help if they are blocked. Do not be',
+    'pushy, threatening, or guilt-trippy. Do NOT invent any facts beyond what you are given. End with',
+    '"— ModernTax Support". Output ONLY the message text — no preamble, no quotes, no JSON.',
+  ].join(' ');
+  const user = [
+    `Recipient: ${ctx.recipientName} (${ctx.audience})`,
+    `Entity: ${ctx.entityName}${ctx.loanNumber ? ` · loan ${ctx.loanNumber}` : ''}`,
+    ctx.formType ? `Form: ${ctx.formType}${ctx.years?.length ? ` for ${ctx.years.join(', ')}` : ''}` : '',
+    `Situation: ${ctx.situation}`,
+    `Ask: ${ctx.ask}`,
+    '',
+    'Write the check-in note now.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: MODEL, max_tokens: 300, system, messages: [{ role: 'user', content: user }] }),
+    });
+    if (!res.ok) return outreachFallback(ctx);
+    const data: any = await res.json();
+    const text: string = (data?.content?.[0]?.text || '').trim();
+    return text || outreachFallback(ctx);
+  } catch (err) {
+    console.error('[admin-agent] composeOutreach failed:', err);
+    return outreachFallback(ctx);
+  }
+}
+
 export async function decideOnThread(ctx: ThreadContext): Promise<AgentDecision> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return escalateFallback('AI not configured (ANTHROPIC_API_KEY unset) — needs human review');
