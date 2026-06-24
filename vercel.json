@@ -2,6 +2,10 @@
   "installCommand": "npm ci",
   "crons": [
     {
+      "path": "/api/cron/admin-agent",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/cron/processor-delay-digest",
       "schedule": "0 13 * * *"
     },
