@@ -31,3 +31,8 @@ CREATE INDEX IF NOT EXISTS reengagement_log_user_step_idx
   ON public.reengagement_log (user_id, step);
 CREATE INDEX IF NOT EXISTS reengagement_log_client_step_idx
   ON public.reengagement_log (client_id, step, sent_at DESC);
+
+-- 3. Lock the table down. Only the cron touches it, via the service-role key
+--    (which BYPASSES RLS), so enabling RLS with NO policies blocks all
+--    anon/authenticated access while the cron keeps working unchanged.
+ALTER TABLE public.reengagement_log ENABLE ROW LEVEL SECURITY;
