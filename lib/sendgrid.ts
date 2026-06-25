@@ -784,6 +784,47 @@ export async function sendExpertIssueNotification(
 }
 
 /**
+ * Notify the SUBMITTING PROCESSOR that one of their requests needs attention.
+ * Intentionally PII-FREE — no entity name, loan number, taxpayer ID, or the
+ * specific reason. All of that lives in the portal behind login (+ 2FA). The
+ * email is only a nudge to log in; the actual correction detail is posted as
+ * an in-portal note (see update-status).
+ */
+export async function sendProcessorActionNeededNudge(
+  processorEmail: string,
+  processorName: string,
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Hi ${processorName || 'there'},</p>
+<p>One of your ModernTax requests needs your attention — a correction is required before we can process it.</p>
+<p>For your security, the details are in your portal. Please <strong>log in</strong> to review the request and take action.</p>
+<p style="color:#6b7280;font-size:13px;">We don&rsquo;t include request or taxpayer details in email — they&rsquo;re kept behind your secure login.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Action needed in your ModernTax portal', content, {
+    text: 'Log in to ModernTax',
+    url: `${appUrl}/login`,
+  });
+
+  try {
+    await sgMail.send({
+      to: processorEmail,
+      from: fromEmail,
+      subject: 'Action needed in your ModernTax portal',
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send processor action-needed nudge:', error);
+  }
+}
+
+/**
  * Send expert overdue reminder
  * Daily reminder to experts with past-due assignments listing each entity
  */

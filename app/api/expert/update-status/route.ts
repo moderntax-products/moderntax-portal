@@ -2,7 +2,17 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendExpertIssueNotification, send8821FaxRequest } from '@/lib/sendgrid';
+import { sendExpertIssueNotification, send8821FaxRequest, sendProcessorActionNeededNudge } from '@/lib/sendgrid';
+
+// Flag reasons where the SUBMITTING PROCESSOR (not just admin) is notified
+// immediately to obtain a corrected, legible 8821 — the EIN/SSN is wrong or
+// handwritten/illegible with no supporting evidence. These remain billable
+// (taxpayer-data error). Every other reason notifies admin only, as before.
+const PROCESSOR_NOTIFY_REASONS: Record<string, string> = {
+  wrong_ein: 'The EIN on the 8821 is incorrect.',
+  wrong_ssn: 'The SSN on the 8821 is incorrect.',
+  illegible_tid: 'The EIN/SSN on the 8821 is handwritten or illegible, with no supporting evidence to verify it.',
+};
 
 export async function POST(request: Request) {
   try {
@@ -82,7 +92,7 @@ export async function POST(request: Request) {
 
         // 8821 rejection reasons that require resubmission
         const RESUBMISSION_REASONS = [
-          'bad_address', 'wrong_ein', 'wrong_ssn', 'wrong_business_name',
+          'bad_address', 'wrong_ein', 'wrong_ssn', 'illegible_tid', 'wrong_business_name',
           'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type',
           '8821_not_on_file', 'caf_not_on_file',
         ];
@@ -166,6 +176,52 @@ export async function POST(request: Request) {
           }
         } catch (emailError) {
           console.error('Failed to send expert issue notification:', emailError);
+        }
+
+        // Notify the SUBMITTING PROCESSOR immediately — ONLY for wrong /
+        // handwritten-illegible EIN/SSN (no supporting evidence). They must get
+        // a corrected, legible 8821. The order stays billable (their data error);
+        // we deliberately do NOT credit it back. All other reasons stay admin-only.
+        if (entityData && PROCESSOR_NOTIFY_REASONS[missReason]) {
+          try {
+            const { data: req } = await adminSupabase
+              .from('requests')
+              .select('loan_number, requested_by')
+              .eq('id', entityData.request_id)
+              .single() as { data: { loan_number: string | null; requested_by: string | null } | null };
+            if (req?.requested_by) {
+              const { data: proc } = await adminSupabase
+                .from('profiles')
+                .select('email, full_name, role')
+                .eq('id', req.requested_by)
+                .single() as { data: { email: string | null; full_name: string | null; role: string } | null };
+              if (proc?.email && ['processor', 'manager'].includes(proc.role)) {
+                // 1. Put the actual detail IN-PORTAL (behind login) as a support
+                //    note the processor sees on the entity — never in email.
+                const { data: noteAuthor } = await adminSupabase
+                  .from('profiles').select('id').eq('role', 'admin')
+                  .order('created_at', { ascending: true }).limit(1).maybeSingle() as { data: { id: string } | null };
+                if (noteAuthor) {
+                  await (adminSupabase.from('entity_notes' as any) as any).insert({
+                    entity_id: assignment.entity_id,
+                    author_id: noteAuthor.id,
+                    author_role: 'admin',
+                    author_name: 'ModernTax Support',
+                    body: `Correction needed before we can process this 8821: ${PROCESSOR_NOTIFY_REASONS[missReason]} The taxpayer's EIN/SSN must be typed and legible on the form (only the signature may be handwritten). Please obtain a corrected 8821 and re-upload it for this loan.`,
+                    kind: 'support',
+                  });
+                }
+                // 2. Email a PII-FREE nudge — no entity/loan/taxpayer detail; just
+                //    "log in." The detail above is gated behind their login (+ 2FA).
+                await sendProcessorActionNeededNudge(proc.email, proc.full_name || 'there');
+                // Intentionally billable (processor data error) — no credit-back.
+                // Traceability comes from the expert_issue_flagged audit above.
+                console.log(`[update-status] Processor ${proc.email} nudged (PII-free) for ${missReason} on entity ${assignment.entity_id?.slice(0, 8)} — billable, not credited`);
+              }
+            }
+          } catch (procNotifyErr) {
+            console.error('Failed to notify processor of TID correction:', procNotifyErr);
+          }
         }
 
         // Auto-send fax-back 8821 email when IRS rejects digital signature
