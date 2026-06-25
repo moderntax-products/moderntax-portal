@@ -180,6 +180,8 @@ export async function GET(request: NextRequest) {
             payment_reference: existingPeriod.payment_reference,
             gross_pay: Number(existingPeriod.gross_pay),
             notes: existingPeriod.notes,
+            mercury_payout_request_id: existingPeriod.mercury_payout_request_id ?? null,
+            mercury_payout_status: existingPeriod.mercury_payout_status ?? null,
           }
         : null,
     };

@@ -222,3 +222,91 @@ export function getMercuryInvoicePdfUrl(slug: string): string {
 export function getMercuryPayUrl(slug: string): string {
   return `https://app.mercury.com/pay/${slug}`;
 }
+
+// ---------------------------------------------------------------------------
+// Payouts — recipients + send-money (expert payroll). APPROVAL-GATED: a
+// send-money request lands in Mercury's approval queue; a human approves it
+// in the Mercury app before any money moves. We never create or store bank
+// details — Mercury holds them on the recipient (recipient-invite flow).
+// ---------------------------------------------------------------------------
+
+export interface MercuryRecipient {
+  id: string;
+  name: string;
+  status: string;
+  emails?: string[];
+  defaultPaymentMethod?: string | null;
+  dateLastPaid?: string | null;
+}
+
+/** All recipients on the Mercury org (used to match experts by name/email). */
+export async function listMercuryRecipients(limit = 1000): Promise<MercuryRecipient[]> {
+  const data = await mercuryFetch<{ recipients: MercuryRecipient[] }>(`/recipients?limit=${limit}`);
+  return data.recipients || [];
+}
+
+/**
+ * Create a Mercury recipient with just a name + email — Mercury only requires
+ * `name` and `emails`; bank details are optional, so the expert adds their own
+ * banking info in Mercury (we never store it). Used to AUTO-INVITE each expert.
+ */
+export async function createMercuryRecipient(name: string, email: string): Promise<MercuryRecipient> {
+  return mercuryFetch<MercuryRecipient>('/recipients', {
+    method: 'POST',
+    body: JSON.stringify({ name, emails: [email] }),
+  });
+}
+
+const normName = (s: string | null | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Find the Mercury recipient whose email or name matches an expert. */
+export function matchRecipient(
+  recipients: MercuryRecipient[],
+  expertName: string | null,
+  expertEmail: string | null,
+): MercuryRecipient | null {
+  const n = normName(expertName);
+  const e = (expertEmail || '').toLowerCase().trim();
+  return (
+    recipients.find(r => e && (r.emails || []).some(x => x.toLowerCase().trim() === e)) ||
+    (n ? recipients.find(r => normName(r.name) === n) : null) ||
+    null
+  );
+}
+
+/** Source account for outgoing payouts — env override, else the checking account. */
+export async function getPayoutAccountId(): Promise<string> {
+  const env = process.env.MERCURY_PAYOUT_ACCOUNT;
+  if (env) return env;
+  const accounts = await listMercuryAccounts();
+  const checking = accounts.find(a => a.kind === 'checking') || accounts[0];
+  if (!checking) throw new Error('No Mercury account available for payouts');
+  return checking.id;
+}
+
+export interface SendMoneyResult {
+  id?: string;
+  status?: string; // e.g. 'pendingApproval'
+  [k: string]: unknown;
+}
+
+/**
+ * Create a send-money request to a recipient. Per Mercury's approval rules this
+ * lands as `pendingApproval` for a human to approve in the Mercury app — we
+ * intentionally never auto-execute a transfer. `amount` is in dollars.
+ */
+export async function requestSendMoney(
+  accountId: string,
+  input: { recipientId: string; amount: number; note?: string; idempotencyKey?: string },
+): Promise<SendMoneyResult> {
+  return mercuryFetch<SendMoneyResult>(`/account/${accountId}/request-send-money`, {
+    method: 'POST',
+    body: JSON.stringify({
+      recipientId: input.recipientId,
+      amount: Number(input.amount.toFixed(2)),
+      paymentMethod: 'ach',
+      note: input.note || undefined,
+      idempotencyKey: input.idempotencyKey || undefined,
+    }),
+  });
+}

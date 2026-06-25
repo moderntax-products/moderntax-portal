@@ -45,6 +45,8 @@ interface ExpertSummary {
     payment_reference: string | null;
     gross_pay: number;
     notes: string | null;
+    mercury_payout_request_id?: string | null;
+    mercury_payout_status?: string | null;
   } | null;
 }
 
@@ -64,6 +66,43 @@ export function AdminPayrollClient() {
   const [busyExpertId, setBusyExpertId] = useState<string | null>(null);
   const [periodOverride, setPeriodOverride] = useState<{ start: string; end: string } | null>(null);
   const [paymentRefs, setPaymentRefs] = useState<Record<string, string>>({});
+  const [draftMsg, setDraftMsg] = useState<Record<string, string>>({});
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSyncRecipients = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/admin/expert-recipients-sync', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) { setError(json.detail || json.error || 'Sync failed'); return; }
+      setError(null);
+      window.alert(`Mercury recipients synced.\n\nCreated + invited: ${json.created}\nLinked to existing: ${json.matched}\nAlready linked: ${json.already_linked}\nTotal experts: ${json.total_experts}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDraftMercury = async (period_id: string, expert_id: string) => {
+    setBusyExpertId(expert_id);
+    setDraftMsg({ ...draftMsg, [period_id]: '' });
+    try {
+      const res = await fetch('/api/admin/expert-payout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period_id }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setDraftMsg({ ...draftMsg, [period_id]: `⚠ ${json.detail || json.error}` }); return; }
+      setDraftMsg({ ...draftMsg, [period_id]: `✓ Drafted in Mercury (${json.mercury_status}) — approve it in Mercury to release.` });
+      await refresh();
+    } catch (err) {
+      setDraftMsg({ ...draftMsg, [period_id]: err instanceof Error ? err.message : 'Mercury draft failed' });
+    } finally {
+      setBusyExpertId(null);
+    }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -152,6 +191,14 @@ export function AdminPayrollClient() {
               <p className="text-xs uppercase tracking-widest text-gray-500 font-bold">Period gross</p>
               <p className="text-2xl font-bold text-mt-green font-mono">{fmt$(data.total_gross)}</p>
             </div>
+            <button
+              onClick={handleSyncRecipients}
+              disabled={syncing}
+              title="Create/link a Mercury recipient for every expert so Mercury invites them to add their bank details"
+              className="px-4 py-2 text-sm font-bold rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {syncing ? 'Syncing…' : 'Sync experts → Mercury'}
+            </button>
             <Link href="/admin" className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
               ← Admin home
             </Link>
@@ -272,6 +319,20 @@ export function AdminPayrollClient() {
                       >
                         Re-roll
                       </button>
+                      {ex.existing_period.mercury_payout_request_id ? (
+                        <span className="px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg">
+                          Mercury: {ex.existing_period.mercury_payout_status || 'drafted'} — approve in Mercury
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleDraftMercury(ex.existing_period!.id, ex.expert_id)}
+                          disabled={busyExpertId === ex.expert_id}
+                          className="px-4 py-2 text-sm font-bold rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
+                          title="Draft an ACH payout in Mercury — you approve it in Mercury before money moves"
+                        >
+                          {busyExpertId === ex.expert_id ? 'Drafting…' : 'Draft Mercury payout'}
+                        </button>
+                      )}
                     </>
                   ) : (
                     <p className="text-xs text-emerald-700 font-semibold">
@@ -280,6 +341,11 @@ export function AdminPayrollClient() {
                     </p>
                   )}
                 </div>
+                {ex.existing_period && draftMsg[ex.existing_period.id] && (
+                  <p className={`mt-2 text-xs ${draftMsg[ex.existing_period.id].startsWith('⚠') ? 'text-red-600' : 'text-purple-700'}`}>
+                    {draftMsg[ex.existing_period.id]}
+                  </p>
+                )}
               </div>
             </div>
           ))
