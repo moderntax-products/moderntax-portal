@@ -266,6 +266,13 @@ export default function ExpertDashboard() {
               Timesheet
             </a>
             <a
+              href="/expert/payouts"
+              className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-semibold"
+              title="Your pay schedule, earnings, payout history, and W-9"
+            >
+              Payouts
+            </a>
+            <a
               href="/expert/onboarding"
               className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               title="Take the expert onboarding tour"
