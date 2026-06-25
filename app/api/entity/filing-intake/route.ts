@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
 
     const admin = createAdminClient();
     const { data: entity } = await admin.from('request_entities')
-      .select('id, gross_receipts, requests!inner(client_id)').eq('id', entityId).single() as { data: any };
+      .select('id, entity_name, gross_receipts, requests!inner(id, client_id)').eq('id', entityId).single() as { data: any };
     if (!entity) return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
     if (profile.role !== 'admin' && entity.requests?.client_id !== profile.client_id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -59,6 +59,22 @@ export async function POST(request: NextRequest) {
     const { error } = await (admin.from('request_entities') as any)
       .update({ gross_receipts: { ...gr, filing_intake } }).eq('id', entityId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Notify admins the FIRST time intake is authorized — ready to prepare returns.
+    if (body.authorize && !prior.authorized) {
+      try {
+        const { sendAdminMilestoneEmail } = await import('@/lib/sendgrid');
+        const { data: admins } = await admin.from('profiles').select('email').eq('role', 'admin') as { data: { email: string }[] | null };
+        const who = profile.full_name || profile.email;
+        await sendAdminMilestoneEmail(
+          (admins || []).map(a => a.email).filter(Boolean),
+          `Filing intake authorized — ${entity.entity_name}`,
+          [`<strong>${who}</strong> completed and <strong>authorized</strong> their filing intake for <strong>${entity.entity_name}</strong>.`,
+           `Their answers are saved on the entity — you're clear to prepare the returns.`],
+          { text: 'Open request', url: `${process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io'}/request/${entity.requests?.id || ''}` },
+        );
+      } catch (e) { console.warn('[filing-intake] authorize admin notify failed (non-blocking):', e); }
+    }
 
     return NextResponse.json({ success: true, authorized: !!filing_intake.authorized });
   } catch (err: any) {
