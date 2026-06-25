@@ -59,6 +59,15 @@ export async function POST(request: NextRequest) {
     const rawFormType = formData.get('form_type') as string | null;
     const years = formData.get('years') as string | null;
     const notes = formData.get('notes') as string | null;
+    // Taxpayer contact + mailing address — now REQUIRED on the upload form so we
+    // don't depend on parsing them off the (often scanned/illegible) 8821.
+    const signerFirstName = (formData.get('signer_first_name') as string | null)?.trim() || '';
+    const signerLastName = (formData.get('signer_last_name') as string | null)?.trim() || '';
+    const signerEmail = (formData.get('signer_email') as string | null)?.trim() || '';
+    const tpAddress = (formData.get('address') as string | null)?.trim() || '';
+    const tpCity = (formData.get('city') as string | null)?.trim() || '';
+    const tpState = (formData.get('state') as string | null)?.trim() || '';
+    const tpZip = (formData.get('zip_code') as string | null)?.trim() || '';
     const entityTranscriptRequested = formData.get('entity_transcript') === 'true';
     // Fiscal year end month (1-11). NULL = calendar year. Accepts "2",
     // "Feb", "February", "2/28", or "02-28". See parseFyeMonthFromFormData.
@@ -96,6 +105,19 @@ export async function POST(request: NextRequest) {
 
     if (!tid?.trim()) {
       return NextResponse.json({ error: 'Tax ID is required' }, { status: 400 });
+    }
+
+    // Require the actual taxpayer email + full mailing address (uploaded-8821
+    // feature). These populate the entity + Form 8821 Line 1 and aren't reliably
+    // parseable from scanned forms, so we collect them explicitly.
+    if (!signerFirstName || !signerLastName) {
+      return NextResponse.json({ error: 'Signee first and last name are required' }, { status: 400 });
+    }
+    if (!signerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail)) {
+      return NextResponse.json({ error: 'A valid taxpayer email is required' }, { status: 400 });
+    }
+    if (!tpAddress || !tpCity || !tpState || !tpZip) {
+      return NextResponse.json({ error: 'Taxpayer street address, city, state, and ZIP are required' }, { status: 400 });
     }
 
     // Mercury enrollment is now enforced inside checkOrderGate (called
@@ -195,12 +217,16 @@ export async function POST(request: NextRequest) {
         fiscal_year_end_month: fiscalYearEndMonth,
         signed_8821_url: filePath,
         status: '8821_signed',
-        ...(extr?.address ? { address: extr.address } : {}),
-        ...(extr?.city ? { city: extr.city } : {}),
-        ...(extr?.state ? { state: extr.state } : {}),
-        ...(extr?.zip ? { zip_code: extr.zip } : {}),
-        ...(extr?.signerFirstName ? { signer_first_name: extr.signerFirstName } : {}),
-        ...(extr?.signerLastName ? { signer_last_name: extr.signerLastName } : {}),
+        // Manually-entered taxpayer contact + address are authoritative; the
+        // 8821 parse is only a fallback for the signer name fields.
+        signer_email: signerEmail,
+        address: tpAddress || extr?.address || null,
+        city: tpCity || extr?.city || null,
+        state: tpState || extr?.state || null,
+        zip_code: tpZip || extr?.zip || null,
+        // Form-entered signee names are authoritative; 8821 parse is a fallback.
+        signer_first_name: signerFirstName || extr?.signerFirstName || null,
+        signer_last_name: signerLastName || extr?.signerLastName || null,
       };
 
       const grossReceipts: Record<string, unknown> = {};

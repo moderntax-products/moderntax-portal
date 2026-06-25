@@ -21,6 +21,19 @@ export function PdfUploadFlow() {
   const [tidKind, setTidKind] = useState<'EIN' | 'SSN'>('EIN');
   const [formType, setFormType] = useState('1040');
   const [years, setYears] = useState(String(new Date().getFullYear()));
+  // Taxpayer contact + mailing address — REQUIRED. We no longer rely on parsing
+  // them off the uploaded 8821 (that fails on flattened/scanned forms, leaving
+  // the entity — and any regenerated 8821's Line 1 — with a blank address).
+  const [signerFirstName, setSignerFirstName] = useState('');
+  const [signerLastName, setSignerLastName] = useState('');
+  const [signerEmail, setSignerEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [stateRegion, setStateRegion] = useState('');
+  const [zipCode, setZipCode] = useState('');
+  // Attestation: the name/address/SSN-EIN on the uploaded 8821 are TYPED &
+  // legible (only the signature is handwritten). Required before submit.
+  const [attestLegible, setAttestLegible] = useState(false);
   const [notes, setNotes] = useState('');
   const [entityTranscript, setEntityTranscript] = useState(false);
   // Filing-Compliance Report order (MOD-228 Phase 2): account transcript only.
@@ -44,6 +57,15 @@ export function PdfUploadFlow() {
     if (!loanNumber.trim()) { setError('Loan number is required'); return; }
     if (!entityName.trim()) { setError('Entity name is required'); return; }
     if (!tid.trim()) { setError('Tax ID is required'); return; }
+    if (!signerFirstName.trim()) { setError('Signee first name is required'); return; }
+    if (!signerLastName.trim()) { setError('Signee last name is required'); return; }
+    if (!signerEmail.trim()) { setError('Taxpayer email is required'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail.trim())) { setError('Enter a valid taxpayer email'); return; }
+    if (!address.trim()) { setError('Taxpayer street address is required'); return; }
+    if (!city.trim()) { setError('Taxpayer city is required'); return; }
+    if (!stateRegion.trim()) { setError('Taxpayer state is required'); return; }
+    if (!zipCode.trim()) { setError('Taxpayer ZIP is required'); return; }
+    if (!attestLegible) { setError('Please confirm the name, address, and SSN/EIN on the 8821 are typed and legible'); return; }
 
     setIsLoading(true);
 
@@ -56,6 +78,13 @@ export function PdfUploadFlow() {
       formData.append('tid_kind', tidKind);
       formData.append('form_type', formType);
       formData.append('years', years);
+      formData.append('signer_first_name', signerFirstName.trim());
+      formData.append('signer_last_name', signerLastName.trim());
+      formData.append('signer_email', signerEmail.trim());
+      formData.append('address', address.trim());
+      formData.append('city', city.trim());
+      formData.append('state', stateRegion.trim());
+      formData.append('zip_code', zipCode.trim());
       if (entityTranscript) formData.append('entity_transcript', 'true');
       if (filingCompliance) formData.append('filing_compliance', 'true');
       if (notes) formData.append('notes', notes);
@@ -155,6 +184,53 @@ export function PdfUploadFlow() {
           </div>
         </div>
 
+        {/* Taxpayer contact + mailing address — REQUIRED. Captured here (not
+            parsed off the 8821) so it's reliable even on scanned/handwritten
+            forms, and so a regenerated 8821 has a complete Line 1. */}
+        <div className="border border-gray-200 rounded-lg p-4 mb-6 bg-gray-50">
+          <p className="text-sm font-semibold text-mt-dark mb-1">Signee taxpayer &amp; mailing address <span className="text-red-500">*</span></p>
+          <p className="text-xs text-gray-500 mb-3">Enter the signee taxpayer&apos;s name, email, and address exactly as they appear on the 8821 — these populate Form 8821 Line 1 and our notifications. Type them; don&apos;t rely on the scanned form.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Signee first name <span className="text-red-500">*</span></label>
+              <input type="text" value={signerFirstName} onChange={(e) => setSignerFirstName(e.target.value)} placeholder="First name" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Signee last name <span className="text-red-500">*</span></label>
+              <input type="text" value={signerLastName} onChange={(e) => setSignerLastName(e.target.value)} placeholder="Last name" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Taxpayer email <span className="text-red-500">*</span></label>
+              <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="taxpayer@example.com" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Street address <span className="text-red-500">*</span></label>
+              <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">City <span className="text-red-500">*</span></label>
+              <input type="text" value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">State <span className="text-red-500">*</span></label>
+                <input type="text" value={stateRegion} onChange={(e) => setStateRegion(e.target.value)} placeholder="CA" disabled={isLoading}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">ZIP <span className="text-red-500">*</span></label>
+                <input type="text" value={zipCode} onChange={(e) => setZipCode(e.target.value)} placeholder="94111" disabled={isLoading}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Filing-Compliance Report order (MOD-228 Phase 2) */}
         <div className={`mb-6 border rounded-lg p-4 transition-colors ${filingCompliance ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-gray-50'}`}>
           <label className="flex items-start gap-3 cursor-pointer">
@@ -217,9 +293,21 @@ export function PdfUploadFlow() {
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any additional context..." rows={3} disabled={isLoading}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
         </div>
+
+        {/* Legibility attestation — the only handwritten part of the 8821 may be
+            the signature. Name / address / SSN-EIN must be typed & legible. */}
+        <div className={`mt-6 border rounded-lg p-4 transition-colors ${attestLegible ? 'border-mt-green bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={attestLegible} onChange={() => setAttestLegible(!attestLegible)} disabled={isLoading}
+              className="w-5 h-5 mt-0.5 rounded border-gray-300 text-mt-green focus:ring-mt-green disabled:opacity-50" />
+            <span className="text-sm text-mt-dark">
+              I confirm the taxpayer&apos;s <strong>name, address, and SSN/EIN are typed and legible</strong> on this 8821 — only the signature is handwritten. Forms with handwritten or illegible name/address/TIN fields are rejected by the IRS and can&apos;t be processed.
+            </span>
+          </label>
+        </div>
       </div>
 
-      <button type="submit" disabled={isLoading || files.length === 0}
+      <button type="submit" disabled={isLoading || files.length === 0 || !attestLegible}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
         {isLoading ? 'Uploading...' : 'Upload Signed 8821'}
       </button>
