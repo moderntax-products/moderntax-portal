@@ -14,6 +14,7 @@ const MISS_REASON_CATEGORIES = [
       { value: 'bad_address', label: 'Wrong / Incomplete Address on 8821' },
       { value: 'wrong_ein', label: 'Wrong EIN on 8821' },
       { value: 'wrong_ssn', label: 'Wrong SSN on 8821' },
+      { value: 'illegible_tid', label: 'Handwritten / Illegible EIN or SSN — no supporting evidence' },
       { value: 'wrong_business_name', label: 'Wrong Business Name on 8821' },
       { value: 'wrong_taxpayer_name', label: 'Wrong Taxpayer Name on 8821' },
       { value: 'missing_tax_years', label: 'Missing or Wrong Tax Years on 8821' },
@@ -144,9 +145,15 @@ export function ExpertFlagIssue({ assignmentId, onComplete }: ExpertFlagIssuePro
         </div>
       )}
 
-      {['bad_address', 'wrong_ein', 'wrong_ssn', 'wrong_business_name', 'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type'].includes(missReason) && (
+      {['bad_address', 'wrong_ein', 'wrong_ssn', 'illegible_tid', 'wrong_business_name', 'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type'].includes(missReason) && (
         <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
           <strong>Please include in notes:</strong> What the IRS said was wrong and what the correct value should be. This will be used to fix the 8821 before resubmission.
+        </div>
+      )}
+
+      {['wrong_ein', 'wrong_ssn', 'illegible_tid'].includes(missReason) && (
+        <div className="text-xs text-purple-700 bg-purple-50 border border-purple-200 p-2 rounded">
+          <strong>Note:</strong> This notifies the submitting processor directly to obtain a corrected, legible 8821. The order remains billable (taxpayer-data error).
         </div>
       )}
 

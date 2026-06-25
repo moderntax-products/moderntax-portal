@@ -784,6 +784,52 @@ export async function sendExpertIssueNotification(
 }
 
 /**
+ * Notify the SUBMITTING PROCESSOR immediately when an 8821 they uploaded can't
+ * be processed because the EIN/SSN is wrong, or handwritten/illegible with no
+ * supporting evidence. Prompts them to obtain a corrected, legible 8821. Other
+ * flag reasons go to the admin only (per usual) — this fires only for the
+ * taxpayer-TIN-data cases the processor must fix. The order remains billable.
+ */
+export async function sendProcessorTidCorrectionRequest(
+  processorEmail: string,
+  processorName: string,
+  entityName: string,
+  loanNumber: string,
+  reasonLabel: string,
+  requestId: string,
+): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send email');
+    return;
+  }
+
+  const content = `
+<p>Hi ${processorName || 'there'},</p>
+<p>The signed 8821 you submitted for <strong>${entityName}</strong> (Loan #${loanNumber}) can&rsquo;t be processed as-is:</p>
+<p style="font-size:15px;"><strong>${reasonLabel}</strong></p>
+<p>The taxpayer&rsquo;s <strong>EIN/SSN must be typed and legible</strong> on the 8821 (only the signature may be handwritten). Please obtain a corrected 8821 with the right, legible taxpayer ID and a fresh signature, then re-upload it for this loan.</p>
+<p style="color:#6b7280;font-size:13px;">Getting this back to us quickly avoids further delay on the IRS pull.</p>
+  `.trim();
+
+  const html = createEmailTemplate('Updated 8821 needed', content, {
+    text: 'View Request',
+    url: `${appUrl}/request/${requestId}`,
+  });
+
+  try {
+    await sgMail.send({
+      to: processorEmail,
+      from: fromEmail,
+      subject: `[Action needed] Updated 8821 required — ${entityName} (Loan #${loanNumber})`,
+      html,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (error) {
+    console.error('Failed to send processor TID correction request:', error);
+  }
+}
+
+/**
  * Send expert overdue reminder
  * Daily reminder to experts with past-due assignments listing each entity
  */

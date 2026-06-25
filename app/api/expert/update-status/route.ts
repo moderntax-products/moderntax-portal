@@ -2,7 +2,17 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendExpertIssueNotification, send8821FaxRequest } from '@/lib/sendgrid';
+import { sendExpertIssueNotification, send8821FaxRequest, sendProcessorTidCorrectionRequest } from '@/lib/sendgrid';
+
+// Flag reasons where the SUBMITTING PROCESSOR (not just admin) is notified
+// immediately to obtain a corrected, legible 8821 — the EIN/SSN is wrong or
+// handwritten/illegible with no supporting evidence. These remain billable
+// (taxpayer-data error). Every other reason notifies admin only, as before.
+const PROCESSOR_NOTIFY_REASONS: Record<string, string> = {
+  wrong_ein: 'The EIN on the 8821 is incorrect.',
+  wrong_ssn: 'The SSN on the 8821 is incorrect.',
+  illegible_tid: 'The EIN/SSN on the 8821 is handwritten or illegible, with no supporting evidence to verify it.',
+};
 
 export async function POST(request: Request) {
   try {
@@ -82,7 +92,7 @@ export async function POST(request: Request) {
 
         // 8821 rejection reasons that require resubmission
         const RESUBMISSION_REASONS = [
-          'bad_address', 'wrong_ein', 'wrong_ssn', 'wrong_business_name',
+          'bad_address', 'wrong_ein', 'wrong_ssn', 'illegible_tid', 'wrong_business_name',
           'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type',
           '8821_not_on_file', 'caf_not_on_file',
         ];
@@ -166,6 +176,42 @@ export async function POST(request: Request) {
           }
         } catch (emailError) {
           console.error('Failed to send expert issue notification:', emailError);
+        }
+
+        // Notify the SUBMITTING PROCESSOR immediately — ONLY for wrong /
+        // handwritten-illegible EIN/SSN (no supporting evidence). They must get
+        // a corrected, legible 8821. The order stays billable (their data error);
+        // we deliberately do NOT credit it back. All other reasons stay admin-only.
+        if (entityData && PROCESSOR_NOTIFY_REASONS[missReason]) {
+          try {
+            const { data: req } = await adminSupabase
+              .from('requests')
+              .select('loan_number, requested_by')
+              .eq('id', entityData.request_id)
+              .single() as { data: { loan_number: string | null; requested_by: string | null } | null };
+            if (req?.requested_by) {
+              const { data: proc } = await adminSupabase
+                .from('profiles')
+                .select('email, full_name, role')
+                .eq('id', req.requested_by)
+                .single() as { data: { email: string | null; full_name: string | null; role: string } | null };
+              if (proc?.email && ['processor', 'manager'].includes(proc.role)) {
+                await sendProcessorTidCorrectionRequest(
+                  proc.email,
+                  proc.full_name || 'there',
+                  entityData.entity_name,
+                  req.loan_number || '—',
+                  PROCESSOR_NOTIFY_REASONS[missReason],
+                  entityData.request_id,
+                );
+                // Intentionally billable (processor data error) — no credit-back.
+                // Traceability comes from the expert_issue_flagged audit above.
+                console.log(`[update-status] Processor ${proc.email} notified for ${missReason} on ${entityData.entity_name} — billable, not credited`);
+              }
+            }
+          } catch (procNotifyErr) {
+            console.error('Failed to notify processor of TID correction:', procNotifyErr);
+          }
         }
 
         // Auto-send fax-back 8821 email when IRS rejects digital signature
