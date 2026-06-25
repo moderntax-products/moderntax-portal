@@ -61,6 +61,8 @@ export async function POST(request: NextRequest) {
     const notes = formData.get('notes') as string | null;
     // Taxpayer contact + mailing address — now REQUIRED on the upload form so we
     // don't depend on parsing them off the (often scanned/illegible) 8821.
+    const signerFirstName = (formData.get('signer_first_name') as string | null)?.trim() || '';
+    const signerLastName = (formData.get('signer_last_name') as string | null)?.trim() || '';
     const signerEmail = (formData.get('signer_email') as string | null)?.trim() || '';
     const tpAddress = (formData.get('address') as string | null)?.trim() || '';
     const tpCity = (formData.get('city') as string | null)?.trim() || '';
@@ -108,6 +110,9 @@ export async function POST(request: NextRequest) {
     // Require the actual taxpayer email + full mailing address (uploaded-8821
     // feature). These populate the entity + Form 8821 Line 1 and aren't reliably
     // parseable from scanned forms, so we collect them explicitly.
+    if (!signerFirstName || !signerLastName) {
+      return NextResponse.json({ error: 'Signee first and last name are required' }, { status: 400 });
+    }
     if (!signerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail)) {
       return NextResponse.json({ error: 'A valid taxpayer email is required' }, { status: 400 });
     }
@@ -219,8 +224,9 @@ export async function POST(request: NextRequest) {
         city: tpCity || extr?.city || null,
         state: tpState || extr?.state || null,
         zip_code: tpZip || extr?.zip || null,
-        ...(extr?.signerFirstName ? { signer_first_name: extr.signerFirstName } : {}),
-        ...(extr?.signerLastName ? { signer_last_name: extr.signerLastName } : {}),
+        // Form-entered signee names are authoritative; 8821 parse is a fallback.
+        signer_first_name: signerFirstName || extr?.signerFirstName || null,
+        signer_last_name: signerLastName || extr?.signerLastName || null,
       };
 
       const grossReceipts: Record<string, unknown> = {};
