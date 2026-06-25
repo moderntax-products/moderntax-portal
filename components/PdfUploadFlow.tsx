@@ -21,6 +21,14 @@ export function PdfUploadFlow() {
   const [tidKind, setTidKind] = useState<'EIN' | 'SSN'>('EIN');
   const [formType, setFormType] = useState('1040');
   const [years, setYears] = useState(String(new Date().getFullYear()));
+  // Taxpayer contact + mailing address — REQUIRED. We no longer rely on parsing
+  // them off the uploaded 8821 (that fails on flattened/scanned forms, leaving
+  // the entity — and any regenerated 8821's Line 1 — with a blank address).
+  const [signerEmail, setSignerEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [stateRegion, setStateRegion] = useState('');
+  const [zipCode, setZipCode] = useState('');
   const [notes, setNotes] = useState('');
   const [entityTranscript, setEntityTranscript] = useState(false);
   // Filing-Compliance Report order (MOD-228 Phase 2): account transcript only.
@@ -44,6 +52,12 @@ export function PdfUploadFlow() {
     if (!loanNumber.trim()) { setError('Loan number is required'); return; }
     if (!entityName.trim()) { setError('Entity name is required'); return; }
     if (!tid.trim()) { setError('Tax ID is required'); return; }
+    if (!signerEmail.trim()) { setError('Taxpayer email is required'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail.trim())) { setError('Enter a valid taxpayer email'); return; }
+    if (!address.trim()) { setError('Taxpayer street address is required'); return; }
+    if (!city.trim()) { setError('Taxpayer city is required'); return; }
+    if (!stateRegion.trim()) { setError('Taxpayer state is required'); return; }
+    if (!zipCode.trim()) { setError('Taxpayer ZIP is required'); return; }
 
     setIsLoading(true);
 
@@ -56,6 +70,11 @@ export function PdfUploadFlow() {
       formData.append('tid_kind', tidKind);
       formData.append('form_type', formType);
       formData.append('years', years);
+      formData.append('signer_email', signerEmail.trim());
+      formData.append('address', address.trim());
+      formData.append('city', city.trim());
+      formData.append('state', stateRegion.trim());
+      formData.append('zip_code', zipCode.trim());
       if (entityTranscript) formData.append('entity_transcript', 'true');
       if (filingCompliance) formData.append('filing_compliance', 'true');
       if (notes) formData.append('notes', notes);
@@ -152,6 +171,43 @@ export function PdfUploadFlow() {
               placeholder={`e.g., ${new Date().getFullYear()}, ${new Date().getFullYear() - 1}, ${new Date().getFullYear() - 2}`} disabled={isLoading}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
             <p className="text-xs text-gray-500 mt-1">Comma-separated years</p>
+          </div>
+        </div>
+
+        {/* Taxpayer contact + mailing address — REQUIRED. Captured here (not
+            parsed off the 8821) so it's reliable even on scanned/handwritten
+            forms, and so a regenerated 8821 has a complete Line 1. */}
+        <div className="border border-gray-200 rounded-lg p-4 mb-6 bg-gray-50">
+          <p className="text-sm font-semibold text-mt-dark mb-1">Taxpayer contact &amp; mailing address <span className="text-red-500">*</span></p>
+          <p className="text-xs text-gray-500 mb-3">Enter the taxpayer&apos;s actual email and address exactly as they appear on the 8821 — these populate Form 8821 Line 1 and our notifications.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Taxpayer email <span className="text-red-500">*</span></label>
+              <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="taxpayer@example.com" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Street address <span className="text-red-500">*</span></label>
+              <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">City <span className="text-red-500">*</span></label>
+              <input type="text" value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" disabled={isLoading}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">State <span className="text-red-500">*</span></label>
+                <input type="text" value={stateRegion} onChange={(e) => setStateRegion(e.target.value)} placeholder="CA" disabled={isLoading}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">ZIP <span className="text-red-500">*</span></label>
+                <input type="text" value={zipCode} onChange={(e) => setZipCode(e.target.value)} placeholder="94111" disabled={isLoading}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+              </div>
+            </div>
           </div>
         </div>
 
