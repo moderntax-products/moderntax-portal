@@ -20,7 +20,9 @@
     "GHSA-36qx-fr4f-26g5",
     "GHSA-4r6h-8v6p-xvw6",
     "GHSA-5pgg-2g8v-p4x9",
-    "GHSA-5j98-mcp5-4vw2"
+    "GHSA-5j98-mcp5-4vw2",
+    "GHSA-hmw2-7cc7-3qxx",
+    "GHSA-96hv-2xvq-fx4p"
   ],
   "report-type": "summary"
 }
