@@ -784,19 +784,15 @@ export async function sendExpertIssueNotification(
 }
 
 /**
- * Notify the SUBMITTING PROCESSOR immediately when an 8821 they uploaded can't
- * be processed because the EIN/SSN is wrong, or handwritten/illegible with no
- * supporting evidence. Prompts them to obtain a corrected, legible 8821. Other
- * flag reasons go to the admin only (per usual) — this fires only for the
- * taxpayer-TIN-data cases the processor must fix. The order remains billable.
+ * Notify the SUBMITTING PROCESSOR that one of their requests needs attention.
+ * Intentionally PII-FREE — no entity name, loan number, taxpayer ID, or the
+ * specific reason. All of that lives in the portal behind login (+ 2FA). The
+ * email is only a nudge to log in; the actual correction detail is posted as
+ * an in-portal note (see update-status).
  */
-export async function sendProcessorTidCorrectionRequest(
+export async function sendProcessorActionNeededNudge(
   processorEmail: string,
   processorName: string,
-  entityName: string,
-  loanNumber: string,
-  reasonLabel: string,
-  requestId: string,
 ): Promise<void> {
   if (!sendGridApiKey) {
     console.warn('SendGrid API key not configured - cannot send email');
@@ -805,27 +801,26 @@ export async function sendProcessorTidCorrectionRequest(
 
   const content = `
 <p>Hi ${processorName || 'there'},</p>
-<p>The signed 8821 you submitted for <strong>${entityName}</strong> (Loan #${loanNumber}) can&rsquo;t be processed as-is:</p>
-<p style="font-size:15px;"><strong>${reasonLabel}</strong></p>
-<p>The taxpayer&rsquo;s <strong>EIN/SSN must be typed and legible</strong> on the 8821 (only the signature may be handwritten). Please obtain a corrected 8821 with the right, legible taxpayer ID and a fresh signature, then re-upload it for this loan.</p>
-<p style="color:#6b7280;font-size:13px;">Getting this back to us quickly avoids further delay on the IRS pull.</p>
+<p>One of your ModernTax requests needs your attention — a correction is required before we can process it.</p>
+<p>For your security, the details are in your portal. Please <strong>log in</strong> to review the request and take action.</p>
+<p style="color:#6b7280;font-size:13px;">We don&rsquo;t include request or taxpayer details in email — they&rsquo;re kept behind your secure login.</p>
   `.trim();
 
-  const html = createEmailTemplate('Updated 8821 needed', content, {
-    text: 'View Request',
-    url: `${appUrl}/request/${requestId}`,
+  const html = createEmailTemplate('Action needed in your ModernTax portal', content, {
+    text: 'Log in to ModernTax',
+    url: `${appUrl}/login`,
   });
 
   try {
     await sgMail.send({
       to: processorEmail,
       from: fromEmail,
-      subject: `[Action needed] Updated 8821 required — ${entityName} (Loan #${loanNumber})`,
+      subject: 'Action needed in your ModernTax portal',
       html,
       replyTo: 'support@moderntax.io',
     });
   } catch (error) {
-    console.error('Failed to send processor TID correction request:', error);
+    console.error('Failed to send processor action-needed nudge:', error);
   }
 }
 

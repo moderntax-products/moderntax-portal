@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { sendExpertIssueNotification, send8821FaxRequest, sendProcessorTidCorrectionRequest } from '@/lib/sendgrid';
+import { sendExpertIssueNotification, send8821FaxRequest, sendProcessorActionNeededNudge } from '@/lib/sendgrid';
 
 // Flag reasons where the SUBMITTING PROCESSOR (not just admin) is notified
 // immediately to obtain a corrected, legible 8821 — the EIN/SSN is wrong or
@@ -196,17 +196,27 @@ export async function POST(request: Request) {
                 .eq('id', req.requested_by)
                 .single() as { data: { email: string | null; full_name: string | null; role: string } | null };
               if (proc?.email && ['processor', 'manager'].includes(proc.role)) {
-                await sendProcessorTidCorrectionRequest(
-                  proc.email,
-                  proc.full_name || 'there',
-                  entityData.entity_name,
-                  req.loan_number || '—',
-                  PROCESSOR_NOTIFY_REASONS[missReason],
-                  entityData.request_id,
-                );
+                // 1. Put the actual detail IN-PORTAL (behind login) as a support
+                //    note the processor sees on the entity — never in email.
+                const { data: noteAuthor } = await adminSupabase
+                  .from('profiles').select('id').eq('role', 'admin')
+                  .order('created_at', { ascending: true }).limit(1).maybeSingle() as { data: { id: string } | null };
+                if (noteAuthor) {
+                  await (adminSupabase.from('entity_notes' as any) as any).insert({
+                    entity_id: assignment.entity_id,
+                    author_id: noteAuthor.id,
+                    author_role: 'admin',
+                    author_name: 'ModernTax Support',
+                    body: `Correction needed before we can process this 8821: ${PROCESSOR_NOTIFY_REASONS[missReason]} The taxpayer's EIN/SSN must be typed and legible on the form (only the signature may be handwritten). Please obtain a corrected 8821 and re-upload it for this loan.`,
+                    kind: 'support',
+                  });
+                }
+                // 2. Email a PII-FREE nudge — no entity/loan/taxpayer detail; just
+                //    "log in." The detail above is gated behind their login (+ 2FA).
+                await sendProcessorActionNeededNudge(proc.email, proc.full_name || 'there');
                 // Intentionally billable (processor data error) — no credit-back.
                 // Traceability comes from the expert_issue_flagged audit above.
-                console.log(`[update-status] Processor ${proc.email} notified for ${missReason} on ${entityData.entity_name} — billable, not credited`);
+                console.log(`[update-status] Processor ${proc.email} nudged (PII-free) for ${missReason} on entity ${assignment.entity_id?.slice(0, 8)} — billable, not credited`);
               }
             }
           } catch (procNotifyErr) {
