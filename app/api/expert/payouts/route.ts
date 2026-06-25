@@ -126,5 +126,19 @@ export async function POST(request: NextRequest) {
     .eq('id', profile.id);
   if (updErr) return NextResponse.json({ error: 'Failed to record W-9', detail: updErr.message }, { status: 500 });
 
+  // Notify admins — this unblocks the expert's payout (sync to Mercury + draft).
+  try {
+    const { sendAdminMilestoneEmail } = await import('@/lib/sendgrid');
+    const { data: admins } = await admin.from('profiles').select('email').eq('role', 'admin') as { data: { email: string }[] | null };
+    const who = profile.full_name || profile.email;
+    await sendAdminMilestoneEmail(
+      (admins || []).map(a => a.email).filter(Boolean),
+      `W-9 received — ${who}`,
+      [`<strong>${who}</strong> (${profile.email}) just uploaded their signed W-9.`,
+       `They're ready to be paid — sync them to Mercury and draft a payout from Admin → Payroll.`],
+      { text: 'Open Payroll', url: `${process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io'}/admin/payroll` },
+    );
+  } catch (e) { console.warn('[payouts] W-9 admin notify failed (non-blocking):', e); }
+
   return NextResponse.json({ success: true, uploaded_at: new Date().toISOString() });
 }

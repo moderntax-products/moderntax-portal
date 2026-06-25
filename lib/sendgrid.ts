@@ -156,6 +156,29 @@ function createEmailTemplate(
 }
 
 /**
+ * Concise per-event admin milestone email (e.g. an expert uploaded their W-9,
+ * a taxpayer authorized their filing intake). Rare, actionable events — a push
+ * so admin can act without polling. Sends to every admin.
+ */
+export async function sendAdminMilestoneEmail(
+  adminEmails: string[],
+  subject: string,
+  lines: string[],
+  cta?: { text: string; url: string },
+): Promise<void> {
+  if (!sendGridApiKey || adminEmails.length === 0) return;
+  const content = lines.map(l => `<p>${l}</p>`).join('');
+  const html = createEmailTemplate(subject, content, cta);
+  for (const to of adminEmails) {
+    try {
+      await sgMail.send({ to, from: fromEmail, subject, html, replyTo: 'support@moderntax.io' });
+    } catch (error) {
+      console.error('[admin-milestone] send failed:', error);
+    }
+  }
+}
+
+/**
  * Send password reset email
  * Triggered when user requests a password reset via /forgot-password
  */
