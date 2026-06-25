@@ -245,6 +245,18 @@ export async function listMercuryRecipients(limit = 1000): Promise<MercuryRecipi
   return data.recipients || [];
 }
 
+/**
+ * Create a Mercury recipient with just a name + email — Mercury only requires
+ * `name` and `emails`; bank details are optional, so the expert adds their own
+ * banking info in Mercury (we never store it). Used to AUTO-INVITE each expert.
+ */
+export async function createMercuryRecipient(name: string, email: string): Promise<MercuryRecipient> {
+  return mercuryFetch<MercuryRecipient>('/recipients', {
+    method: 'POST',
+    body: JSON.stringify({ name, emails: [email] }),
+  });
+}
+
 const normName = (s: string | null | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /** Find the Mercury recipient whose email or name matches an expert. */

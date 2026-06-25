@@ -67,6 +67,22 @@ export function AdminPayrollClient() {
   const [periodOverride, setPeriodOverride] = useState<{ start: string; end: string } | null>(null);
   const [paymentRefs, setPaymentRefs] = useState<Record<string, string>>({});
   const [draftMsg, setDraftMsg] = useState<Record<string, string>>({});
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSyncRecipients = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch('/api/admin/expert-recipients-sync', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) { setError(json.detail || json.error || 'Sync failed'); return; }
+      setError(null);
+      window.alert(`Mercury recipients synced.\n\nCreated + invited: ${json.created}\nLinked to existing: ${json.matched}\nAlready linked: ${json.already_linked}\nTotal experts: ${json.total_experts}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleDraftMercury = async (period_id: string, expert_id: string) => {
     setBusyExpertId(expert_id);
@@ -175,6 +191,14 @@ export function AdminPayrollClient() {
               <p className="text-xs uppercase tracking-widest text-gray-500 font-bold">Period gross</p>
               <p className="text-2xl font-bold text-mt-green font-mono">{fmt$(data.total_gross)}</p>
             </div>
+            <button
+              onClick={handleSyncRecipients}
+              disabled={syncing}
+              title="Create/link a Mercury recipient for every expert so Mercury invites them to add their bank details"
+              className="px-4 py-2 text-sm font-bold rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {syncing ? 'Syncing…' : 'Sync experts → Mercury'}
+            </button>
             <Link href="/admin" className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
               ← Admin home
             </Link>

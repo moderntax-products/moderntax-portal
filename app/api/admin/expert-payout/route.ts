@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import {
-  listMercuryRecipients, matchRecipient, getPayoutAccountId, requestSendMoney,
+  listMercuryRecipients, matchRecipient, createMercuryRecipient, getPayoutAccountId, requestSendMoney,
 } from '@/lib/mercury';
 
 export const runtime = 'nodejs';
@@ -60,26 +60,22 @@ export async function POST(request: NextRequest) {
     .select('id, full_name, email, mercury_recipient_id, w9_url').eq('id', period.expert_id).single() as { data: any };
   if (!expert) return NextResponse.json({ error: 'Expert not found' }, { status: 404 });
 
-  // Resolve the Mercury recipient.
+  // Resolve the Mercury recipient — match existing, else AUTO-CREATE (Mercury
+  // then collects the expert's bank details directly; we never store them).
   let recipientId: string | null = expert.mercury_recipient_id || null;
   if (!recipientId) {
+    if (!expert.email) {
+      return NextResponse.json({ error: 'Expert has no email — cannot create a Mercury recipient' }, { status: 400 });
+    }
     try {
       const recips = await listMercuryRecipients();
       const m = matchRecipient(recips, expert.full_name, expert.email);
-      if (m) {
-        recipientId = m.id;
-        await (admin.from('profiles' as any) as any).update({ mercury_recipient_id: m.id }).eq('id', expert.id);
-      }
+      const r = m || await createMercuryRecipient(expert.full_name || expert.email, expert.email);
+      recipientId = r.id;
+      await (admin.from('profiles' as any) as any).update({ mercury_recipient_id: r.id }).eq('id', expert.id);
     } catch (e: any) {
-      return NextResponse.json({ error: 'Could not reach Mercury to resolve recipient', detail: e?.message }, { status: 502 });
+      return NextResponse.json({ error: 'Could not resolve/create Mercury recipient', detail: e?.message }, { status: 502 });
     }
-  }
-  if (!recipientId) {
-    return NextResponse.json({
-      error: 'No Mercury recipient on file for this expert',
-      detail: `Invite ${expert.full_name || expert.email} as a recipient in Mercury (they add their own bank details), then draft the payout again.`,
-      code: 'no_recipient',
-    }, { status: 409 });
   }
 
   // Draft the approval-gated send-money request.
