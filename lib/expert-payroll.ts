@@ -40,6 +40,83 @@ export interface SessionTotals {
   grossPay: number;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Margin-guard payout engine (Matt 2026-06-26 PRD).
+//
+// Protects platform gross margin: pay the hourly baseline UNLESS the expert was
+// too slow, in which case a per-TIN piece-rate cap kicks in. Zero verified units
+// in a period blocks the payout entirely. Efficiency (TINs/hr) is recorded for
+// work-routing tiers. The hourly side honors each expert's configured rate; the
+// cap is a fixed margin floor.
+//   MAX_COST_PER_TIN = $32.99  ($59.98 min client bill − 45% target margin)
+// ───────────────────────────────────────────────────────────────────────────
+export const MARGIN_GUARD = {
+  MAX_COST_PER_TIN: 32.99,
+  MIN_EFFICIENCY_TARGET: 5.0, // TINs/hr — routing-tier target, NOT a pay gate
+};
+
+export type PayoutStatus =
+  | 'APPROVED_FOR_PAYMENT'
+  | 'BLOCKED_ZERO_PRODUCTION'
+  | 'CAP_OVERRIDE_TRIGGERED';
+
+export interface PayoutCalc {
+  hours: number;
+  tinsCompleted: number;
+  efficiencyRate: number; // TINs/hr
+  hourlyGross: number;    // hours × hourly rate (uncapped)
+  pieceRateCap: number;   // tins × MAX_COST_PER_TIN
+  payoutAmount: number;   // final, cap-protected & zero-blocked
+  status: PayoutStatus;
+  notes: string;
+}
+
+/**
+ * Cap-protected, zero-blocked payout for a pay period. Single source of truth —
+ * used by the live payroll view, the close-period (approval) step, and any
+ * downstream Mercury draft. Mirrors the PRD pseudocode exactly.
+ */
+export function calculateExpertPayout(
+  hours: number,
+  tinsCompleted: number,
+  hourlyRate: number = PAYROLL_DEFAULTS.HOURLY_RATE,
+  maxCostPerTin: number = MARGIN_GUARD.MAX_COST_PER_TIN,
+): PayoutCalc {
+  const h = Math.max(0, Number(hours) || 0);
+  const tins = Math.max(0, Math.trunc(Number(tinsCompleted) || 0));
+  const efficiencyRate = h > 0 ? round2(tins / h) : 0;
+  const hourlyGross = round2(h * hourlyRate);
+  const pieceRateCap = round2(tins * maxCostPerTin);
+  const base = { hours: round2(h), tinsCompleted: tins, efficiencyRate, hourlyGross, pieceRateCap };
+
+  // Rule 1 — zero-production block (no verified units ⇒ no payout).
+  if (tins === 0) {
+    return { ...base, payoutAmount: 0, status: 'BLOCKED_ZERO_PRODUCTION',
+      notes: 'No payout authorized. Zero units completed.' };
+  }
+  // Rule 2 — cap-protected hourly engine.
+  if (hourlyGross <= pieceRateCap) {
+    return { ...base, payoutAmount: hourlyGross, status: 'APPROVED_FOR_PAYMENT',
+      notes: `Completed ${tins} TINs in ${round2(h)} hrs (${efficiencyRate} TINs/hr).` };
+  }
+  return { ...base, payoutAmount: pieceRateCap, status: 'CAP_OVERRIDE_TRIGGERED',
+    notes: `Capped to protect margin — ${tins} TINs in ${round2(h)} hrs (${efficiencyRate} TINs/hr): `
+      + `$${hourlyGross.toFixed(2)} hourly exceeds the $${pieceRateCap.toFixed(2)} per-TIN cap.` };
+}
+
+/**
+ * Work-routing tier from rolling efficiency (PRD §5B). Frequent cap-overrides
+ * demote to Tier 3 regardless of the headline rate.
+ */
+export function efficiencyTier(
+  efficiencyRate: number,
+  frequentlyCapped = false,
+): { tier: 1 | 2 | 3; label: string } {
+  if (frequentlyCapped || efficiencyRate < 2.0) return { tier: 3, label: 'Restricted' };
+  if (efficiencyRate < 4.0) return { tier: 2, label: 'Standard' };
+  return { tier: 1, label: 'High priority' };
+}
+
 /**
  * Roll up totals for a window. Pure math — caller passes the raw inputs.
  */
