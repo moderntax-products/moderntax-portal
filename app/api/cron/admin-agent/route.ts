@@ -29,7 +29,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import sgMail from '@sendgrid/mail';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
-import { decideOnThread, composeOutreach, type ThreadContext } from '@/lib/admin-agent';
+import { decideOnThread, composeOutreach, analyzeTranscriptGap, type ThreadContext } from '@/lib/admin-agent';
 
 export const maxDuration = 60;
 export const runtime = 'nodejs';
@@ -44,6 +44,10 @@ const INBOUND_ROLES = ['expert', 'processor', 'manager', 'direct_user'];
 const NUDGE_COOLDOWN_HOURS = 18;
 // A processor's 8821 has been out for signature "too long" past this many days.
 const PROCESSOR_8821_STALE_DAYS = 4;
+// Transcript-gap detector: only look at recently-completed entities, cap the work.
+const TRANSCRIPT_GAP_WINDOW_DAYS = 21;
+const MAX_GAP_FLAGS_PER_RUN = 20;
+const EMPTY_MARKERS = ['no record of return filed', 'requested data not found'];
 
 export async function GET(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
@@ -236,6 +240,52 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ─── 4. Transcript-gap detector — MFJ-spouse-primary / unfiled recognition ──
+  // Recognize a pull that came back incomplete because the return is filed under
+  // a DIFFERENT SSN (classically a joint return under the spouse listed first),
+  // and post the instruction note so nobody chases a transcript that will never
+  // appear under the queried SSN. (Matt 2026-06-25.)
+  let gapFlags = 0;
+  const gapWindow = new Date(now - TRANSCRIPT_GAP_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+  const { data: completedEntities } = await admin.from('request_entities')
+    .select('id, entity_name, form_type, years, transcript_urls, transcript_html_urls')
+    .eq('status', 'completed').gte('updated_at', gapWindow)
+    .not('years', 'is', null).order('updated_at', { ascending: false }).limit(120) as { data: any[] | null };
+
+  for (const e of completedEntities || []) {
+    if (gapFlags >= MAX_GAP_FLAGS_PER_RUN) break;
+    const requested: string[] = (e.years || []).map(String);
+    if (requested.length === 0) continue;
+
+    // Dedupe: the gap detector is the only thing that posts a SUPPORT_AUTHOR
+    // 'instruction' note, so one already on file means this entity is handled.
+    const { data: priorFlag } = await (admin.from('entity_notes' as any) as any)
+      .select('id').eq('entity_id', e.id).eq('author_name', SUPPORT_AUTHOR).eq('kind', 'instruction')
+      .limit(1).maybeSingle();
+    if (priorFlag) continue;
+
+    const { yearsWithData, emptyYears, distinctTins } = await scanTranscriptFiles(admin, e);
+    const gapYears = requested.filter(y => !yearsWithData.includes(y));
+    if (gapYears.length === 0) continue;
+    // Only act with EVIDENCE of why — an empty IRS pull or a second SSN in the
+    // household. A bare missing year with neither is likely just not-yet-pulled;
+    // leave that to the SLA/stale paths rather than guessing "unfiled".
+    if (emptyYears.length === 0 && distinctTins.length < 2) continue;
+
+    const verdict = await analyzeTranscriptGap({
+      entityName: e.entity_name, formType: e.form_type,
+      requestedYears: requested, yearsWithData, emptyYears, gapYears, distinctTinSuffixes: distinctTins,
+    });
+    const tag = `${e.entity_name} — gap ${gapYears.join(',')} [${verdict.likely_cause}/${verdict.confidence}]`;
+    if (autoSend) {
+      await postNote(admin, e.id, adminProfile.id, verdict.note_body, 'instruction');
+      gapFlags++;
+      log.push(`TRANSCRIPT-GAP FLAG ${tag}`);
+    } else {
+      log.push(`WOULD FLAG TRANSCRIPT-GAP ${tag} → ${verdict.note_body.slice(0, 120)}`);
+    }
+  }
+
   if (log.length) console.log('[admin-agent]\n' + log.join('\n'));
 
   return NextResponse.json({
@@ -246,6 +296,7 @@ export async function GET(request: NextRequest) {
     escalated_in_portal: escalated,
     expert_sla_nudges: expertNudges,
     processor_8821_nudges: processorNudges,
+    transcript_gap_flags: gapFlags,
     actions: log,
     processed_at: new Date(now).toISOString(),
   });
@@ -288,4 +339,45 @@ async function emailRecipient(
 
 function escapeHtml(s: string): string {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Inspect an entity's pulled transcript files to learn which years actually
+ * came back with a return, which came back empty ("No record"), and how many
+ * distinct SSNs the pull touched (a 2nd SSN ⇒ a likely joint-return spouse).
+ *
+ * PDFs are treated as real returns (the IRS error pages are only ever HTML — a
+ * PDF means there was content to render). HTML files are downloaded and read for
+ * the year, the masked TIN, and the empty-result markers. Downloads are bounded.
+ */
+async function scanTranscriptFiles(
+  admin: ReturnType<typeof createAdminClient>,
+  entity: { transcript_urls?: string[] | null; transcript_html_urls?: string[] | null },
+): Promise<{ yearsWithData: string[]; emptyYears: string[]; distinctTins: string[] }> {
+  const paths = [...(entity.transcript_urls || []), ...(entity.transcript_html_urls || [])];
+  const yearsWithData = new Set<string>();
+  const emptyYears = new Set<string>();
+  const tins = new Set<string>();
+  let htmlReads = 0;
+
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p) continue;
+    const yearFromName = (p.match(/20\d\d/) || [])[0];
+    if (/\.pdf$/i.test(p)) { if (yearFromName) yearsWithData.add(yearFromName); continue; }
+    if (htmlReads >= 14) continue; // bound the work per entity
+    let text = '';
+    try {
+      const { data: blob } = await admin.storage.from('uploads').download(p);
+      if (blob) { text = (await blob.text()).toLowerCase(); htmlReads++; }
+    } catch { /* unreadable file → fall through */ }
+    if (!text) { if (yearFromName) yearsWithData.add(yearFromName); continue; }
+    const yr = (text.match(/12-31-(20\d\d)/) || [])[1] || yearFromName;
+    const tin = (text.match(/xxx-xx-(\d{4})/) || [])[1];
+    if (tin) tins.add(tin);
+    const empty = EMPTY_MARKERS.some(m => text.includes(m));
+    if (yr) { if (empty) emptyYears.add(yr); else yearsWithData.add(yr); }
+  }
+  // A year that has any real data outranks an empty artifact for the same year.
+  for (const y of yearsWithData) emptyYears.delete(y);
+  return { yearsWithData: [...yearsWithData], emptyYears: [...emptyYears], distinctTins: [...tins] };
 }
