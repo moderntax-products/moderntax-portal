@@ -32,6 +32,14 @@ interface ExpertSummary {
     efficiencyPct: number;
     grossPay: number;
   };
+  payout: {
+    efficiency_rate: number; // TINs/hr
+    hourly_gross: number;
+    piece_rate_cap: number;
+    payout_amount: number;   // cap-protected, zero-blocked
+    status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'CAP_OVERRIDE_TRIGGERED';
+    notes: string;
+  };
   sla_met_pct: number | null;
   /** Number of currently-open clock-in sessions (no end_at). Admin should
    *  prompt the expert to close them before period-close so the hours
@@ -44,6 +52,8 @@ interface ExpertSummary {
     paid_at: string | null;
     payment_reference: string | null;
     gross_pay: number;
+    payout_status?: string | null;
+    efficiency_rate?: number | null;
     notes: string | null;
     mercury_payout_request_id?: string | null;
     mercury_payout_status?: string | null;
@@ -68,6 +78,15 @@ export function AdminPayrollClient() {
   const [paymentRefs, setPaymentRefs] = useState<Record<string, string>>({});
   const [draftMsg, setDraftMsg] = useState<Record<string, string>>({});
   const [syncing, setSyncing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyAmount = async (id: string, amount: number) => {
+    try {
+      await navigator.clipboard.writeText(amount.toFixed(2));
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(c => (c === id ? null : c)), 1500);
+    } catch { /* clipboard unavailable — no-op */ }
+  };
 
   const handleSyncRecipients = async () => {
     setSyncing(true);
@@ -256,18 +275,25 @@ export function AdminPayrollClient() {
                     <span className={`ml-auto inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
                       ex.existing_period.status === 'paid' ? 'bg-emerald-100 text-emerald-800'
                       : ex.existing_period.status === 'approved' ? 'bg-blue-100 text-blue-800'
+                      : ex.existing_period.status === 'blocked' ? 'bg-red-100 text-red-800'
                       : 'bg-amber-100 text-amber-800'
                     }`}>{ex.existing_period.status}</span>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm mb-4">
-                  <Stat label="Sessions" value={ex.log_count} />
+                <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm mb-3">
                   <Stat label="Hours" value={ex.live_totals.hours.toFixed(2)} />
                   <Stat label="TINs" value={ex.live_totals.tinsCompleted} />
-                  <Stat label="Eff." value={fmtPct(ex.live_totals.efficiencyPct)} accent={ex.live_totals.efficiencyPct >= 80 ? 'emerald' : 'amber'} />
+                  <Stat label="Efficiency" value={`${ex.payout.efficiency_rate.toFixed(2)}/hr`} accent={ex.payout.efficiency_rate >= 4 ? 'emerald' : ex.payout.efficiency_rate >= 2 ? 'amber' : 'red'} />
                   <Stat label="SLA met" value={fmtPct(ex.sla_met_pct)} accent={(ex.sla_met_pct ?? 100) >= 90 ? 'emerald' : 'amber'} />
-                  <Stat label="Gross" value={fmt$(ex.live_totals.grossPay)} accent="emerald" />
+                  <Stat label="Hourly gross" value={fmt$(ex.payout.hourly_gross)} />
+                  <Stat label="Payout" value={fmt$(ex.payout.payout_amount)} accent={ex.payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'red' : 'emerald'} />
+                </div>
+
+                {/* Margin-guard status — what the admin will actually approve. */}
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <PayoutStatusBadge status={ex.payout.status} />
+                  <span className="text-xs text-gray-500">{ex.payout.notes}</span>
                 </div>
 
                 {/* Open-session warning. Admin should ping the expert to clock
@@ -293,8 +319,25 @@ export function AdminPayrollClient() {
                       disabled={busyExpertId === ex.expert_id || ex.live_totals.hours === 0}
                       className="px-4 py-2 text-sm font-bold rounded-lg bg-mt-dark text-white hover:bg-mt-dark/90 disabled:opacity-50"
                     >
-                      {busyExpertId === ex.expert_id ? 'Closing…' : ex.live_totals.hours === 0 ? 'No hours yet' : 'Close period (approve)'}
+                      {busyExpertId === ex.expert_id ? 'Closing…'
+                        : ex.live_totals.hours === 0 ? 'No hours yet'
+                        : ex.payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'Close (zero production — blocks payout)'
+                        : 'Close period (approve)'}
                     </button>
+                  ) : ex.existing_period.status === 'blocked' ? (
+                    <>
+                      <span className="px-3 py-2 text-xs font-bold rounded-lg bg-red-50 text-red-700 border border-red-200">
+                        🚫 Payout blocked — zero verified units. Not payable.
+                      </span>
+                      <button
+                        onClick={() => handleClosePeriod(ex.expert_id)}
+                        disabled={busyExpertId === ex.expert_id}
+                        className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                        title="Re-roll if sessions/TINs were corrected after this was blocked"
+                      >
+                        Re-roll
+                      </button>
+                    </>
                   ) : ex.existing_period.status !== 'paid' ? (
                     <>
                       <input
@@ -304,6 +347,13 @@ export function AdminPayrollClient() {
                         placeholder="Stripe transfer ref / check #"
                         className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
                       />
+                      <button
+                        onClick={() => handleCopyAmount(ex.existing_period!.id, ex.existing_period!.gross_pay)}
+                        className="px-3 py-2 text-sm font-semibold rounded-lg bg-gray-100 text-gray-800 hover:bg-gray-200"
+                        title="Copy the finalized payout amount"
+                      >
+                        {copiedId === ex.existing_period.id ? '✓ Copied' : `Copy ${fmt$(ex.existing_period.gross_pay)}`}
+                      </button>
                       <button
                         onClick={() => handleMarkPaid(ex.existing_period!.id, ex.expert_id)}
                         disabled={busyExpertId === ex.expert_id}
@@ -330,7 +380,7 @@ export function AdminPayrollClient() {
                           className="px-4 py-2 text-sm font-bold rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
                           title="Draft an ACH payout in Mercury — you approve it in Mercury before money moves"
                         >
-                          {busyExpertId === ex.expert_id ? 'Drafting…' : 'Draft Mercury payout'}
+                          {busyExpertId === ex.expert_id ? 'Drafting…' : `Draft Mercury payout (${fmt$(ex.existing_period.gross_pay)})`}
                         </button>
                       )}
                     </>
@@ -369,4 +419,13 @@ function Stat({ label, value, accent }: { label: string; value: number | string;
       <p className={`text-base font-bold ${tone} font-mono`}>{value}</p>
     </div>
   );
+}
+
+function PayoutStatusBadge({ status }: { status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'CAP_OVERRIDE_TRIGGERED' }) {
+  const map = {
+    APPROVED_FOR_PAYMENT: { cls: 'bg-emerald-100 text-emerald-800', label: 'Approved for payment' },
+    CAP_OVERRIDE_TRIGGERED: { cls: 'bg-amber-100 text-amber-800', label: 'Cap override (margin-protected)' },
+    BLOCKED_ZERO_PRODUCTION: { cls: 'bg-red-100 text-red-800', label: 'Blocked — zero production' },
+  }[status];
+  return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase ${map.cls}`}>{map.label}</span>;
 }

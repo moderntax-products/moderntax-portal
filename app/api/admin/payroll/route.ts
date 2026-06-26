@@ -23,6 +23,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import {
   computeSessionTotals,
   computeSlaMetPct,
+  calculateExpertPayout,
   payPeriodFor,
   PAYROLL_DEFAULTS,
 } from '@/lib/expert-payroll';
@@ -152,8 +153,11 @@ export async function GET(request: NextRequest) {
       totalTins += Number(l.tins_completed) || 0;
     }
     const totals = computeSessionTotals(totalHours, totalTins, hourlyRate, targetRate);
+    // Margin-guard engine: efficiency, cap-protected amount, zero-production block.
+    const payout = calculateExpertPayout(totalHours, totalTins, hourlyRate);
     const slaMetPct = computeSlaMetPct(expertCompleted, tz);
-    totalGross += totals.grossPay;
+    // Period total reflects the ACTUAL (capped, zero-blocked) payout, not raw gross.
+    totalGross += payout.payoutAmount;
 
     const existingPeriod = periodByExpert.get(ex.id) || null;
     return {
@@ -165,6 +169,15 @@ export async function GET(request: NextRequest) {
       payment_method: ex.payment_method || 'stripe_connect',
       log_count: expertLogs.length,
       live_totals: totals,
+      // Cap-protected payout the admin will actually approve (PRD engine).
+      payout: {
+        efficiency_rate: payout.efficiencyRate,
+        hourly_gross: payout.hourlyGross,
+        piece_rate_cap: payout.pieceRateCap,
+        payout_amount: payout.payoutAmount,
+        status: payout.status,
+        notes: payout.notes,
+      },
       sla_met_pct: slaMetPct,
       // Open-session warning fields — admin should resolve these before
       // closing the period, otherwise the hours go uncounted. The
@@ -179,6 +192,8 @@ export async function GET(request: NextRequest) {
             paid_at: existingPeriod.paid_at,
             payment_reference: existingPeriod.payment_reference,
             gross_pay: Number(existingPeriod.gross_pay),
+            payout_status: existingPeriod.payout_status ?? null,
+            efficiency_rate: existingPeriod.efficiency_rate != null ? Number(existingPeriod.efficiency_rate) : null,
             notes: existingPeriod.notes,
             mercury_payout_request_id: existingPeriod.mercury_payout_request_id ?? null,
             mercury_payout_status: existingPeriod.mercury_payout_status ?? null,
@@ -241,6 +256,10 @@ export async function POST(request: NextRequest) {
       totalTins += Number(l.tins_completed) || 0;
     }
     const totals = computeSessionTotals(totalHours, totalTins, hourlyRate, targetRate);
+    // Margin-guard engine decides the amount + approvability. Zero-production
+    // closes as 'blocked' (never 'approved'), so it can never be drafted/paid.
+    const payout = calculateExpertPayout(totalHours, totalTins, hourlyRate);
+    const lifecycleStatus = payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'blocked' : 'approved';
 
     const { data: completed } = await (admin
       .from('expert_assignments' as any) as any)
@@ -264,10 +283,15 @@ export async function POST(request: NextRequest) {
       total_tins: totals.tinsCompleted,
       expected_tins: totals.expectedTins,
       efficiency_pct: totals.efficiencyPct,
+      efficiency_rate: payout.efficiencyRate,
+      hourly_gross: payout.hourlyGross,
+      piece_rate_cap: payout.pieceRateCap,
+      payout_status: payout.status,
       sla_met_pct: slaMetPct,
-      gross_pay: totals.grossPay,
-      status: 'approved',
-      notes: (notes || '').trim() || null,
+      // The cap-protected, zero-blocked amount — what actually gets paid.
+      gross_pay: payout.payoutAmount,
+      status: lifecycleStatus,
+      notes: (notes || '').trim() || payout.notes,
       updated_at: new Date().toISOString(),
     };
 
@@ -287,7 +311,10 @@ export async function POST(request: NextRequest) {
         .lt('start_at', endExclusiveIso);
     }
 
-    return NextResponse.json({ success: true, action: 'close_period', period_id: upserted?.id, totals });
+    return NextResponse.json({
+      success: true, action: 'close_period', period_id: upserted?.id,
+      totals, payout, lifecycle_status: lifecycleStatus,
+    });
   }
 
   if (action === 'mark_paid') {

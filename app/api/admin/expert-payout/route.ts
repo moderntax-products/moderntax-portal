@@ -44,9 +44,13 @@ export async function POST(request: NextRequest) {
 
   const { data: period } = await admin
     .from('expert_pay_periods')
-    .select('id, expert_id, gross_pay, status, period_start, period_end, mercury_payout_request_id')
+    .select('id, expert_id, gross_pay, status, payout_status, period_start, period_end, mercury_payout_request_id')
     .eq('id', periodId).single() as { data: any };
   if (!period) return NextResponse.json({ error: 'Pay period not found' }, { status: 404 });
+  // Margin-guard gate: a zero-production period is blocked and can never pay out.
+  if (period.payout_status === 'BLOCKED_ZERO_PRODUCTION' || period.status === 'blocked') {
+    return NextResponse.json({ error: 'Payout blocked — zero verified units completed this period. No payout authorized.' }, { status: 400 });
+  }
   if (period.status !== 'approved') {
     return NextResponse.json({ error: `Pay period must be 'approved' first (is '${period.status}')` }, { status: 400 });
   }
