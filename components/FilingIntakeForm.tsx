@@ -29,12 +29,15 @@ interface Props {
   saved?: SavedAnswers | null;
   authorized?: boolean;
   authorizedAt?: string | null;
+  /** Where to POST. Defaults to the logged-in route; the public no-login page
+   *  passes the token-gated endpoint. */
+  submitUrl?: string;
 }
 
 const STATUSES = ['Single', 'Married filing jointly', 'Married filing separately', 'Head of household', 'Qualifying surviving spouse', "Didn't need to file (no/low income)"];
 const usd = (n: number | null) => (n == null ? '—' : '$' + n.toLocaleString());
 
-export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAuthorized, authorizedAt }: Props) {
+export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAuthorized, authorizedAt, submitUrl }: Props) {
   const s0 = saved || {};
   const [dob, setDob] = useState(s0.dob || '');
   const [address, setAddress] = useState(s0.address || seed.address);
@@ -62,7 +65,7 @@ export function FilingIntakeForm({ entityId, seed, saved, authorized: alreadyAut
   const post = async (authorizeNow: boolean) => {
     setSaving(true); setError(null); setMsg(null);
     try {
-      const res = await fetch('/api/entity/filing-intake', {
+      const res = await fetch(submitUrl || '/api/entity/filing-intake', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entityId, answers: collect(), authorize: authorizeNow }),
       });
