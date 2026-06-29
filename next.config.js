@@ -8,7 +8,10 @@ const nextConfig = {
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
   experimental: {
-    serverComponentsExternalPackages: ['@sendgrid/mail'],
+    // @sparticuz/chromium + puppeteer-core must stay external so Vercel ships
+    // the Chromium binary (in node_modules) into the lambda instead of webpack
+    // trying to bundle it. Used only by the transcript HTML→PDF conversion cron.
+    serverComponentsExternalPackages: ['@sendgrid/mail', '@sparticuz/chromium', 'puppeteer-core'],
   },
 };
 
