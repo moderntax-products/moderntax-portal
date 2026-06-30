@@ -72,6 +72,19 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Q3 transition (after June is billed at the standard rate): California
+  // Statewide CDC prepaid Q3 at a locked $71.91/entity (QT-CALI-Q3-0003). Flip
+  // their PDF rate now so any Q3 overage beyond the prepaid pool bills at the
+  // locked rate. Q3 pool drawdown itself uses clients.credit_rate ($71.91),
+  // already set. Idempotent. (Revert to $79.98 at Q4 / renewal.)
+  let q3RateFlip: string | null = null;
+  if (!dry) {
+    const CDC = '3256293c-6c98-42bc-a828-2b73a603048e';
+    const { error } = await admin.from('clients').update({ billing_rate_pdf: 71.91 }).eq('id', CDC);
+    q3RateFlip = error ? `failed: ${error.message}` : 'CDC billing_rate_pdf -> $71.91 (Q3 locked overage rate)';
+    log.push(`[q3-rate] ${q3RateFlip}`);
+  }
+
   if (log.length) console.log('[send-june-2026-invoices]\n' + log.join('\n'));
-  return NextResponse.json({ success: true, mode: dry ? 'dry' : 'live', date_utc: todayUtc, results });
+  return NextResponse.json({ success: true, mode: dry ? 'dry' : 'live', date_utc: todayUtc, results, q3RateFlip });
 }
