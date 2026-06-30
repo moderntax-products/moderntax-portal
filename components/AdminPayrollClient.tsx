@@ -404,7 +404,7 @@ export function AdminPayrollClient() {
         {/* Footer note */}
         <div className="text-xs text-gray-500 pt-4 border-t border-gray-200">
           <p>Live totals re-derive from time logs + expert_assignments on every load — admin always sees current numbers. &quot;Close period&quot; snapshots the totals into expert_pay_periods so they don&apos;t drift after you approve. &quot;Re-roll&quot; updates an already-approved snapshot if late sessions come in.</p>
-          <p className="mt-1">Stripe Connect auto-payout integration is Phase 2 — for now Mark Paid records the manual payment reference for audit.</p>
+          <p className="mt-1">Payouts run through Mercury (ACH). &quot;Draft Mercury payout&quot; queues an approval-gated transfer; you approve it in Mercury before money moves. &quot;Mark paid&quot; records the reference for audit.</p>
         </div>
       </div>
     </div>

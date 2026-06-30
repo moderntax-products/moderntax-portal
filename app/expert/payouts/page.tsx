@@ -82,7 +82,7 @@ export default function ExpertPayoutsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                 <div><p className="text-[11px] uppercase tracking-wide text-gray-500 font-bold">Current period</p><p className="text-mt-dark font-semibold">{fmtDate(data.pay_schedule.current_period_start)} – {fmtDate(data.pay_schedule.current_period_end)}</p></div>
                 <div><p className="text-[11px] uppercase tracking-wide text-gray-500 font-bold">Expected pay date</p><p className="text-mt-dark font-semibold">{fmtDate(data.pay_schedule.current_pay_date)}</p></div>
-                <div><p className="text-[11px] uppercase tracking-wide text-gray-500 font-bold">Payment method</p><p className="text-mt-dark font-semibold">{data.payment_method || 'Not set — contact admin'}</p></div>
+                <div><p className="text-[11px] uppercase tracking-wide text-gray-500 font-bold">Payment method</p><p className="text-mt-dark font-semibold">Direct deposit via Mercury</p><p className="text-[11px] text-gray-500 mt-0.5">You&rsquo;ll get a Mercury invite to add your bank details — payouts arrive by ACH.</p></div>
               </div>
             </div>
 

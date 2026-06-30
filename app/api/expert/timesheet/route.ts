@@ -122,7 +122,7 @@ export async function GET() {
     profile: {
       hourly_rate: hourlyRate,
       target_tins_per_hour: targetRate,
-      payment_method: profile.payment_method || 'stripe_connect',
+      payment_method: profile.payment_method || 'mercury',
       iana_timezone: expertTz,
     },
     active_session: activeSession || null,
