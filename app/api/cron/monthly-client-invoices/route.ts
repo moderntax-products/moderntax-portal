@@ -96,12 +96,16 @@ type MonitorDetail = {
 
 // ─── Per-client invoice builder ───────────────────────────────────────────────
 
-async function issueMonthlyInvoice(
+export async function issueMonthlyInvoice(
   admin: ReturnType<typeof createAdminClient>,
   clientId: string,
   periodStart: string, // YYYY-MM-DD
   periodEnd: string,
   log: string[],
+  // Optional recipient override (e.g. send to managers + AP instead of AP-only).
+  // When provided, the breakdown email goes to `to` (cc `cc`); otherwise it
+  // falls back to the client's billing_ap_email / billing_ap_email_cc.
+  recipients?: { to: string[]; cc?: string[] },
 ): Promise<{ invoiceNumber: string; total: number; payUrl: string } | null> {
   const L = (s: string) => { log.push(s); console.log(`[monthly-invoice] ${s}`); };
 
@@ -303,7 +307,12 @@ async function issueMonthlyInvoice(
   }
 
   // ── SendGrid email ────────────────────────────────────────────────────────
-  if (process.env.SENDGRID_API_KEY && client.billing_ap_email) {
+  // Recipients: explicit override (managers + AP) when provided, else AP-only.
+  const emailTo = recipients?.to?.length ? recipients.to : (client.billing_ap_email ? [client.billing_ap_email] : []);
+  const emailCc = recipients?.to?.length
+    ? (recipients.cc || [])
+    : (client.billing_ap_email_cc?.length ? client.billing_ap_email_cc : []);
+  if (process.env.SENDGRID_API_KEY && emailTo.length) {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
     const fmtDate = (s: string | null) => s ? s.slice(0, 10) : '';
     const procRows = processorGroups.map(g =>
@@ -333,8 +342,8 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
 
     try {
       await sgMail.send({
-        to: client.billing_ap_email,
-        cc: client.billing_ap_email_cc?.length ? client.billing_ap_email_cc : undefined,
+        to: emailTo,
+        cc: emailCc.length ? emailCc : undefined,
         from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
         subject: `${invoiceNumber} — ${client.name} — ${fmtUsd(grandTotal)} due ${dueDate}`,
         html,
@@ -406,6 +415,13 @@ export async function GET(request: NextRequest) {
   const periodStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
   const lastDay = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0).getDate();
   const periodEnd = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+  // June 2026 is handled by the one-shot /api/cron/send-june-2026-invoices, which
+  // fires 7pm PT on Jun 30 and sends to managers + AP. Defer here so these two
+  // clients are never double-billed / sent to AP-only at the wrong time.
+  if (periodStart === '2026-06-01') {
+    return NextResponse.json({ skipped: true, reason: 'June 2026 deferred to send-june-2026-invoices one-shot (managers + AP, 7pm PT)' });
+  }
 
   for (const client of ACTIVE_CLIENTS) {
     try {

@@ -128,8 +128,21 @@ export async function GET(request: NextRequest) {
     const errors: { client: string; error: string }[] = [];
     const generated: { client: string; invoiceNumber: string; totalEntities: number; totalAmount: number }[] = [];
 
+    // June 2026: Centerstone + Cal Statewide CDC are handled by the one-shot
+    // /api/cron/send-june-2026-invoices (7pm PT Jun 30, managers + AP). Skip them
+    // here so this cron (which fires 4pm PT Jun 30) doesn't beat it to AP-only.
+    const JUNE_2026_ONESHOT_CLIENTS = new Set([
+      '60f80d60-03ad-42d7-95da-c0f1cd311523', // Centerstone
+      '3256293c-6c98-42bc-a828-2b73a603048e', // California Statewide CDC
+    ]);
+
     for (const client of clients) {
       clientsProcessed++;
+
+      if (periodStart === '2026-06-01' && JUNE_2026_ONESHOT_CLIENTS.has(client.id)) {
+        skipped++;
+        continue;
+      }
 
       try {
         // Check if invoice already exists for this period

@@ -26,6 +26,10 @@
       "schedule": "0 6 28-31 * *"
     },
     {
+      "path": "/api/cron/send-june-2026-invoices",
+      "schedule": "0 2 1 7 *"
+    },
+    {
       "path": "/api/cron/expire-batches",
       "schedule": "*/5 * * * *"
     },
@@ -210,31 +214,61 @@
     {
       "source": "/irs-batch-v6.js",
       "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET" },
-        { "key": "Content-Type", "value": "application/javascript" },
-        { "key": "Cache-Control", "value": "no-cache" }
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET"
+        },
+        {
+          "key": "Content-Type",
+          "value": "application/javascript"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
       ]
     },
     {
       "source": "/api/expert/batch-upload",
       "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "https://la.www4.irs.gov" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" },
-        { "key": "Access-Control-Max-Age", "value": "86400" }
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://la.www4.irs.gov"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
+        }
       ]
     },
     {
       "source": "/docs/:path*",
       "headers": [
-        { "key": "X-Robots-Tag", "value": "index, follow" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "index, follow"
+        }
       ]
     },
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
       ]
     }
   ]
