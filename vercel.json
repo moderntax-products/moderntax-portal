@@ -134,8 +134,8 @@
       "schedule": "0 23 28-31 * *"
     },
     {
-      "path": "/api/cron/centerstone-html-to-pdf",
-      "schedule": "*/30 * * * *"
+      "path": "/api/cron/transcript-html-to-pdf",
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/admin/mercury-reconcile",

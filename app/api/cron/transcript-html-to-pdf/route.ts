@@ -1,17 +1,18 @@
 /**
- * Centerstone transcript HTML → PDF auto-converter (2026-06-29).
+ * Transcript HTML → PDF auto-converter — ALL clients (2026-06-29).
  *
- * Matt: "all HTMLs for Centerstone processors should be auto-converted to PDF."
- * Centerstone processors download transcripts as files; if a raw .html lands in
- * the download slot (transcript_urls) it renders as code in their viewer. This
- * cron finds any such entity, renders the HTML to PDF server-side, swaps the PDF
- * into the download slot, and preserves the HTML in transcript_html_urls.
+ * Matt's rule: "For all records added by an expert, store the HTML and convert
+ * to PDF after." Raw .html in the download slot (transcript_urls) renders as
+ * code in a processor's viewer, and the HTML is the machine-readable source we
+ * parse for draft prep. This cron finds any entity with .html in the download
+ * slot — for ANY client — renders it to PDF server-side, swaps the PDF into the
+ * download slot, and preserves the HTML source in transcript_html_urls.
  *
  * Catch-all by design: covers every ingest path (expert upload, webhook, scripts).
- * Idempotent + bounded. Early-exits BEFORE launching Chromium when there's no
- * work, so empty runs are cheap.
+ * Idempotent + bounded. Scoped to recently-updated entities and early-exits
+ * BEFORE launching Chromium when there's no work, so empty runs are cheap.
  *
- * GET /api/cron/centerstone-html-to-pdf — Auth: Vercel cron Bearer secret.
+ * GET /api/cron/transcript-html-to-pdf — Auth: Vercel cron Bearer secret.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -21,8 +22,8 @@ import { requireBearer } from '@/lib/auth-util';
 export const maxDuration = 60;
 export const runtime = 'nodejs';
 
-const CENTERSTONE_CLIENT_ID = '60f80d60-03ad-42d7-95da-c0f1cd311523';
-const MAX_FILES_PER_RUN = 12; // Chromium renders are ~1-3s each; stay under maxDuration
+const MAX_FILES_PER_RUN = 12;   // Chromium renders are ~1-3s each; stay under maxDuration
+const WINDOW_DAYS = 45;         // bound the scan to recently-touched entities
 
 const baseName = (p: string) =>
   (p.split('/').pop() || '').replace(/\.(html?|pdf)$/i, '').replace(/^\d+-/, '');
@@ -32,18 +33,22 @@ export async function GET(request: NextRequest) {
   if (unauthorized) return unauthorized;
 
   const admin = createAdminClient();
+  const cutoff = new Date(Date.now() - WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
 
-  // 1. Cheap scan first — find Centerstone entities with .html in the download slot.
+  // 1. Cheap scan first — any entity (any client) with .html in the download slot.
   const { data: ents } = await admin.from('request_entities')
-    .select('id, entity_name, transcript_urls, transcript_html_urls, requests!inner(client_id)')
-    .eq('requests.client_id', CENTERSTONE_CLIENT_ID) as { data: any[] | null };
+    .select('id, entity_name, transcript_urls, transcript_html_urls')
+    .not('transcript_urls', 'is', null)
+    .gte('updated_at', cutoff)
+    .order('updated_at', { ascending: false })
+    .limit(800) as { data: any[] | null };
 
   const targets = (ents || [])
     .map((e) => ({ ...e, htmlInSlot: (e.transcript_urls || []).filter((u: string) => /\.html?$/i.test(u)) }))
     .filter((e) => e.htmlInSlot.length > 0);
 
   if (targets.length === 0) {
-    return NextResponse.json({ success: true, converted: 0, entities: 0, note: 'no HTML in any Centerstone download slot' });
+    return NextResponse.json({ success: true, converted: 0, entities: 0, note: 'no HTML in any download slot' });
   }
 
   // 2. Only now pull in the heavy renderer.
@@ -89,7 +94,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  if (log.length) console.log('[centerstone-html-to-pdf]\n' + JSON.stringify(log, null, 2));
+  if (log.length) console.log('[transcript-html-to-pdf]\n' + JSON.stringify(log, null, 2));
 
   return NextResponse.json({
     success: true,
