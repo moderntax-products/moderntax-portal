@@ -60,6 +60,49 @@ export async function POST(request: NextRequest) {
   const amount = Number(period.gross_pay) || 0;
   if (amount <= 0) return NextResponse.json({ error: 'Pay period gross is $0 — nothing to pay' }, { status: 400 });
 
+  // ── Client-payment gate (Matt's policy 2026-06-30): experts are paid AFTER
+  //    the client revenue covering their work is collected. Hold the payout
+  //    until every entity the expert completed this period is on a PAID client
+  //    invoice — either a per-order invoice for that entity, or a paid monthly
+  //    invoice for the client whose billing period covers the completion date.
+  //    Admin can override with ?force=1 (or { force:true }).
+  const force = request.nextUrl.searchParams.get('force') === '1' || body.force === true;
+  if (!force) {
+    const startIso = new Date(period.period_start).toISOString();
+    const endIso = new Date(new Date(period.period_end).getTime() + 24 * 3600 * 1000).toISOString();
+    const { data: doneAsn } = await admin.from('expert_assignments')
+      .select('entity_id, completed_at')
+      .eq('expert_id', period.expert_id).eq('status', 'completed')
+      .gte('completed_at', startIso).lt('completed_at', endIso) as { data: any[] | null };
+    const entityIds = [...new Set((doneAsn || []).map((a) => a.entity_id).filter(Boolean))];
+    if (entityIds.length) {
+      const { data: ents } = await admin.from('request_entities')
+        .select('id, entity_name, requests!inner(client_id)').in('id', entityIds) as { data: any[] | null };
+      const clientByEntity = new Map((ents || []).map((e: any) => [e.id, e.requests?.client_id]));
+      const completedAt = new Map((doneAsn || []).map((a: any) => [a.entity_id, (a.completed_at || '').slice(0, 10)]));
+      const clientIds = [...new Set([...clientByEntity.values()].filter(Boolean))] as string[];
+      const { data: paidInv } = await admin.from('invoices')
+        .select('client_id, entity_id, billing_period_start, billing_period_end')
+        .in('client_id', clientIds).eq('status', 'paid') as { data: any[] | null };
+      const funded = (eid: string) => {
+        const cid = clientByEntity.get(eid);
+        const day = completedAt.get(eid);
+        return (paidInv || []).some((inv) =>
+          inv.entity_id === eid ||
+          (inv.client_id === cid && day && inv.billing_period_start <= day && day <= inv.billing_period_end));
+      };
+      const unfunded = entityIds.filter((eid) => !funded(eid));
+      if (unfunded.length) {
+        const names = (ents || []).filter((e: any) => unfunded.includes(e.id)).map((e: any) => e.entity_name);
+        return NextResponse.json({
+          error: 'Payout held — awaiting client payment',
+          detail: `${unfunded.length} of ${entityIds.length} entities this expert completed are not yet on a PAID client invoice. Experts are paid once the client revenue is collected. Pass ?force=1 to override.`,
+          unfunded_entities: names.slice(0, 10),
+        }, { status: 409 });
+      }
+    }
+  }
+
   const { data: expert } = await admin.from('profiles')
     .select('id, full_name, email, mercury_recipient_id, w9_url').eq('id', period.expert_id).single() as { data: any };
   if (!expert) return NextResponse.json({ error: 'Expert not found' }, { status: 404 });
