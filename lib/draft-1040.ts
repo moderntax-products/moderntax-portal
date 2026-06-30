@@ -45,6 +45,8 @@ export const TAX_YEAR_PARAMS: Record<number, YearParams> = {
     brackets: { single: [[11000, .10], [44725, .12], [95375, .22], [182100, .24], [231250, .32], [578125, .35], [Infinity, .37]] } },
   2024: { standardDeduction: { single: 14600 }, nc: { rate: 0.045, standardDeduction: 12750 },
     brackets: { single: [[11600, .10], [47150, .12], [100525, .22], [191950, .24], [243725, .32], [609350, .35], [Infinity, .37]] } },
+  2025: { standardDeduction: { single: 15750 }, nc: { rate: 0.0425, standardDeduction: 12750 },
+    brackets: { single: [[11925, .10], [48475, .12], [103350, .22], [197300, .24], [250525, .32], [626350, .35], [Infinity, .37]] } },
 };
 
 /** Parsed Wage & Income figures for one taxpayer / one year (preparer-verifiable). */
