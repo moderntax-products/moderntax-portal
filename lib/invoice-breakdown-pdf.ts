@@ -151,22 +151,28 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
   y -= 10;
 
   // ----- Total hero box -----
-  ensureSpace(3);
+  // Draw label + total at fixed baselines INSIDE the box (vertically centered),
+  // then drop the cursor clearly BELOW the box so the next section heading never
+  // overlaps the box border (was: cursor ended ~2px below the box, so the heading
+  // text rose back into it — 2026-06-30 layout fix).
+  ensureSpace(4);
+  const boxTop = y;
+  const boxH = 42;
   page.drawRectangle({
-    x: MARGIN, y: y - 36, width: PAGE_W - MARGIN * 2, height: 38,
+    x: MARGIN, y: boxTop - boxH, width: PAGE_W - MARGIN * 2, height: boxH,
     color: rgb(0.92, 0.98, 0.95),
     borderColor: accent, borderWidth: 1,
   });
-  drawText('TOTAL DUE', { x: MARGIN + 12, size: 10, bold: true, color: rgb(0.08, 0.49, 0.24) });
-  y += 4;
+  page.drawText('TOTAL DUE', {
+    x: MARGIN + 14, y: boxTop - 24, size: 10, font: fontBold, color: rgb(0.08, 0.49, 0.24),
+  });
   const totalStr = fmt(input.grandTotal);
   const totalSize = 18;
   const totalW = fontBold.widthOfTextAtSize(totalStr, totalSize);
   page.drawText(totalStr, {
-    x: PAGE_W - MARGIN - 12 - totalW,
-    y, size: totalSize, font: fontBold, color: navy,
+    x: PAGE_W - MARGIN - 14 - totalW, y: boxTop - 28, size: totalSize, font: fontBold, color: navy,
   });
-  y -= 28;
+  y = boxTop - boxH - 22;
 
   // ----- Verification: per-processor groups -----
   if (input.processorGroups.length > 0) {
