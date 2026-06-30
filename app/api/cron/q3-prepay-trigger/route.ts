@@ -112,6 +112,21 @@ export async function GET(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
   if (unauthorized) return unauthorized;
 
+  // DISARMED 2026-06-29. Q3 2026 prepays are now handled via signed proposals +
+  // manual accounting, not this auto-cron. Its hardcoded terms went stale: Cal
+  // Statewide actually signed $3,023.24 (10% off, Jul-Sep, QT-CALI-Q3-0003) vs.
+  // this cron's $2,539.48 (8%, Jun-Aug) — already recorded as INV-2026-Q3-CALI-
+  // PREPAY. Centerstone's $4,941.53/8% line is likewise unconfirmed and must not
+  // auto-fire a wrong invoice. Schedule removed from vercel.json too; this guard
+  // is belt-and-suspenders. Re-enable only with Q3_PREPAY_AUTO_ENABLED=true.
+  if (process.env.Q3_PREPAY_AUTO_ENABLED !== 'true') {
+    return NextResponse.json({
+      skipped: true,
+      disarmed: true,
+      reason: 'q3-prepay-trigger is disarmed — Q3 2026 prepays are handled manually via signed proposals (see INV-2026-Q3-CALI-PREPAY).',
+    });
+  }
+
   const admin = createAdminClient();
   const results: Array<{ client: string; status: string; slug?: string; payUrl?: string; reason?: string }> = [];
 

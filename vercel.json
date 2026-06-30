@@ -66,10 +66,6 @@
       "schedule": "0 15 * * 6"
     },
     {
-      "path": "/api/cron/q3-prepay-trigger",
-      "schedule": "0 14 * * *"
-    },
-    {
       "path": "/api/cron/breakdown-reconcile",
       "schedule": "0 13 * * *"
     },
