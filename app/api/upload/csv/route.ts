@@ -16,6 +16,13 @@ import {
 } from '@/lib/form-type-validation';
 import * as XLSX from 'xlsx';
 
+// Vision extraction of scanned 8821s (lib/bulk-8821-attach → extract-8821-vision)
+// base64-encodes each PDF and round-trips the Anthropic vision API. On a loan
+// with several multi-MB scans that can run well past the default 15s function
+// budget, so give the route explicit headroom on Node.
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 interface CsvRow {
   legal_name: string;
   tid: string;
@@ -235,18 +242,71 @@ export async function POST(request: NextRequest) {
     const filingComplianceBatch = formData.get('filing_compliance') === '1';
     const formTypeOverridesRaw = formData.get('form_type_overrides') as string | null;
 
-    // Pre-signed 8821 PDFs bundled with the CSV. Field names:
-    //   signed_8821_0, signed_8821_1, ... signed_8821_14 (max 15 per
-    //   loan per Matt 2026-05-27 directive). Buffered here so we can
-    //   bulk-match by TID after entity creation. Driver: Centerstone
-    //   flat-rate contract — they upload pre-signed 8821s themselves
-    //   instead of going through Dropbox Sign + the $10 surcharge.
+    // Pre-signed 8821 PDFs bundled with the CSV. Buffered here so we can
+    // bulk-match by TID after entity creation. Driver: Centerstone flat-rate
+    // contract — they upload pre-signed 8821s themselves instead of going
+    // through Dropbox Sign + the $10 surcharge.
+    //
+    // Two transports, in priority order:
+    //   1. `presigned_8821_paths` — a JSON array of {path, filename} that the
+    //      client uploaded straight to Supabase Storage via a signed upload
+    //      URL (see /api/upload/csv/presign-8821). This is the default: it
+    //      keeps the multi-MB scans out of THIS request body, so a loan with
+    //      several ~4 MB scanned 8821s no longer trips Vercel's ~4.5 MB
+    //      serverless request-body ceiling. We download each PDF here.
+    //   2. `signed_8821_0..14` inline File fields — legacy transport, kept for
+    //      backward compatibility (small/single-PDF loans still work inline).
+    // Either way, max 15 per loan per Matt 2026-05-27 directive.
     const presigned8821Pdfs: BulkPdf[] = [];
-    for (let i = 0; i < 15; i++) {
-      const f = formData.get(`signed_8821_${i}`) as File | null;
-      if (!f) continue;
-      const buf = Buffer.from(await f.arrayBuffer());
-      presigned8821Pdfs.push({ filename: f.name, buffer: buf });
+    const inboxPathsToCleanup: string[] = [];
+    const presignedPathsRaw = formData.get('presigned_8821_paths') as string | null;
+    if (presignedPathsRaw) {
+      let pathEntries: Array<{ path: string; filename?: string }> = [];
+      try {
+        const arr = JSON.parse(presignedPathsRaw);
+        if (Array.isArray(arr)) {
+          // Scope to THIS client's inbox prefix. The download below runs on the
+          // service-role client (RLS-bypassing), so without this a crafted POST
+          // could reference another client's storage object. presign-8821 only
+          // ever mints paths under 8821-inbox/{client_id}/.
+          const allowedPrefix = `8821-inbox/${profile.client_id}/`;
+          pathEntries = arr
+            .filter((e): e is { path: string; filename?: string } =>
+              e && typeof e.path === 'string' && e.path.startsWith(allowedPrefix))
+            .slice(0, 15);
+        }
+      } catch {
+        console.warn('[csv-upload] Failed to parse presigned_8821_paths');
+      }
+      const adminForPdfs = createAdminClient();
+      for (const entry of pathEntries) {
+        const { data: blob, error: dlErr } = await adminForPdfs.storage
+          .from('uploads')
+          .download(entry.path);
+        if (dlErr || !blob) {
+          console.error(`[csv-upload] failed to download pre-signed 8821 ${entry.path}:`, dlErr);
+          continue;
+        }
+        const buf = Buffer.from(await blob.arrayBuffer());
+        presigned8821Pdfs.push({ filename: entry.filename || entry.path.split('/').pop() || 'signed-8821.pdf', buffer: buf });
+        inboxPathsToCleanup.push(entry.path);
+      }
+      // The PDFs are now buffered in memory and bulk-8821-attach re-uploads
+      // matched ones to their canonical entity paths, so the transient inbox
+      // copies are no longer needed. Best-effort cleanup to avoid orphans.
+      if (inboxPathsToCleanup.length > 0) {
+        adminForPdfs.storage
+          .from('uploads')
+          .remove(inboxPathsToCleanup)
+          .catch((e) => console.warn('[csv-upload] inbox 8821 cleanup failed (non-fatal):', e));
+      }
+    } else {
+      for (let i = 0; i < 15; i++) {
+        const f = formData.get(`signed_8821_${i}`) as File | null;
+        if (!f) continue;
+        const buf = Buffer.from(await f.arrayBuffer());
+        presigned8821Pdfs.push({ filename: f.name, buffer: buf });
+      }
     }
 
     // Parse the three add-on selection arrays. Each is a JSON array of row

@@ -391,16 +391,62 @@ export function CsvUploadFlow() {
     setError(null);
 
     try {
+      // Dev-only demo mode: ?demo=1 routes to a dry-run endpoint that
+      // mocks the vision call (TIN read from filename), skips DB writes,
+      // and returns the same JSON shape. Used to show the full UI flow
+      // without burning Anthropic spend or polluting prod data.
+      const isDemo = process.env.NODE_ENV !== 'production'
+        && typeof window !== 'undefined'
+        && new URLSearchParams(window.location.search).get('demo') === '1';
+
       const formData = new FormData();
       formData.append('file', file);
       formData.append('loan_number', loanNumber.trim());
       if (notes) formData.append('notes', notes);
 
-      // Pre-signed 8821 PDFs — server reads signed_8821_0..14 and runs
-      // vision extraction to match each PDF to the right entity.
-      presigned8821Pdfs.slice(0, 15).forEach((pdf, i) => {
-        formData.append(`signed_8821_${i}`, pdf, pdf.name);
-      });
+      // Pre-signed 8821 PDFs. These are ~4 MB scanned images each, so we do
+      // NOT post them inline — a loan with 4+ would blow past Vercel's ~4.5 MB
+      // serverless request-body limit and the whole POST would be rejected
+      // before the handler runs. Instead, upload each straight to Supabase
+      // Storage via a short-lived signed upload URL, then send only the
+      // storage paths to /api/upload/csv (the server downloads + vision-reads
+      // them). The demo endpoint still takes them inline (it mocks vision off
+      // the filename and never persists anything).
+      if (presigned8821Pdfs.length > 0) {
+        const pdfs = presigned8821Pdfs.slice(0, 15);
+        if (isDemo) {
+          pdfs.forEach((pdf, i) => formData.append(`signed_8821_${i}`, pdf, pdf.name));
+        } else {
+          const presignRes = await fetch('/api/upload/csv/presign-8821', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: pdfs.map((p) => ({ name: p.name })) }),
+          });
+          const presignData = await presignRes.json();
+          if (!presignRes.ok) {
+            setError(presignData.error || 'Failed to prepare 8821 uploads. Please try again.');
+            return;
+          }
+          const uploads = (presignData.uploads || []) as Array<{ path: string; token: string; filename: string }>;
+          const storedPaths: Array<{ path: string; filename: string }> = [];
+          for (let i = 0; i < pdfs.length; i++) {
+            const u = uploads[i];
+            if (!u) {
+              setError('Upload preparation returned fewer slots than PDFs. Please try again.');
+              return;
+            }
+            const { error: upErr } = await supabaseClient.storage
+              .from('uploads')
+              .uploadToSignedUrl(u.path, u.token, pdfs[i]);
+            if (upErr) {
+              setError(`Failed to upload ${pdfs[i].name}: ${upErr.message}`);
+              return;
+            }
+            storedPaths.push({ path: u.path, filename: u.filename });
+          }
+          formData.append('presigned_8821_paths', JSON.stringify(storedPaths));
+        }
+      }
 
       if (previewEntities) {
         // Three add-on selection arrays — server stores them as flags on each
@@ -441,13 +487,6 @@ export function CsvUploadFlow() {
         formData.append('filing_compliance', '1');
       }
 
-      // Dev-only demo mode: ?demo=1 routes to a dry-run endpoint that
-      // mocks the vision call (TIN read from filename), skips DB writes,
-      // and returns the same JSON shape. Used to show the full UI flow
-      // without burning Anthropic spend or polluting prod data.
-      const isDemo = process.env.NODE_ENV !== 'production'
-        && typeof window !== 'undefined'
-        && new URLSearchParams(window.location.search).get('demo') === '1';
       const endpoint = isDemo ? '/api/dev/demo-csv-upload' : '/api/upload/csv';
       const res = await fetch(endpoint, { method: 'POST', body: formData });
       const data = await res.json();
