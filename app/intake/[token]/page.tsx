@@ -10,6 +10,7 @@
 import { createAdminClient } from '@/lib/supabase-server';
 import { verifyFilingIntakeToken } from '@/lib/intake-tokens';
 import { FilingIntakeForm } from '@/components/FilingIntakeForm';
+import { DirectQuestions } from '@/components/DirectQuestions';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,6 +86,7 @@ export default async function PublicIntakePage({ params }: { params: { token: st
         authorized={!!fi.authorized}
         authorizedAt={fi.authorized_at || null}
       />
+      <DirectQuestions token={params.token} />
     </Shell>
   );
 }
