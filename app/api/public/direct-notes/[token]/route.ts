@@ -24,7 +24,7 @@ export async function GET(_request: NextRequest, { params }: { params: { token: 
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) return NextResponse.json({ error: 'This link is no longer valid.' }, { status: 404 });
   const admin = createAdminClient();
-  const { data: notes } = await admin.from('entity_notes')
+  const { data: notes } = await (admin.from('entity_notes' as any) as any)
     .select('author_role, author_name, body, kind, created_at')
     .eq('entity_id', entityId)
     .in('author_role', ['direct_user', 'admin'])
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest, { params }: { params: { token: 
     .select('id').eq('client_id', entity.requests?.client_id).eq('role', 'direct_user').limit(1).maybeSingle() as { data: any };
   const name = [entity.signer_first_name, entity.signer_last_name].filter(Boolean).join(' ') || entity.entity_name;
 
-  const { error } = await admin.from('entity_notes').insert({
+  const { error } = await (admin.from('entity_notes' as any) as any).insert({
     entity_id: entityId, author_id: du?.id || null, author_role: 'direct_user',
     author_name: name, body: text, kind: 'question',
   });
