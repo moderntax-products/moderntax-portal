@@ -92,6 +92,9 @@ export function CsvUploadFlow() {
   // signed_8821_0..14 form fields; server vision-extracts the TIN and
   // matches each PDF to the entity in this submission.
   const [presigned8821Pdfs, setPresigned8821Pdfs] = useState<File[]>([]);
+  // Progress message while pre-signed 8821 PDFs upload directly to storage
+  // (they're too large to send inline through the API — see handleSubmit).
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const pdfRef = useRef<HTMLInputElement>(null);
 
   // Loan-Package Consolidation Report — new SKU 2026-05-28. Opt-in
@@ -396,11 +399,40 @@ export function CsvUploadFlow() {
       formData.append('loan_number', loanNumber.trim());
       if (notes) formData.append('notes', notes);
 
-      // Pre-signed 8821 PDFs — server reads signed_8821_0..14 and runs
-      // vision extraction to match each PDF to the right entity.
-      presigned8821Pdfs.slice(0, 15).forEach((pdf, i) => {
-        formData.append(`signed_8821_${i}`, pdf, pdf.name);
-      });
+      // Pre-signed 8821 PDFs are uploaded DIRECTLY to storage via short-lived
+      // signed URLs, then we send only their storage paths. This bypasses the
+      // serverless request-body limit (~4.5MB) — Centerstone's scanned 8821s
+      // are ~4MB each, so sending them inline used to 413 the whole request.
+      // The server (/api/upload/csv) downloads each path for the same
+      // vision-extract + match flow.
+      const uploaded8821Paths: Array<{ path: string; filename: string }> = [];
+      if (presigned8821Pdfs.length > 0) {
+        const sb = createClient();
+        const toUpload = presigned8821Pdfs.slice(0, 15);
+        for (let i = 0; i < toUpload.length; i++) {
+          const pdf = toUpload[i];
+          setUploadStatus(`Uploading document ${i + 1} of ${toUpload.length}…`);
+          const presignRes = await fetch('/api/upload/8821-presign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: pdf.name }),
+          });
+          const presign = await presignRes.json().catch(() => ({}));
+          if (!presignRes.ok || !presign.path || !presign.token) {
+            setError(presign.error || `Couldn't prepare the upload for "${pdf.name}". Please try again.`);
+            return;
+          }
+          const { error: upErr } = await sb.storage.from('uploads')
+            .uploadToSignedUrl(presign.path, presign.token, pdf);
+          if (upErr) {
+            setError(`Failed to upload "${pdf.name}": ${upErr.message}`);
+            return;
+          }
+          uploaded8821Paths.push({ path: presign.path, filename: pdf.name });
+        }
+        setUploadStatus(null);
+        formData.append('signed_8821_paths', JSON.stringify(uploaded8821Paths));
+      }
 
       if (previewEntities) {
         // Three add-on selection arrays — server stores them as flags on each
@@ -464,6 +496,7 @@ export function CsvUploadFlow() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
+      setUploadStatus(null);
       setIsLoading(false);
     }
   };
@@ -1087,7 +1120,7 @@ export function CsvUploadFlow() {
       <button type="submit" disabled={isLoading || !file || hasValidationErrors || notesTooShort}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
         {isLoading
-          ? 'Processing...'
+          ? (uploadStatus || 'Processing...')
           : hasValidationErrors
           ? 'Fix Missing Fields to Continue'
           : notesTooShort

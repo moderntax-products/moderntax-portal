@@ -16,6 +16,11 @@ import {
 } from '@/lib/form-type-validation';
 import * as XLSX from 'xlsx';
 
+// Vision-extracting up to 15 pre-signed 8821 PDFs (Centerstone flat-rate
+// flow) can take a while — give the function room beyond the default.
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 interface CsvRow {
   legal_name: string;
   tid: string;
@@ -247,6 +252,47 @@ export async function POST(request: NextRequest) {
       if (!f) continue;
       const buf = Buffer.from(await f.arrayBuffer());
       presigned8821Pdfs.push({ filename: f.name, buffer: buf });
+    }
+
+    // Newer path: the client uploads large pre-signed 8821 PDFs DIRECTLY to
+    // storage (via short-lived signed URLs from /api/upload/8821-presign) and
+    // sends only their paths here. This bypasses the serverless request-body
+    // limit (~4.5MB) — Centerstone's scanned 8821s are ~4MB each, so sending
+    // them inline would 413 the whole request. Download each into a buffer for
+    // the same vision-match flow, then remove the temp inbound object
+    // (bulkAttach re-uploads matched PDFs to the canonical path).
+    const signed8821PathsRaw = formData.get('signed_8821_paths') as string | null;
+    if (signed8821PathsRaw) {
+      const adminForInbound = createAdminClient();
+      let parsedPaths: Array<{ path?: string; filename?: string }> = [];
+      try {
+        const arr = JSON.parse(signed8821PathsRaw);
+        if (Array.isArray(arr)) parsedPaths = arr;
+      } catch { console.warn('[csv-upload] Failed to parse signed_8821_paths'); }
+
+      const inboundToRemove: string[] = [];
+      for (const item of parsedPaths.slice(0, 15)) {
+        const p = typeof item?.path === 'string' ? item.path : null;
+        // Only this client's own inbound namespace — never download an arbitrary path.
+        if (!p || !p.startsWith(`${profile.client_id}/8821-inbound/`)) {
+          console.warn('[csv-upload] rejected out-of-namespace 8821 path');
+          continue;
+        }
+        if (presigned8821Pdfs.length >= 15) break; // combined cap with inline files
+        const { data: blob, error: dlErr } = await adminForInbound.storage.from('uploads').download(p);
+        if (dlErr || !blob) {
+          console.warn(`[csv-upload] 8821 storage download failed: ${p} ${dlErr?.message || ''}`);
+          continue;
+        }
+        const buf = Buffer.from(await blob.arrayBuffer());
+        presigned8821Pdfs.push({ filename: item.filename || p.split('/').pop() || 'signed-8821.pdf', buffer: buf });
+        inboundToRemove.push(p);
+      }
+      // Clean up the temp inbound uploads — non-fatal (they're re-uploaded to
+      // the canonical 8821/{entity_id}/ path when matched).
+      if (inboundToRemove.length > 0) {
+        adminForInbound.storage.from('uploads').remove(inboundToRemove).catch(() => {});
+      }
     }
 
     // Parse the three add-on selection arrays. Each is a JSON array of row
