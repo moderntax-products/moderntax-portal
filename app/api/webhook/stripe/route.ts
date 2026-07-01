@@ -132,6 +132,11 @@ export async function POST(request: NextRequest) {
           if (!entityId) { console.warn('[stripe-webhook] backyear_filing without entity_id'); break; }
           const amountPaid = (session.amount_total || 0) / 100;
           const creditApplied = Number(session.metadata.credit_applied) || 0;
+          // Prepay (deposit before work) vs. post-completion fee, and the rush upgrade.
+          const isPrepay = session.metadata.prepay === '1';
+          const isExpedited = session.metadata.expedited === 'true';
+          const rushFee = Number(session.metadata.rush_fee) || 0;
+          const nowIso = new Date().toISOString();
 
           const { data: already } = await (admin.from('credit_ledger' as any) as any)
             .select('id').eq('stripe_ref', session.id).maybeSingle();
@@ -143,13 +148,23 @@ export async function POST(request: NextRequest) {
           const gr = ent?.gross_receipts || {};
           const payments = Array.isArray(gr.payments) ? gr.payments : [];
           payments.push({
-            kind: 'backyear_filing', amount: amountPaid, credit_applied: creditApplied,
+            kind: isPrepay ? 'backyear_filing_prepay' : 'backyear_filing',
+            amount: amountPaid, credit_applied: creditApplied,
             years_filed: Number(session.metadata.years_filed) || null,
-            stripe_ref: session.id, paid_at: new Date().toISOString(),
+            expedited: isExpedited, rush_fee: rushFee,
+            stripe_ref: session.id, paid_at: nowIso,
           });
           const newGr = {
             ...gr,
-            filing: { ...(gr.filing || {}), fee_paid: true, fee_paid_at: new Date().toISOString(), fee_paid_amount: amountPaid },
+            filing: {
+              ...(gr.filing || {}),
+              // Prepay records a deposit; post-completion records the final fee.
+              ...(isPrepay
+                ? { prepaid: true, prepaid_at: nowIso, prepaid_amount: amountPaid }
+                : { fee_paid: true, fee_paid_at: nowIso, fee_paid_amount: amountPaid }),
+              // Rush upgrade → priority expert assignment + tighter SLA downstream.
+              ...(isExpedited ? { rush: true, rush_paid_at: nowIso, rush_fee: rushFee } : {}),
+            },
             payments,
           };
           await (admin.from('request_entities') as any).update({ gross_receipts: newGr }).eq('id', entityId);
@@ -166,9 +181,10 @@ export async function POST(request: NextRequest) {
           }
           await (admin.from('credit_ledger' as any) as any).insert({
             client_id: clientId, kind: 'filing_fee', amount: amountPaid, balance_after: balanceAfter,
-            stripe_ref: session.id, note: `Back-year filing fee — ${session.metadata.years_filed || '?'} yrs (entity ${entityId.slice(0, 8)})`,
+            stripe_ref: session.id,
+            note: `${isPrepay ? 'Back-year filing prepay' : 'Back-year filing fee'}${isExpedited ? ' (expedited)' : ''} — ${session.metadata.years_filed || '?'} yrs (entity ${entityId.slice(0, 8)})`,
           });
-          console.log(`[stripe-webhook] backyear_filing: paid $${amountPaid} (credit $${creditApplied}) for entity ${entityId}`);
+          console.log(`[stripe-webhook] backyear_filing${isPrepay ? ' prepay' : ''}${isExpedited ? ' expedited' : ''}: paid $${amountPaid} (credit $${creditApplied}) for entity ${entityId}`);
           break;
         }
 

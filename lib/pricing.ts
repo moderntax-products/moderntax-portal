@@ -298,6 +298,21 @@ export const PRICE_FILING_COMPLIANCE = 29.99;
  */
 export const PRICE_BACKYEAR_FILING = 50.00;
 
+/**
+ * Expedited ("rush") back-year filing premium (ModernTax Direct) — a flat fee
+ * a direct taxpayer can pay ON TOP of the per-year filing fee to jump the
+ * expert queue and get a priority SLA (rush=true routes them to the front of
+ * assignment + a tighter turnaround). One flat fee per order, not per year.
+ * The $50/yr base is only a starting quote — the assigned expert quotes the
+ * full price once they have context, so this rush fee is the incremental
+ * upcharge for speed, independent of the eventual quoted total. Configurable
+ * via the PRICE_FILING_EXPEDITE_FEE env override. Matt 2026-06-30.
+ */
+export const PRICE_FILING_EXPEDITE_FEE =
+  Number(process.env.PRICE_FILING_EXPEDITE_FEE) > 0
+    ? Number(process.env.PRICE_FILING_EXPEDITE_FEE)
+    : 99.00;
+
 // ---------------------------------------------------------------------------
 // Unified invoice SKU catalog — single source of truth for Mercury line
 // items + Stripe Products. Used by:

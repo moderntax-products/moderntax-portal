@@ -156,6 +156,7 @@ export async function middleware(request: NextRequest) {
     '/erc-status',      // merchant-facing ERC refund recovery status (token-gated in page)
     '/erc-reissue',     // merchant-facing ERC reissue intake + tracking (token-gated in page)
     '/intake/',         // no-login filing-intake form for Direct taxpayers (token-gated in page)
+    '/review/',         // no-login preliminary-review + prepay page for Direct taxpayers (token-gated in page)
   ];
   const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
   if (!user && !isPublic) {
