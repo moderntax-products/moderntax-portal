@@ -61,8 +61,19 @@ export async function findPriorEntities(
   tid: string,
   excludeEntityId: string
 ): Promise<PriorEntityInfo[]> {
-  const cleanTid = tid.replace(/-/g, '');
-  if (!cleanTid || cleanTid.length < 4) return [];
+  const digits = tid.replace(/\D/g, '');
+  if (!digits || digits.length < 4) return [];
+
+  // Tids are stored inconsistently across intake paths — some dashed
+  // ("87-2154691" / "053-82-3418"), some digits-only ("872154691"). Match on
+  // every canonical shape so a prior pull isn't missed just because it was
+  // stored in a different format than this request's tid. (An .eq on a single
+  // format silently missed dashed-stored priors — the bug this fixes.)
+  const tidCandidates = new Set<string>([digits, tid]);
+  if (digits.length === 9) {
+    tidCandidates.add(`${digits.slice(0, 2)}-${digits.slice(2)}`);                        // EIN XX-XXXXXXX
+    tidCandidates.add(`${digits.slice(0, 3)}-${digits.slice(3, 5)}-${digits.slice(5)}`);  // SSN XXX-XX-XXXX
+  }
 
   const { data: matches } = await supabase
     .from('request_entities')
@@ -71,7 +82,7 @@ export async function findPriorEntities(
       signed_8821_url, signature_created_at, gross_receipts,
       requests!inner(loan_number, created_at)
     `)
-    .eq('tid', cleanTid)
+    .in('tid', [...tidCandidates])
     .neq('id', excludeEntityId)
     .in('status', ['completed', 'irs_queue', 'processing', '8821_signed'])
     .order('created_at', { ascending: false }) as { data: any[] | null; error: any };
