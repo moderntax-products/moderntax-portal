@@ -22,6 +22,12 @@ import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import { checkOrderGate, buildOrderGateErrorBody } from '@/lib/order-gate';
 import { parseJsonBodyOrRespond } from '@/lib/request-body';
+import { autoFulfillRequestFromRecord } from '@/lib/auto-fulfill';
+
+// Auto-fulfill-from-record can deliver several cached transcripts per entity
+// via incremental webhooks inline — give the function headroom beyond default.
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 interface EntityPayload {
   entity_name: string;
@@ -308,7 +314,7 @@ export async function POST(request: NextRequest) {
     const { data: createdEntities, error: entError } = await supabase
       .from('request_entities')
       .insert(entityRows)
-      .select('id, entity_name, form_type, years, status');
+      .select('id, entity_name, tid, form_type, years, status');
 
     if (entError) {
       console.error('[transcript-intake] Entity creation error:', entError);
@@ -327,6 +333,24 @@ export async function POST(request: NextRequest) {
         const { charged } = await debitCreditsForEntities(supabase, client.id, billableIds);
         if (charged) console.log(`[transcript-intake] Debited ${charged} request(s) from credit wallet`);
       } catch (e) { console.warn('[transcript-intake] credit debit failed:', e); }
+    }
+
+    // --- Auto-fulfill from record (2026-07-02) ---
+    // Before this order waits in the IRS queue, check whether ModernTax already
+    // has completed transcripts on file for each entity (matched by TIN across
+    // all prior pulls — ModernTax is the transcript utility) and, if so, copy
+    // them on + deliver immediately. Shared with the self-healing sweep cron so
+    // both entry points behave identically. Never fails the intake.
+    let servedFromRecord: Array<{ entity_id: string; entity_name: string; prior_loan: string; transcripts: number }> = [];
+    let fullyServed = false;
+    try {
+      const result = await autoFulfillRequestFromRecord(supabase, req.id);
+      servedFromRecord = result.served.map((s) => ({
+        entity_id: s.entityId, entity_name: s.entityName, prior_loan: s.priorLoan, transcripts: s.transcripts,
+      }));
+      fullyServed = result.requestCompleted;
+    } catch (fulfillErr) {
+      console.error('[transcript-intake] auto-fulfill-from-record error (non-fatal):', fulfillErr);
     }
 
     // --- Usage stats ---
@@ -385,19 +409,24 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Response ---
+    // If every entity was served from record the request is already done;
+    // otherwise it's queued (some entities may still have been delivered).
+    const fulfilledIds = new Set(servedFromRecord.map((s) => s.entity_id));
     return NextResponse.json({
       success: true,
       request_id: req.id,
       request_token: body.request_token,
       loan_number: loanNumber,
-      status: 'irs_queue',
+      status: fullyServed ? 'completed' : 'irs_queue',
       entities: (createdEntities || []).map((e: any) => ({
         entity_id: e.id,
         entity_name: e.entity_name,
         form_type: e.form_type,
         years: e.years,
-        status: e.status,
+        status: fulfilledIds.has(e.id) ? 'completed' : e.status,
       })),
+      // Entities we already had on file and delivered immediately (no IRS pull).
+      served_from_record: servedFromRecord,
       usage: {
         used,
         remaining,
