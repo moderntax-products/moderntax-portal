@@ -22,8 +22,7 @@ import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
 import { checkOrderGate, buildOrderGateErrorBody } from '@/lib/order-gate';
 import { parseJsonBodyOrRespond } from '@/lib/request-body';
-import { findPriorEntities, attachPriorTranscripts } from '@/lib/repeat-entity';
-import { triggerIncrementalWebhook, triggerWebhookForRequest } from '@/lib/webhook';
+import { autoFulfillRequestFromRecord } from '@/lib/auto-fulfill';
 
 // Auto-fulfill-from-record can deliver several cached transcripts per entity
 // via incremental webhooks inline — give the function headroom beyond default.
@@ -339,51 +338,18 @@ export async function POST(request: NextRequest) {
     // --- Auto-fulfill from record (2026-07-02) ---
     // Before this order waits in the IRS queue, check whether ModernTax already
     // has completed transcripts on file for each entity (matched by TIN across
-    // all prior pulls — ModernTax is the transcript utility). If so, copy them
-    // onto the new entity, deliver them to the partner immediately via the same
-    // incremental webhooks an expert upload would fire, and — when the WHOLE
-    // request is served from record — mark it completed and send the "complete"
-    // signal. Entities with no prior record fall through to the normal queue.
-    const servedFromRecord: Array<{ entity_id: string; entity_name: string; prior_loan: string; transcripts: number }> = [];
+    // all prior pulls — ModernTax is the transcript utility) and, if so, copy
+    // them on + deliver immediately. Shared with the self-healing sweep cron so
+    // both entry points behave identically. Never fails the intake.
+    let servedFromRecord: Array<{ entity_id: string; entity_name: string; prior_loan: string; transcripts: number }> = [];
+    let fullyServed = false;
     try {
-      for (const ce of (createdEntities || [])) {
-        const priors = await findPriorEntities(supabase, (ce as any).tid, ce.id);
-        const prior = priors.find((p) => p.transcriptCount > 0);
-        if (!prior) continue;
-
-        const attached = await attachPriorTranscripts(supabase, ce.id, prior);
-        if (!attached) continue;
-
-        // Deliver each cached HTML transcript to the partner incrementally,
-        // exactly as an expert upload would. Best-effort per file — a single
-        // delivery failure is retried by the webhook-retry cron, so it must
-        // not abort the rest.
-        for (const htmlPath of prior.transcriptHtmlUrls) {
-          try {
-            await triggerIncrementalWebhook(supabase, req.id, ce.id, ce.entity_name, ce.form_type, htmlPath);
-          } catch (whErr) {
-            console.error(`[transcript-intake] incremental webhook failed for ${ce.id} (${htmlPath}):`, whErr);
-          }
-        }
-        servedFromRecord.push({ entity_id: ce.id, entity_name: ce.entity_name, prior_loan: prior.loanNumber, transcripts: prior.transcriptCount });
-        console.log(`[transcript-intake] Auto-fulfilled ${ce.entity_name} (TIN ${(ce as any).tid}) from prior loan ${prior.loanNumber} — ${prior.transcriptCount} transcript(s)`);
-      }
-
-      // If EVERY entity was served from record, the request is done — complete
-      // it and send the terminal "complete" signal so the partner stops waiting.
-      if (servedFromRecord.length > 0 && servedFromRecord.length === (createdEntities || []).length) {
-        await (supabase.from('requests') as any)
-          .update({ status: 'completed', completed_at: new Date().toISOString() })
-          .eq('id', req.id);
-        try {
-          await triggerWebhookForRequest(supabase, req.id);
-        } catch (whErr) {
-          console.error(`[transcript-intake] completion webhook failed for ${req.id}:`, whErr);
-        }
-        console.log(`[transcript-intake] Request ${req.id} fully served from record (${servedFromRecord.length} entities) — completed + delivered`);
-      }
+      const result = await autoFulfillRequestFromRecord(supabase, req.id);
+      servedFromRecord = result.served.map((s) => ({
+        entity_id: s.entityId, entity_name: s.entityName, prior_loan: s.priorLoan, transcripts: s.transcripts,
+      }));
+      fullyServed = result.requestCompleted;
     } catch (fulfillErr) {
-      // Auto-fulfill is an optimization — never fail the intake because of it.
       console.error('[transcript-intake] auto-fulfill-from-record error (non-fatal):', fulfillErr);
     }
 
@@ -446,13 +412,12 @@ export async function POST(request: NextRequest) {
     // If every entity was served from record the request is already done;
     // otherwise it's queued (some entities may still have been delivered).
     const fulfilledIds = new Set(servedFromRecord.map((s) => s.entity_id));
-    const allServed = servedFromRecord.length > 0 && servedFromRecord.length === (createdEntities || []).length;
     return NextResponse.json({
       success: true,
       request_id: req.id,
       request_token: body.request_token,
       loan_number: loanNumber,
-      status: allServed ? 'completed' : 'irs_queue',
+      status: fullyServed ? 'completed' : 'irs_queue',
       entities: (createdEntities || []).map((e: any) => ({
         entity_id: e.id,
         entity_name: e.entity_name,

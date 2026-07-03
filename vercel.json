@@ -2,6 +2,10 @@
   "installCommand": "npm ci",
   "crons": [
     {
+      "path": "/api/cron/auto-fulfill-from-record",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/admin-agent",
       "schedule": "0 * * * *"
     },
