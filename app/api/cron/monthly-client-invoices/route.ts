@@ -111,9 +111,12 @@ export async function issueMonthlyInvoice(
 
   // Pull client config
   const { data: client } = await admin.from('clients')
-    .select('id, name, slug, billing_ap_email, billing_ap_email_cc, billing_net_days, billing_payment_method, billing_rate_pdf, billing_rate_monitoring, disable_monitoring, mercury_customer_id')
+    .select('id, name, slug, billing_ap_email, billing_ap_email_cc, billing_net_days, billing_payment_method, billing_rate_pdf, billing_rate_monitoring, disable_monitoring, mercury_customer_id, billing_mode')
     .eq('id', clientId).single() as { data: any };
   if (!client) { L(`✗ client ${clientId} not found`); return null; }
+  // card_per_order clients are charged same-day per order (cron same-day-invoice);
+  // never roll them into a monthly Mercury invoice — would double-bill.
+  if (client.billing_mode === 'card_per_order') { L(`↳ ${client.name} is card_per_order — skipped (billed same-day)`); return null; }
   L(`Client: ${client.name}`);
 
   // Idempotency — skip if invoice already issued for this period

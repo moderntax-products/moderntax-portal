@@ -138,6 +138,10 @@
       "schedule": "0 23 28-31 * *"
     },
     {
+      "path": "/api/cron/same-day-invoice",
+      "schedule": "0 */4 * * *"
+    },
+    {
       "path": "/api/admin/mercury-reconcile",
       "schedule": "0 5 * * *"
     },

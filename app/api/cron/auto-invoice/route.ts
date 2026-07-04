@@ -80,9 +80,13 @@ export async function GET(request: NextRequest) {
         // is set + status='active', the cron auto-charges via Stripe and
         // skips the Mercury invoice block.
         'stripe_customer_id, stripe_payment_method_id, payment_method_status, ' +
+        'billing_mode, ' +
         'address_line1, address_line2, address_city, address_state, address_postal_code, address_country'
       )
-      .not('slug', 'ilike', '%-sandbox') as {
+      .not('slug', 'ilike', '%-sandbox')
+      // card_per_order clients are billed same-day per order (cron same-day-invoice)
+      // — exclude them here so they're never double-billed via the monthly path.
+      .neq('billing_mode', 'card_per_order') as {
         data: {
           id: string;
           name: string;
