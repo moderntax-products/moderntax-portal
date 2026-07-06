@@ -40,6 +40,16 @@ updates:
         update-types:
           - version-update:semver-minor
           - version-update:semver-major
+      # Same stricter-typing problem as @supabase/ssr above: supabase-js 2.110
+      # tightened .insert()/.update() to reject Record<string,any> payloads,
+      # infers `never` on untyped updates, and enforces exact .select() columns
+      # — breaking ~30 sites across app/api/*. PR #16 caught this (fails CI
+      # weekly since 2026-06-08). Pin until the typing-fix migration is done;
+      # keeps the other minor/patch bumps flowing.
+      - dependency-name: '@supabase/supabase-js'
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
