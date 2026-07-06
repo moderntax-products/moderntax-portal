@@ -18,6 +18,7 @@ import {
 } from '@/lib/mercury';
 import { requireBearer } from '@/lib/auth-util';
 import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
+import { MONTHLY_1CLICK_CLIENT_IDS } from '@/lib/monthly-invoice-clients';
 
 export const maxDuration = 60;
 
@@ -128,18 +129,14 @@ export async function GET(request: NextRequest) {
     const errors: { client: string; error: string }[] = [];
     const generated: { client: string; invoiceNumber: string; totalEntities: number; totalAmount: number }[] = [];
 
-    // June 2026: Centerstone + Cal Statewide CDC are handled by the one-shot
-    // /api/cron/send-june-2026-invoices (7pm PT Jun 30, managers + AP). Skip them
-    // here so this cron (which fires 4pm PT Jun 30) doesn't beat it to AP-only.
-    const JUNE_2026_ONESHOT_CLIENTS = new Set([
-      '60f80d60-03ad-42d7-95da-c0f1cd311523', // Centerstone
-      '3256293c-6c98-42bc-a828-2b73a603048e', // California Statewide CDC
-    ]);
-
     for (const client of clients) {
       clientsProcessed++;
 
-      if (periodStart === '2026-06-01' && JUNE_2026_ONESHOT_CLIENTS.has(client.id)) {
+      // Centerstone + Cal Statewide are billed by the dedicated 1-click monthly
+      // cron (app/api/cron/monthly-client-invoices, 7pm PT last calendar day, sent
+      // with Matt's approval). Skip them here so the two crons never race to
+      // create the same invoice for the period.
+      if (MONTHLY_1CLICK_CLIENT_IDS.includes(client.id)) {
         skipped++;
         continue;
       }
