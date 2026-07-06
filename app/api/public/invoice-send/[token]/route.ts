@@ -130,7 +130,9 @@ export async function POST(_request: NextRequest, { params }: { params: { token:
     await sgMail.send({
       to: client.billing_ap_email,
       cc: client.billing_ap_email_cc?.length ? client.billing_ap_email_cc : undefined,
-      from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
+      // active-accounts@ is the sender that reliably delivers (ClearFirm's June
+      // breakdown landed from it; the old no-reply@ send to Cal Statewide did not).
+      from: { email: 'active-accounts@moderntax.io', name: 'ModernTax Invoicing' },
       subject: email.subject,
       html: email.html,
       text: email.text,

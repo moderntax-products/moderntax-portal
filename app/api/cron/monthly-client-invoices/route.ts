@@ -332,7 +332,8 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
       await sgMail.send({
         to: emailTo,
         cc: emailCc.length ? emailCc : undefined,
-        from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
+        // active-accounts@ delivers reliably; no-reply@ was getting filtered.
+        from: { email: 'active-accounts@moderntax.io', name: 'ModernTax Invoicing' },
         subject: `${invoiceNumber} — ${client.name} — ${fmtUsd(grandTotal)} due ${dueDate}`,
         html,
         text: `${client.name} ${periodStart.slice(0, 7)} invoice ${invoiceNumber}. Total due: ${fmtUsd(grandTotal)}. Pay: ${payUrl}. Itemized breakdown attached as PDF and viewable at https://portal.moderntax.io/invoicing.`,
