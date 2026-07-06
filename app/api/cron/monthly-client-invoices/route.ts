@@ -38,6 +38,8 @@ import {
   getMercuryInvoicePdfUrl,
 } from '@/lib/mercury';
 import { generateInvoiceBreakdownPdf } from '@/lib/invoice-breakdown-pdf';
+import { MONTHLY_1CLICK_CLIENTS } from '@/lib/monthly-invoice-clients';
+import { signInvoiceSendToken } from '@/lib/invoice-send-token';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,23 +49,6 @@ export const maxDuration = 300; // 5 min — enough for 2 clients × PDF + Mercu
 
 function fmtUsd(n: number) {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/** True when `date` is the last Monday-Friday of its month. */
-function isLastBusinessDayOfMonth(date: Date): boolean {
-  const month = date.getMonth();
-  const year = date.getFullYear();
-  const dow = date.getDay(); // 0=Sun … 6=Sat
-  if (dow === 0 || dow === 6) return false; // weekend — never the answer
-
-  // Walk forward looking for another weekday in the same month
-  const next = new Date(date);
-  next.setDate(next.getDate() + 1);
-  while (next.getMonth() === month && next.getFullYear() === year) {
-    if (next.getDay() !== 0 && next.getDay() !== 6) return false; // another weekday exists
-    next.setDate(next.getDate() + 1);
-  }
-  return true;
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -106,7 +91,10 @@ export async function issueMonthlyInvoice(
   // When provided, the breakdown email goes to `to` (cc `cc`); otherwise it
   // falls back to the client's billing_ap_email / billing_ap_email_cc.
   recipients?: { to: string[]; cc?: string[] },
-): Promise<{ invoiceNumber: string; total: number; payUrl: string } | null> {
+  // When true, the invoice is generated as a DRAFT and NO client email is sent
+  // — the caller sends it later with one click. Used by the 1-click monthly cron.
+  deferSend = false,
+): Promise<{ invoiceNumber: string; total: number; payUrl: string; invoiceId?: string | null; dueDate?: string; netDays?: number } | null> {
   const L = (s: string) => { log.push(s); console.log(`[monthly-invoice] ${s}`); };
 
   // Pull client config
@@ -121,11 +109,11 @@ export async function issueMonthlyInvoice(
   const [y, m] = periodStart.split('-');
   const invoiceNumber = `INV-${y}-${m}-${slugUpper}`;
   const { data: existing } = await (admin.from('invoices') as any)
-    .select('id, invoice_number, total_amount, status, mercury_pay_url')
+    .select('id, invoice_number, total_amount, status, mercury_pay_url, due_date')
     .eq('invoice_number', invoiceNumber).maybeSingle();
   if (existing) {
-    L(`  ↩ already issued: ${invoiceNumber} ($${existing.total_amount}) — skipping`);
-    return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '' };
+    L(`  ↩ already issued: ${invoiceNumber} ($${existing.total_amount}, ${existing.status}) — skipping`);
+    return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '', invoiceId: existing.id, dueDate: existing.due_date };
   }
 
   const ratePdf = Number(client.billing_rate_pdf || 99.99);
@@ -288,7 +276,7 @@ export async function issueMonthlyInvoice(
   // ── Breakdown PDF ─────────────────────────────────────────────────────────
   const catchupLine = catchupAmount > 0 ? { amount: catchupAmount, memo: catchupMemo } : null;
   let pdfBuffer: Buffer | null = null;
-  try {
+  if (!deferSend) try {
     pdfBuffer = await generateInvoiceBreakdownPdf({
       clientName: client.name,
       invoiceNumber,
@@ -312,7 +300,7 @@ export async function issueMonthlyInvoice(
   const emailCc = recipients?.to?.length
     ? (recipients.cc || [])
     : (client.billing_ap_email_cc?.length ? client.billing_ap_email_cc : []);
-  if (process.env.SENDGRID_API_KEY && emailTo.length) {
+  if (!deferSend && process.env.SENDGRID_API_KEY && emailTo.length) {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
     const fmtDate = (s: string | null) => s ? s.slice(0, 10) : '';
     const procRows = processorGroups.map(g =>
@@ -367,72 +355,115 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
     total_amount: grandTotal,
     monitoring_entities: monitoringEntities,
     monitoring_amount: monitoringAmount,
-    status: 'sent',
+    status: deferSend ? 'draft' : 'sent',
     payment_method: 'ach',
     due_date: dueDate,
     mercury_invoice_id: mercuryInvoice.id,
     mercury_pay_url: payUrl,
     breakdown,
   };
-  let { error: insErr } = await (admin.from('invoices') as any).insert(insertPayload);
+  let invoiceId: string | null = null;
+  let { data: insRow, error: insErr } = await (admin.from('invoices') as any).insert(insertPayload).select('id').single();
   if (insErr && /breakdown|column.*does not exist|PGRST204/i.test(insErr.message || '')) {
     delete insertPayload.breakdown;
-    ({ error: insErr } = await (admin.from('invoices') as any).insert(insertPayload));
+    ({ data: insRow, error: insErr } = await (admin.from('invoices') as any).insert(insertPayload).select('id').single());
   }
   if (insErr) L(`  ! invoices insert failed: ${insErr.message}`);
-  else L(`  ✓ invoices row written`);
+  else { invoiceId = insRow?.id || null; L(`  ✓ invoices ${deferSend ? 'DRAFT' : 'row'} written (${invoiceId})`); }
 
-  return { invoiceNumber, total: grandTotal, payUrl };
+  return { invoiceNumber, total: grandTotal, payUrl, invoiceId, dueDate, netDays };
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 
-// Client IDs and their active billing months going forward.
-const ACTIVE_CLIENTS = [
-  { id: '60f80d60-03ad-42d7-95da-c0f1cd311523', name: 'Centerstone' },
-  { id: '3256293c-6c98-42bc-a828-2b73a603048e', name: 'Cal Statewide' },
-];
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'matt@moderntax.io';
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
+
+/** Email Matt one summary with a signed 1-click "send to client" link per draft. */
+async function sendReadyToSendSummary(
+  ready: Array<{ name: string; invoiceNumber: string; total: number; invoiceId: string; dueDate: string }>,
+  periodMonth: string,
+): Promise<void> {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+  const rows = ready.map(r => {
+    const link = `${APP_URL}/api/public/invoice-send/${signInvoiceSendToken(r.invoiceId)}`;
+    return `<tr><td style="padding:9px 12px;border-bottom:1px solid #eee;">${r.name}<br><span style="color:#6b7280;font-size:11px;">${r.invoiceNumber}</span></td><td style="padding:9px 12px;border-bottom:1px solid #eee;text-align:right;font-family:monospace;">${fmtUsd(r.total)}</td><td style="padding:9px 12px;border-bottom:1px solid #eee;color:#6b7280;font-size:12px;">due ${r.dueDate}</td><td style="padding:9px 12px;border-bottom:1px solid #eee;text-align:right;"><a href="${link}" style="display:inline-block;background:#0a1929;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:700;font-size:13px;">Review &amp; send &rarr;</a></td></tr>`;
+  }).join('');
+  await sgMail.send({
+    to: ADMIN_EMAIL,
+    from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
+    subject: `${ready.length} invoice${ready.length === 1 ? '' : 's'} ready to send — ${periodMonth}`,
+    html: `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:640px;margin:0 auto;color:#1a2845;">
+<h2 style="font-size:18px;">Monthly invoices ready to send — ${periodMonth}</h2>
+<p style="font-size:14px;color:#374151;">Generated as drafts at 7pm PT on the last day of the month. Click <b>Review &amp; send</b> to email each client &mdash; you'll see a confirmation page first, and the invoice is only marked sent once the client email actually goes out.</p>
+<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;margin-top:12px;"><tbody>${rows}</tbody></table>
+<p style="font-size:12px;color:#6b7280;margin-top:16px;">Full audit trail at <a href="${APP_URL}/invoicing">portal.moderntax.io/invoicing</a>.</p>
+</div>`,
+    text: `${ready.length} invoices ready to send (${periodMonth}): ` + ready.map(r => `${r.name} ${r.invoiceNumber} ${fmtUsd(r.total)} → ${APP_URL}/api/public/invoice-send/${signInvoiceSendToken(r.invoiceId)}`).join(' | '),
+  });
+}
 
 export async function GET(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
   if (unauthorized) return unauthorized;
 
-  // Last-business-day gate
   const now = new Date();
   const forceRun = request.nextUrl.searchParams.get('force') === '1';
-  if (!forceRun && !isLastBusinessDayOfMonth(now)) {
+
+  // Fire at 7pm PT on the LAST CALENDAR DAY of the month. Vercel crons are UTC
+  // and DST-blind, so this is scheduled at 02:00 + 03:00 UTC on the 1st (= 7pm PT
+  // on the last day of the prior month in PDT / PST respectively) and gated on the
+  // real PT wall-clock so exactly one run fires, year-round. The billing period is
+  // that prior PT month.
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const pt = (t: string) => Number(parts.find(p => p.type === t)?.value);
+  const ptYear = pt('year'), ptMonth = pt('month'), ptDay = pt('day');
+  let ptHour = pt('hour'); if (ptHour === 24) ptHour = 0; // Intl emits '24' at midnight
+  const lastDayPt = new Date(Date.UTC(ptYear, ptMonth, 0)).getUTCDate();
+
+  if (!forceRun && !(ptHour === 19 && ptDay === lastDayPt)) {
     return NextResponse.json({
       skipped: true,
-      reason: `${now.toISOString().slice(0, 10)} is not the last business day of the month. Pass ?force=1 to override.`,
+      reason: `Not 7pm PT on the last day of the month (PT now: ${ptYear}-${String(ptMonth).padStart(2, '0')}-${String(ptDay).padStart(2, '0')} ${ptHour}:00; last day is ${lastDayPt}). Pass ?force=1 to override.`,
     });
   }
 
   const admin = createAdminClient();
   const log: string[] = [];
-  const results: Array<{ client: string; invoiceNumber?: string; total?: number; payUrl?: string; error?: string }> = [];
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const periodStart = `${ptYear}-${pad(ptMonth)}-01`;
+  const periodEnd = `${ptYear}-${pad(ptMonth)}-${pad(lastDayPt)}`;
 
-  // Period = current month
-  const periodStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
-  const lastDay = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0).getDate();
-  const periodEnd = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  const results: Array<{ client: string; invoiceNumber?: string; total?: number; invoiceId?: string | null; error?: string }> = [];
+  const ready: Array<{ name: string; invoiceNumber: string; total: number; invoiceId: string; dueDate: string }> = [];
 
-  // June 2026 is handled by the one-shot /api/cron/send-june-2026-invoices, which
-  // fires 7pm PT on Jun 30 and sends to managers + AP. Defer here so these two
-  // clients are never double-billed / sent to AP-only at the wrong time.
-  if (periodStart === '2026-06-01') {
-    return NextResponse.json({ skipped: true, reason: 'June 2026 deferred to send-june-2026-invoices one-shot (managers + AP, 7pm PT)' });
-  }
-
-  for (const client of ACTIVE_CLIENTS) {
+  // Generate each invoice as a DRAFT (deferSend=true) — no client email yet.
+  for (const client of MONTHLY_1CLICK_CLIENTS) {
     try {
-      const result = await issueMonthlyInvoice(admin, client.id, periodStart, periodEnd, log);
-      if (result) results.push({ client: client.name, ...result });
-      else results.push({ client: client.name, error: 'Nothing to bill or already issued' });
+      const result = await issueMonthlyInvoice(admin, client.id, periodStart, periodEnd, log, undefined, true);
+      if (result) {
+        results.push({ client: client.name, invoiceNumber: result.invoiceNumber, total: result.total, invoiceId: result.invoiceId });
+        if (result.invoiceId) ready.push({ name: client.name, invoiceNumber: result.invoiceNumber, total: result.total, invoiceId: result.invoiceId, dueDate: result.dueDate || periodEnd });
+      } else {
+        results.push({ client: client.name, error: 'Nothing to bill' });
+      }
     } catch (err: any) {
       log.push(`✗ ${client.name}: ${err?.message}`);
       results.push({ client: client.name, error: err?.message });
     }
   }
 
-  return NextResponse.json({ success: true, period: { start: periodStart, end: periodEnd }, results, log });
+  // Email Matt one summary with a 1-click send link per draft (see-it-first).
+  if (ready.length && process.env.SENDGRID_API_KEY) {
+    try {
+      await sendReadyToSendSummary(ready, periodStart.slice(0, 7));
+      log.push(`✓ ready-to-send summary emailed to ${ADMIN_EMAIL} (${ready.length} draft${ready.length === 1 ? '' : 's'})`);
+    } catch (err: any) {
+      log.push(`! summary email failed: ${err?.message}`);
+    }
+  }
+
+  return NextResponse.json({ success: true, period: { start: periodStart, end: periodEnd }, drafts_ready: ready.length, results, log });
 }
