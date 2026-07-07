@@ -14,23 +14,38 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 
 const PURPOSE = 'filing_intake';
+// These tokens gate no-login pages that expose PII (/review, /authorize,
+// /intake), so they are time-bounded. 60 days covers the real "email a link,
+// taxpayer acts within a few weeks" window while capping the exposure of a
+// leaked URL.
+const DEFAULT_TTL_DAYS = 60;
 
+let warnedFallback = false;
 function getKey(): string {
-  return (
-    process.env.INTAKE_TOKEN_SECRET ||
-    process.env.SENDGRID_API_KEY ||
-    'dev-intake-key-do-not-use-in-prod'
-  );
+  const dedicated = process.env.INTAKE_TOKEN_SECRET;
+  if (dedicated) return dedicated;
+  // Security gap: without a dedicated secret the email-sending key doubles as
+  // the auth-token signing key. Warn (once) so ops sets INTAKE_TOKEN_SECRET.
+  if (!warnedFallback) {
+    warnedFallback = true;
+    console.warn('[intake-tokens] INTAKE_TOKEN_SECRET not set — falling back to SENDGRID_API_KEY for token signing. Set a dedicated high-entropy INTAKE_TOKEN_SECRET so the email key is not reused for auth.');
+  }
+  return process.env.SENDGRID_API_KEY || 'dev-intake-key-do-not-use-in-prod';
 }
 
-/** Sign an entityId into an opaque, URL-safe filing-intake token. */
-export function signFilingIntakeToken(entityId: string): string {
-  const payload = `${entityId}:${PURPOSE}`;
+/**
+ * Sign an entityId into an opaque, URL-safe filing-intake token that expires.
+ * Pass ttlDays to override the 60-day default (e.g. a shorter window for the
+ * most sensitive PII pages).
+ */
+export function signFilingIntakeToken(entityId: string, ttlDays: number = DEFAULT_TTL_DAYS): string {
+  const exp = Math.floor(Date.now() / 1000) + Math.round(ttlDays * 86400);
+  const payload = `${entityId}:${PURPOSE}:${exp}`;
   const mac = createHmac('sha256', getKey()).update(payload).digest('base64url');
   return `${Buffer.from(payload).toString('base64url')}.${mac}`;
 }
 
-/** Verify a token → the entityId it authorizes, or null if invalid/tampered. */
+/** Verify a token → the entityId it authorizes, or null if invalid/tampered/expired. */
 export function verifyFilingIntakeToken(token: string | null | undefined): string | null {
   if (!token) return null;
   const parts = token.split('.');
@@ -45,8 +60,15 @@ export function verifyFilingIntakeToken(token: string | null | undefined): strin
   if (provided.length !== expected.length) return null;
   if (!timingSafeEqual(provided, expected)) return null;
 
-  const [entityId, purpose] = payload.split(':');
+  const [entityId, purpose, expStr] = payload.split(':');
   if (!entityId || purpose !== PURPOSE) return null;
+  // Expiry check — v2 tokens carry an epoch; legacy v1 tokens (no 3rd field)
+  // still validate so links already in the wild keep working through the
+  // transition. New tokens are always bounded.
+  if (expStr !== undefined && expStr !== '') {
+    const exp = Number(expStr);
+    if (!Number.isFinite(exp) || exp * 1000 < Date.now()) return null;
+  }
   return entityId;
 }
 

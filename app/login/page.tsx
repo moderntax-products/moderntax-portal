@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { createClient } from '@/lib/supabase';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -38,6 +39,33 @@ export default function LoginPage() {
       window.history.replaceState(null, '', window.location.pathname);
     }
   }, []);
+
+  // SSO via Google / Microsoft (Supabase OAuth). Redirects to the provider,
+  // which returns to /auth/callback to exchange the code. Delegated auth means
+  // the IdP's own MFA + device policies protect the login.
+  const handleOAuth = async (provider: 'google' | 'azure') => {
+    setError(null);
+    setSuccess(null);
+    setIsLoading(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          scopes: provider === 'azure' ? 'openid email profile' : undefined,
+        },
+      });
+      if (error) {
+        setError(error.message || 'Could not start sign-in. Please try again.');
+        setIsLoading(false);
+      }
+      // On success the browser navigates to the provider — no further action here.
+    } catch {
+      setError('Could not start sign-in. Please try again.');
+      setIsLoading(false);
+    }
+  };
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,6 +192,33 @@ export default function LoginPage() {
               {isLoading ? 'Signing in...' : 'Sign in'}
             </button>
           </form>
+
+          {/* SSO — Google + Microsoft */}
+          <div className="mt-5 flex items-center gap-3">
+            <div className="flex-1 h-px bg-gray-200" />
+            <span className="text-xs text-gray-400 uppercase tracking-wide">or continue with</span>
+            <div className="flex-1 h-px bg-gray-200" />
+          </div>
+          <div className="mt-4 space-y-2">
+            <button
+              type="button"
+              onClick={() => handleOAuth('google')}
+              disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 border border-gray-300 bg-white text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.02-3.7H.96v2.34A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.98 10.72a5.4 5.4 0 0 1 0-3.44V4.94H.96a9 9 0 0 0 0 8.12l3.02-2.34z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58C13.47.9 11.43 0 9 0A9 9 0 0 0 .96 4.94l3.02 2.34C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+              Continue with Google
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOAuth('azure')}
+              disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 border border-gray-300 bg-white text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg width="16" height="16" viewBox="0 0 23 23" aria-hidden="true"><path fill="#F25022" d="M1 1h10v10H1z"/><path fill="#7FBA00" d="M12 1h10v10H12z"/><path fill="#00A4EF" d="M1 12h10v10H1z"/><path fill="#FFB900" d="M12 12h10v10H12z"/></svg>
+              Continue with Microsoft
+            </button>
+          </div>
 
           {/* Signup Link */}
           <p className="mt-6 text-center text-sm text-gray-600">
