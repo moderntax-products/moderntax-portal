@@ -56,15 +56,27 @@ export async function autoFulfillRequestFromRecord(
     .single() as { data: any };
   if (!req) return { served, requestCompleted: false };
 
+  // Monitoring re-pulls exist specifically to fetch FRESH IRS data (e.g. a
+  // newly-filed year, or changes to a filed year). They must never be served
+  // from cached transcripts — that would deliver stale data and defeat the
+  // service. Skip the whole request if it's a monitoring re-pull.
+  if (req.intake_method === 'monitoring_repull') {
+    return { served, requestCompleted: false };
+  }
+
   const isApi = req.intake_method === 'api' && !!req.external_request_token;
 
   const { data: entities } = await supabase
     .from('request_entities')
-    .select('id, entity_name, tid, form_type, status, transcript_urls, transcript_html_urls')
+    .select('id, entity_name, tid, form_type, status, transcript_urls, transcript_html_urls, gross_receipts')
     .eq('request_id', requestId) as { data: any[] | null };
   if (!entities || entities.length === 0) return { served, requestCompleted: false };
 
   for (const ent of entities) {
+    // Belt-and-suspenders: also skip any entity individually tagged as a
+    // monitoring re-pull (e.g. created under a different intake_method because
+    // the 'monitoring_repull' value is blocked by the requests CHECK constraint).
+    if (ent.gross_receipts?.monitoring_repull === true) continue;
     const already = ((ent.transcript_urls || []).length + (ent.transcript_html_urls || []).length) > 0;
     if (already || ent.status === 'completed') continue; // already fulfilled
 
