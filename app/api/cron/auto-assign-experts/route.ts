@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
   // ─── 1. Eligible entities ────────────────────────────────────────────────
   const { data: rawEligible } = await admin
     .from('request_entities')
-    .select('id, entity_name, status, signed_8821_url, form_type, request_id')
+    .select('id, entity_name, status, signed_8821_url, signature_id, gross_receipts, form_type, request_id')
     .in('status', ['8821_signed', 'irs_queue']) as { data: any[] | null };
 
   const eligible = rawEligible || [];
@@ -60,11 +60,25 @@ export async function GET(request: NextRequest) {
   const apiRequestIds = new Set((requests || []).filter(r => r.intake_method === 'api').map(r => r.id));
   const requestToClient = new Map<string, string>((requests || []).map(r => [r.id, r.client_id]));
 
-  // Entity is "ready" if it has a signed 8821 OR is W2_INCOME OR is API-intake
-  const ready = eligible.filter(e =>
-    e.signed_8821_url || e.form_type === 'W2_INCOME' || apiRequestIds.has(e.request_id),
-  );
+  // Entity is "ready" for assignment only when its 8821 is confirmed complete:
+  //  - API intake + W2_INCOME skip the 8821 flow entirely.
+  //  - App-generated 8821s (Dropbox Sign → signature_id) are inherently valid.
+  //  - UPLOADED 8821s (Centerstone flat-rate bulk-attach / single-PDF fallback,
+  //    signature_id null) must pass the vision completeness check stamped by the
+  //    verify-8821-completeness cron (right taxpayer TIN, signed, ModernTax
+  //    designee). Held until verified so an expert is never handed a blank,
+  //    mismatched, or unsigned form.
+  let heldForIncomplete8821 = 0;
+  const ready = eligible.filter(e => {
+    if (apiRequestIds.has(e.request_id) || e.form_type === 'W2_INCOME') return true;
+    if (!e.signed_8821_url) return false;
+    if (e.signature_id) return true; // app-generated (Dropbox Sign)
+    const verified = e.gross_receipts?.eightyone_check?.ok === true; // uploaded → must be verified
+    if (!verified) heldForIncomplete8821++;
+    return verified;
+  });
   skipped.not_ready_for_assignment = eligible.length - ready.length;
+  skipped.held_8821_incomplete = heldForIncomplete8821;
 
   // Filter out anything that already has an active assignment
   const { data: activeAssns } = await admin
