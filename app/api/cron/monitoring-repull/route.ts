@@ -149,6 +149,32 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
+        // ── Authorization gate (MOD-227) ─────────────────────────────────────
+        // A monitoring re-pull must be authorized by the INITIAL PROCESSOR — the
+        // client-side processor/manager who submitted the original request — NOT
+        // a ModernTax admin or a system auto-enrollment. This stops the
+        // repeat-entity default-on auto-enroll from silently monitoring +
+        // billing clients who never opted in (the cause of the 60 unauthorized
+        // subs cancelled 2026-07). We verify the original request's requester is
+        // a processor/manager belonging to the entity's own client.
+        const initialProcessorId = owningRequest.requested_by;
+        let processorAuthorized = false;
+        if (initialProcessorId) {
+          const { data: proc } = await supabase
+            .from('profiles')
+            .select('id, role, client_id')
+            .eq('id', initialProcessorId)
+            .single() as { data: { role: string; client_id: string | null } | null };
+          processorAuthorized = !!proc
+            && ['processor', 'manager'].includes(proc.role)
+            && proc.client_id === owningRequest.client_id;
+        }
+        if (!processorAuthorized) {
+          console.warn(`Monitoring ${sub.id}: NOT authorized by the initial processor (requested_by=${initialProcessorId} is not a processor/manager of client ${owningRequest.client_id}) — skipping re-pull.`);
+          results.push({ entity: entity.entity_name, status: 'not_processor_authorized' });
+          continue;
+        }
+
         const monitoringLoanNumber = `MON-${entity.entity_name.slice(0, 24).replace(/[^a-zA-Z0-9]/g, '')}-${today}`;
         const { data: newRequest, error: reqErr } = await supabase
           .from('requests')
