@@ -54,21 +54,12 @@ const FIXED_MONTHLY = {
   vercel_pro: 20,          // 1 seat
   supabase_pro: 25,        // Pro tier
   github_org: 4,           // Free org + a Pro seat amortized
-  dropbox_sign_plan: 75,   // Mid-tier API plan; per-signature on top
+  dropbox_sign_plan: 60,   // Flat $60/mo plan (signatures included) — own line
   quickbooks: 70,          // Online Essentials
   domain: 2,               // moderntax.io annual ÷ 12
-  // Note: SendGrid base plan ($15-90) is folded into the per-email cost below
-  //  since their pricing is usage-tiered. Net daily fixed = ~$196 ÷ 30 = ~$6.53/day.
-} as const;
-
-/** Per-unit usage rates (update when vendor pricing changes). */
-const UNIT_RATES = {
-  sendgrid_per_email: 0.001,        // ~$1/k emails on Essentials, conservative
-  dropbox_sign_per_signature: 3,    // ~$3 per signature on usage plans
-  stripe_pct: 0.029,                // 2.9% of card revenue
-  stripe_per_txn: 0.30,             // + $0.30 per Stripe transaction
-  mercury_ach_pct: 0.005,           // 0.5% of inbound ACH (Mercury IO Business)
-  anthropic_per_extraction: 0.02,   // sonnet-4-5 vision on a 1-2 page PDF
+  sendgrid_plan: 34.95,    // SendGrid flat monthly plan (amortized on its own line)
+  claude_max_plus: 200,    // Claude Max Plus base — usage top-ups billed on top
+  faxplus_plan: 34.99,     // Fax.plus flat monthly plan (IRS 8821 fax delivery)
 } as const;
 
 export async function computeDailyCogs(
@@ -86,68 +77,49 @@ export async function computeDailyCogs(
   const items: CogsLineItem[] = [];
   const warnings: string[] = [];
 
+  // Number of days in the period (1 for the daily report, ~7 weekly, ~30 monthly).
+  // Fixed monthly costs are amortized at monthly ÷ 30 PER DAY, so a multi-day
+  // period books that daily burn × the day count. Variable lines (voice, expert
+  // payouts) already sum over the [start,end) range via their queries.
+  const periodDays = Math.max(1, Math.round((Date.parse(dayEndUtc) - Date.parse(dayStartUtc)) / 86_400_000));
+  const amortized = (monthly: number) => round2((monthly / 30) * periodDays);
+  const perDayNote = periodDays === 1 ? '÷ 30' : `÷ 30 × ${periodDays}d`;
+
   // ─── 1. Infrastructure (fixed amortized) ─────────────────────────────────
-  const dailyFixed =
-    (FIXED_MONTHLY.vercel_pro +
-      FIXED_MONTHLY.supabase_pro +
-      FIXED_MONTHLY.github_org +
-      FIXED_MONTHLY.dropbox_sign_plan +
-      FIXED_MONTHLY.quickbooks +
-      FIXED_MONTHLY.domain) / 30;
+  const infraMonthly =
+    FIXED_MONTHLY.vercel_pro +
+    FIXED_MONTHLY.supabase_pro +
+    FIXED_MONTHLY.github_org +
+    FIXED_MONTHLY.quickbooks +
+    FIXED_MONTHLY.domain +
+    FIXED_MONTHLY.dropbox_sign_plan;
   items.push({
     category: 'infrastructure',
     label: 'Infrastructure (fixed amortized)',
-    amount: round2(dailyFixed),
-    detail: 'Vercel Pro + Supabase Pro + GitHub + Dropbox Sign base + QuickBooks + domain, monthly ÷ 30',
+    amount: amortized(infraMonthly),
+    detail: `Vercel Pro + Supabase Pro + GitHub + QuickBooks + domain + Dropbox Sign, monthly ${perDayNote}`,
   });
 
-  // ─── 2. Email (SendGrid usage) ───────────────────────────────────────────
-  // Until SendGrid event webhook is plumbed, we approximate by counting
-  // every email-sending audit log event today. If none, estimate from
-  // completions × ~2 emails (admin + customer per completion).
-  try {
-    const { count: emailCount } = await supabase
-      .from('sendgrid_events')
-      .select('*', { count: 'exact', head: true })
-      .eq('event', 'processed')
-      .gte('created_at', dayStartUtc)
-      .lt('created_at', dayEndUtc);
-    const emails = emailCount || 0;
-    const emailCost = emails * UNIT_RATES.sendgrid_per_email;
-    items.push({
-      category: 'email',
-      label: 'SendGrid (transactional emails)',
-      amount: round2(emailCost),
-      detail: emails > 0
-        ? `${emails} emails × $${UNIT_RATES.sendgrid_per_email.toFixed(3)}/email`
-        : 'No event webhook telemetry yet — estimate $0',
-    });
-    if (emails === 0) warnings.push('SendGrid event webhook not wired — email cost shown as $0');
-  } catch (err) {
-    items.push({ category: 'email', label: 'SendGrid', amount: 0, detail: '(query failed)' });
-    warnings.push(`Email cost: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
+  // ─── 2. Email (SendGrid) ─────────────────────────────────────────────────
+  // SendGrid is a flat $34.95/month plan (transactional volume is within it),
+  // so book it as real amortized cost — not a usage estimate that read $0
+  // without the (unwired) event webhook.
+  items.push({
+    category: 'email',
+    label: 'SendGrid (transactional emails)',
+    amount: amortized(FIXED_MONTHLY.sendgrid_plan),
+    detail: `SendGrid plan $${FIXED_MONTHLY.sendgrid_plan.toFixed(2)}/mo ${perDayNote} (flat; volume included)`,
+  });
 
-  // ─── 3. E-sign (Dropbox Sign per-signature) ──────────────────────────────
-  // Counts request_entities where signature_id was first populated today.
-  try {
-    const { data: signedToday } = await supabase
-      .from('request_entities')
-      .select('id, signature_created_at')
-      .gte('signature_created_at', dayStartUtc)
-      .lt('signature_created_at', dayEndUtc)
-      .not('signature_id', 'is', null);
-    const signs = signedToday?.length || 0;
-    items.push({
-      category: 'esign',
-      label: 'Dropbox Sign (per-signature)',
-      amount: round2(signs * UNIT_RATES.dropbox_sign_per_signature),
-      detail: `${signs} 8821 e-signatures × $${UNIT_RATES.dropbox_sign_per_signature.toFixed(2)}/sig (on top of monthly plan)`,
-    });
-  } catch (err) {
-    items.push({ category: 'esign', label: 'Dropbox Sign', amount: 0, detail: '(query failed)' });
-    warnings.push(`E-sign cost: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
+  // (Dropbox Sign is folded into Infrastructure above — not a separate COGS line.)
+
+  // ─── 3. Fax (Fax.plus — IRS 8821 fax delivery) ───────────────────────────
+  items.push({
+    category: 'esign',
+    label: 'Fax.plus (IRS fax delivery)',
+    amount: amortized(FIXED_MONTHLY.faxplus_plan),
+    detail: `Fax.plus plan $${FIXED_MONTHLY.faxplus_plan.toFixed(2)}/mo ${perDayNote} (flat; faxes included)`,
+  });
 
   // ─── 4. Voice AI (Bland + Retell IRS calls) ──────────────────────────────
   try {
@@ -175,72 +147,22 @@ export async function computeDailyCogs(
     warnings.push(`Voice cost: ${err instanceof Error ? err.message : 'unknown'}`);
   }
 
-  // ─── 5. AI extraction (Anthropic — Convert-8821 + processor-AI) ──────────
-  // No per-call audit logging yet; approximate from new requests today (each
-  // potentially triggers ≤1 conversion + processor questions).
-  // Conservative placeholder: zero unless ANTHROPIC_API_KEY is configured.
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const { count: newReqs } = await supabase
-        .from('requests')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', dayStartUtc)
-        .lt('created_at', dayEndUtc);
-      const estimated = (newReqs || 0) * UNIT_RATES.anthropic_per_extraction;
-      items.push({
-        category: 'ai_extraction',
-        label: 'Anthropic (vision + processor-AI)',
-        amount: round2(estimated),
-        detail: `~${newReqs || 0} potential extractions × $${UNIT_RATES.anthropic_per_extraction.toFixed(2)} (estimate — no per-call telemetry yet)`,
-      });
-    } catch {
-      items.push({ category: 'ai_extraction', label: 'Anthropic', amount: 0, detail: '(estimate unavailable)' });
-    }
-  } else {
-    items.push({
-      category: 'ai_extraction',
-      label: 'Anthropic (vision + processor-AI)',
-      amount: 0,
-      detail: 'API key not configured',
-    });
-  }
+  // ─── 5. AI (Claude — vision on convert-8821 + processor-AI) ──────────────
+  // Claude Max Plus base plan ($200/mo) booked amortized. Usage top-ups are
+  // billed on top but aren't metered here yet — flagged as the one telemetry gap.
+  items.push({
+    category: 'ai_extraction',
+    label: 'Claude (vision + processor-AI)',
+    amount: amortized(FIXED_MONTHLY.claude_max_plus),
+    detail: `Claude Max Plus $${FIXED_MONTHLY.claude_max_plus.toFixed(2)}/mo ${perDayNote} (base; usage top-ups billed on top, not yet metered)`,
+  });
+  warnings.push('Claude usage top-ups (beyond the $200/mo base) are not metered — AI line is base-only');
 
-  // ─── 6. Payment rails (Stripe + Mercury, % of revenue) ───────────────────
-  // We don't yet split by payment method per invoice; approximate as a
-  // weighted blend (assume 80% ACH via Mercury, 20% card via Stripe) until
-  // we can split properly from invoices.payment_method.
-  try {
-    const { data: paidToday } = await supabase
-      .from('invoices')
-      .select('total_amount, payment_method')
-      .gte('paid_at', dayStartUtc)
-      .lt('paid_at', dayEndUtc);
-    let mercuryFees = 0;
-    let stripeFees = 0;
-    for (const inv of (paidToday || []) as any[]) {
-      const amt = Number(inv.total_amount || 0);
-      const method = (inv.payment_method || '').toLowerCase();
-      if (method === 'ach' || method === 'wire') {
-        mercuryFees += amt * UNIT_RATES.mercury_ach_pct;
-      } else if (method === 'card' || method === 'stripe') {
-        stripeFees += amt * UNIT_RATES.stripe_pct + UNIT_RATES.stripe_per_txn;
-      } else {
-        // Unknown — assume ACH (default)
-        mercuryFees += amt * UNIT_RATES.mercury_ach_pct;
-      }
-    }
-    items.push({
-      category: 'payment_rails',
-      label: 'Payment processing (Stripe + Mercury)',
-      amount: round2(mercuryFees + stripeFees),
-      detail: `Mercury ACH ${UNIT_RATES.mercury_ach_pct * 100}% + Stripe 2.9%+$0.30 (${paidToday?.length || 0} invoices paid today)`,
-    });
-  } catch (err) {
-    items.push({ category: 'payment_rails', label: 'Payment rails', amount: 0, detail: '(query failed)' });
-    warnings.push(`Payment cost: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
+  // Payment processing (Stripe + Mercury fees) is intentionally NOT a COGS line
+  // per the 2026-07-06 model: COGS = Infra + SendGrid + Fax.plus + Anthropic +
+  // Voice AI + Expert Payouts only.
 
-  // ─── 7. Expert payouts (the big one) ─────────────────────────────────────
+  // ─── 6. Expert payouts (the big one) ─────────────────────────────────────
   // Sum hours_worked from expert_time_logs that STARTED today (UTC), times
   // each expert's profiles.hourly_rate. Falls back to a $40/hr default if
   // the expert hasn't been rate-configured.

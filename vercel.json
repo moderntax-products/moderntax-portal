@@ -54,6 +54,14 @@
       "schedule": "30 3 * * *"
     },
     {
+      "path": "/api/cron/admin-weekly-summary",
+      "schedule": "0 15 * * 1"
+    },
+    {
+      "path": "/api/cron/admin-monthly-summary",
+      "schedule": "0 16 1 * *"
+    },
+    {
       "path": "/api/cron/holiday-cutoff-tuesday-followup",
       "schedule": "0 12 * * 2"
     },
