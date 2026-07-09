@@ -46,7 +46,7 @@ export default function NewRequestChooserPage() {
               <h2 className="text-lg font-bold text-mt-dark">CSV / Excel Upload</h2>
             </div>
             <p className="text-sm text-gray-600 flex-1 mb-4">
-              Multiple borrowers at once. Upload a spreadsheet — we auto-generate signed 8821s and send them for signature.
+              Multiple clients at once. Upload a spreadsheet — a populated, signature-ready 8821 for every row is emailed to you instantly.
             </p>
             <ul className="text-xs text-gray-500 space-y-1.5 mb-4">
               <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Bulk preview with validation before submit</span></li>
@@ -101,7 +101,7 @@ export default function NewRequestChooserPage() {
               <h2 className="text-lg font-bold text-mt-dark">Manual Entry</h2>
             </div>
             <p className="text-sm text-gray-600 flex-1 mb-4">
-              One borrower? Type the details directly into a form — fastest path for a single transcript request.
+              Type in one or a few clients — a populated, signature-ready 8821 for each is emailed to you the moment you submit.
             </p>
             <ul className="text-xs text-gray-500 space-y-1.5 mb-4">
               <li className="flex items-start gap-2"><span className="text-mt-green mt-0.5">✓</span><span>Add multiple entities to one loan</span></li>
@@ -174,7 +174,7 @@ export default function NewRequestChooserPage() {
         <div className="mt-10 bg-blue-50 border border-blue-200 rounded-lg p-5 text-sm">
           <p className="font-semibold text-blue-900 mb-1">Not sure which path to use?</p>
           <p className="text-blue-800 text-xs">
-            Pick <strong>CSV / Excel</strong> when you have 2+ borrowers in a spreadsheet. Pick <strong>Signed 8821 PDF</strong> when the borrower already e-signed an 8821 elsewhere (DocuSign, Adobe Sign, paper). Pick <strong>Manual Entry</strong> for a single borrower or when typing details is faster than building a spreadsheet.
+            Pick <strong>CSV / Excel</strong> when you have 2+ clients in a spreadsheet. Pick <strong>Signed 8821 PDF</strong> when the taxpayer already signed an 8821 elsewhere (DocuSign, Adobe Sign, paper). Pick <strong>Manual Entry</strong> for a single client or when typing details is faster than building a spreadsheet. With CSV and Manual Entry, populated 8821s are generated and emailed to you automatically — you only collect the signature.
           </p>
         </div>
       </div>

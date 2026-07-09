@@ -19,6 +19,7 @@ import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/trans
 
 interface Props {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ gen8821?: string }>;
 }
 
 const TIMELINE_STEPS: { status: string; label: string; description: string }[] = [
@@ -30,8 +31,9 @@ const TIMELINE_STEPS: { status: string; label: string; description: string }[] =
   { status: 'completed', label: 'Completed', description: 'Transcripts received and ready' },
 ];
 
-export default async function RequestDetailPage({ params }: Props) {
+export default async function RequestDetailPage({ params, searchParams }: Props) {
   const { id } = await params;
+  const sp = searchParams ? await searchParams : {};
   const supabase = await createServerComponentClient();
 
   const {
@@ -125,6 +127,19 @@ export default async function RequestDetailPage({ params }: Props) {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Post-submit confirmation: populated 8821s were auto-generated +
+          emailed to the ordering party (manual-entry flow redirects here
+          with ?gen8821=1). */}
+      {sp.gen8821 === '1' && (
+        <div className="bg-green-50 border-b border-green-200">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3 text-sm text-green-900">
+            <span className="font-semibold">📧 Signature-ready 8821s are on their way to your inbox.</span>{' '}
+            We generated a populated Form 8821 for each entity on this request and emailed the PDFs to you.
+            Send them to your client to sign, then upload the signed copies here. Each form is also available
+            for download on its entity below.
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">

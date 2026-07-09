@@ -155,6 +155,9 @@ export function CsvUploadFlow() {
       corrected_form: string;
       reason: string;
     }>;
+    // Auto-generated populated 8821s emailed to the uploader (entities that
+    // arrived without a pre-signed 8821).
+    autogen_8821?: { generated: number; emailed: boolean };
     // Pre-signed 8821 bulk-attach summary (Centerstone flat-rate flow).
     bulk_8821?: {
       attached: Array<{ entityId: string; entityName: string; filename: string; storagePath: string }>;
@@ -519,6 +522,19 @@ export function CsvUploadFlow() {
             </span>
           )}
         </p>
+        {(result.autogen_8821?.generated || 0) > 0 && (
+          <div className={`rounded-lg p-4 mb-6 text-left max-w-md mx-auto border ${result.autogen_8821!.emailed ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+            <p className="text-sm font-semibold text-gray-800 mb-1">
+              📧 {result.autogen_8821!.generated} signature-ready 8821{result.autogen_8821!.generated > 1 ? 's' : ''} generated
+              {result.autogen_8821!.emailed ? ' — check your inbox' : ''}
+            </p>
+            <p className="text-xs text-gray-600">
+              {result.autogen_8821!.emailed
+                ? 'A populated Form 8821 for each entity was just emailed to you. Send each one to your client to sign, then upload the signed copies to the request. Copies are also downloadable on each entity.'
+                : 'The populated forms are saved on each entity for download (the email could not be sent). Send each one to your client to sign, then upload the signed copies.'}
+            </p>
+          </div>
+        )}
         <div className="bg-gray-50 rounded-lg p-4 mb-6 text-left max-w-md mx-auto">
           <p className="text-sm font-semibold text-gray-700 mb-2">Loan Numbers:</p>
           <ul className="space-y-1">
@@ -632,6 +648,15 @@ export function CsvUploadFlow() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {!require8821Pdfs && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900">
+          <span className="font-semibold">📧 One upload — every 8821 generated for you.</span>{' '}
+          When you submit, ModernTax creates a populated, signature-ready IRS Form 8821 for <b>each row</b> in your
+          spreadsheet (taxpayer details, periods, and designee already filled in) and <b>emails all the PDFs to you
+          instantly</b>. Send them to your clients to sign with whatever tool you already use, then upload the signed
+          copies. No per-form data entry.
+        </div>
+      )}
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-red-700 text-sm whitespace-pre-wrap">{error}</p>
