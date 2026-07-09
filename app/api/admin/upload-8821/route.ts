@@ -196,7 +196,11 @@ export async function POST(request: NextRequest) {
     // CAF-match guardrail: an admin-override upload IS the expert copy, so it
     // must name the assigned expert's CAF as a designee. Reject a wrong-designee
     // form before it ever reaches the expert — the failure that made Joel
-    // Abernathy reject work + miss an IRS callback (2026-06-03).
+    // Abernathy reject work + miss an IRS callback (2026-06-03). Scanned forms
+    // with an empty text layer fall back to vision; if BOTH are unreadable the
+    // upload proceeds with a warning (blocking left no path forward — A&H
+    // Development, 2026-07-09).
+    let designeeWarning: string | null = null;
     if (writesAdminOverride) {
       const { data: asn } = await adminSupabase
         .from('expert_assignments')
@@ -212,12 +216,16 @@ export async function POST(request: NextRequest) {
         const check = await verify8821Designee(buffer, expert.caf_number);
         if (!check.ok) {
           return NextResponse.json({
-            error: `This 8821 names designee CAF(s) [${check.designeeCafs.join(', ') || 'none found'}], which don't include the assigned expert ${expert.full_name}'s CAF ${expert.caf_number}. Re-prepare the 8821 with their credentials before uploading.`,
+            error: `This 8821 names designee CAF(s) [${check.designeeCafs.join(', ') || 'none found'}], which don't include the assigned expert ${expert.full_name}'s CAF ${expert.caf_number}. Re-prepare the 8821 with their credentials before uploading.`
+              + (check.source === 'vision' ? ' (Scanned form — designees were read from the image.)' : ''),
             code: 'designee_caf_mismatch',
             designeeCafs: check.designeeCafs,
             expertCaf: expert.caf_number,
           }, { status: 422 });
         }
+        // Fail-open path (unreadable scan / no CAF on file): upload proceeds,
+        // but surface the reason so the admin verifies the designee by eye.
+        if (check.reason) designeeWarning = check.reason;
       }
     }
 
@@ -357,6 +365,10 @@ export async function POST(request: NextRequest) {
       success: true,
       filePath,
       entityName: entity.entity_name,
+      // Set when the designee CAF could not be machine-validated (unreadable
+      // scan / expert missing CAF) — UI should show this so the admin
+      // double-checks the form visually.
+      designeeWarning,
       // True when this upload landed in admin_uploaded_8821_url instead of
       // overwriting the processor's signed_8821_url. Surfaces in the UI so
       // admin understands the original is preserved.
