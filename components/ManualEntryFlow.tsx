@@ -173,6 +173,20 @@ export function ManualEntryFlow() {
         console.warn('[manual-entry] intake-note autopost failed (non-fatal):', noteErr);
       }
 
+      // Auto-generate populated 8821s for every entity just entered and email
+      // them to this ordering party for signature collection (2026-07-09
+      // feature: enter the taxpayer info once → 8821s in the inbox instantly).
+      // Fire-and-forget — the per-entity download button still covers failures.
+      try {
+        await fetch('/api/entity/8821-autogen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: req.id }),
+        });
+      } catch (genErr) {
+        console.warn('[manual-entry] 8821 autogen failed (non-fatal):', genErr);
+      }
+
       const etCount = entities.filter(ent => ent.entityTranscript).length;
       if (etCount > 0) {
         try {

@@ -78,7 +78,22 @@ export interface Fill8821Options {
 // ---------------------------------------------------------------------------
 
 export const DESIGNEES: Record<string, DesigneeInfo> = {
+  // Default house designee for ALL auto-populated 8821s — Joel Abernathy
+  // (Matt directive 2026-07-09, replacing LaTonya Holmes). Joel is the primary
+  // pulling expert, so pre-signature forms carry his CAF and need no re-prep
+  // when the work lands in his queue.
   default: {
+    name: 'Joel Abernathy C/O ModernTax Inc',
+    address: '12 St Croix Place Apt E',
+    city: 'Greensboro',
+    state: 'NC',
+    zip: '27410',
+    ptin: '',
+    caf: '0312-78018R',
+    phone: '336-253-5069',
+    fax: '415-900-4436',
+  },
+  latonya: {
     name: 'LaTonya Holmes C/O ModernTax Inc',
     address: '2 Embarcadero, 2nd Floor',
     city: 'San Francisco',

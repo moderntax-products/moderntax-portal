@@ -943,6 +943,23 @@ export async function POST(request: NextRequest) {
       console.warn('[csv-upload] intake-note autopost failed (non-fatal):', noteErr);
     }
 
+    // Auto-generate populated 8821s for every entity that arrived WITHOUT a
+    // signed 8821 (bulk-attached/pre-signed entities are skipped inside the
+    // helper) and email them to the uploader for signature collection
+    // (2026-07-09 feature: one CSV upload -> unique 8821 per entity, blanks in
+    // the processor's inbox instantly). Fire-and-forget.
+    let autogen8821 = { generated: 0, emailed: false };
+    try {
+      const { autoGenerate8821sForRequest } = await import('@/lib/8821-autogen');
+      const gen = await autoGenerate8821sForRequest(admin, req.id, {
+        email: user.email || '',
+        name: profile.full_name,
+      });
+      autogen8821 = { generated: gen.generated.length, emailed: gen.emailed };
+    } catch (genErr) {
+      console.warn('[csv-upload] 8821 autogen failed (non-fatal):', genErr);
+    }
+
     // Notify all admins about the new request in real-time
     try {
       const { data: admins } = await admin
@@ -1031,6 +1048,9 @@ export async function POST(request: NextRequest) {
       // Present when the processor uploaded one or more PDFs alongside
       // the CSV — surfaces matches + any unmatched PDFs/entities so the
       // success screen can call them out for follow-up.
+      // Auto-generated 8821 summary — UI tells the processor the populated
+      // forms are in their inbox.
+      autogen_8821: autogen8821,
       bulk_8821: bulkAttachReport ? {
         attached: bulkAttachReport.attached,
         unmatched_pdfs: bulkAttachReport.unmatchedPdfs,
