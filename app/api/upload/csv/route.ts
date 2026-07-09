@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
-import { send8821WithFallback } from '@/lib/send-8821-with-fallback';
 import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 import { bulkAttachPresigned8821s, type BulkPdf } from '@/lib/bulk-8821-attach';
 import { sendAdminNewRequestNotification, sendManagerEntityTranscriptNotification } from '@/lib/sendgrid';
@@ -855,63 +854,14 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Auto-send 8821 via Dropbox Sign for entities with signer email (and no existing signature)
-    // Skip entities that were auto-completed via repeat entity intelligence
-    // OR that already have a signed_8821_url from the bulk-attach pass above.
-    if (!entError) {
-      try {
-        const { data: createdEntities } = await admin
-          .from('request_entities')
-          .select('id, entity_name, form_type, tid, tid_kind, signer_first_name, signer_last_name, signer_email, address, city, state, zip_code, signature_id, signed_8821_url, status')
-          .eq('request_id', req.id) as { data: any[] | null; error: any };
-
-        if (createdEntities) {
-          for (const entity of createdEntities) {
-            // Skip if already has a signature_id (pre-signed from CSV)
-            if (entity.signature_id) continue;
-            // Skip if a pre-signed PDF was just attached (bulk-attach pass)
-            if (entity.signed_8821_url) continue;
-            // Skip if already completed (repeat entity auto-attached transcripts)
-            if (entity.status === 'completed') continue;
-            // Skip already-signed (defensive)
-            if (entity.status === '8821_signed') continue;
-            // Skip employment entities
-            if (entity.form_type === 'W2_INCOME') continue;
-            // Must have signer email
-            if (!entity.signer_email) continue;
-
-            // Uses the shared helper that falls back to a manual-PDF
-            // email if Dropbox Sign returns 402 (free-tier blocked). The
-            // helper updates the row's status + signature_id itself.
-            const result = await send8821WithFallback(entity, admin);
-            if (result.outcome === 'sent_hellosign') {
-              console.log(`[csv-upload] 8821 sent via HelloSign for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
-            } else if (result.outcome === 'sent_manual') {
-              console.log(`[csv-upload] 8821 sent via MANUAL email for ${entity.entity_name} (entity ${entity.id?.slice(0, 8) || '?'})`);
-            } else {
-              console.error(`[csv-upload] Failed to send 8821 for ${entity.entity_name}: ${result.error}`);
-            }
-          }
-
-          // Update request status if all entities have been sent or completed
-          const { data: updatedEntities } = await admin
-            .from('request_entities')
-            .select('status')
-            .eq('request_id', req.id) as { data: any[] | null; error: any };
-
-          if (updatedEntities) {
-            const allDone = updatedEntities.every(
-              (e: any) => ['8821_sent', '8821_signed', 'irs_queue', 'processing', 'completed'].includes(e.status)
-            );
-            if (allDone) {
-              await admin.from('requests').update({ status: '8821_sent' }).eq('id', req.id);
-            }
-          }
-        }
-      } catch (signError) {
-        console.error('[csv-upload] 8821 auto-send error:', signError);
-      }
-    }
+    // NOTE (2026-07-09): ModernTax no longer auto-sends 8821 signature requests
+    // to taxpayers on CSV intake. Populated 8821s are generated + emailed to the
+    // ORDERING PARTY instead (autogen hook below), and they collect signatures
+    // with their own tools, then upload the signed copies. Entities stay
+    // status='pending' — and out of the expert-assignment / IRS queue — until
+    // the signed 8821 is uploaded (upload flips them to '8821_signed').
+    // Pre-signed flows (signature_id from CSV, bulk-attached PDFs) are
+    // unaffected. Explicit per-entity "Generate + send" admin buttons remain.
 
     // Auto-post the intake instruction note on each created entity so
     // the expert sees what was requested directly — no admin relay.

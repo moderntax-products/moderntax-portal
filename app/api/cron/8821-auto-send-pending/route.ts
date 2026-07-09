@@ -69,6 +69,11 @@ export async function GET(request: NextRequest) {
       requests!inner(id, loan_number, status, requested_by, client_id)
     `)
     .eq('status', 'pending')
+    // Autogen-era entities (2026-07-09+) carry gross_receipts.prefilled_8821_url —
+    // the ordering party received populated 8821s by email and owns signature
+    // collection. Auto-sending Dropbox Sign on top would double-contact the
+    // taxpayer, so this backfill only serves pre-autogen stragglers.
+    .is('gross_receipts->>prefilled_8821_url', null)
     .not('signer_email', 'is', null)
     .is('signature_id', null)
     // Any non-terminal parent — siblings may have advanced the parent
