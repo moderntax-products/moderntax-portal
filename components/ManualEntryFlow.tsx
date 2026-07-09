@@ -176,13 +176,17 @@ export function ManualEntryFlow() {
       // Auto-generate populated 8821s for every entity just entered and email
       // them to this ordering party for signature collection (2026-07-09
       // feature: enter the taxpayer info once → 8821s in the inbox instantly).
-      // Fire-and-forget — the per-entity download button still covers failures.
+      // Capture the result so the request page can confirm the email went out;
+      // failures are non-fatal (the per-entity download button still covers it).
+      let gen8821Emailed = false;
       try {
-        await fetch('/api/entity/8821-autogen', {
+        const genRes = await fetch('/api/entity/8821-autogen', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ requestId: req.id }),
         });
+        const genData = await genRes.json().catch(() => ({}));
+        gen8821Emailed = !!genData.emailed && (genData.generated || 0) > 0;
       } catch (genErr) {
         console.warn('[manual-entry] 8821 autogen failed (non-fatal):', genErr);
       }
@@ -206,7 +210,7 @@ export function ManualEntryFlow() {
 
       setSubmitted(true);
       navigating = true;
-      router.push(`/request/${req.id}`);
+      router.push(gen8821Emailed ? `/request/${req.id}?gen8821=1` : `/request/${req.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -216,6 +220,13 @@ export function ManualEntryFlow() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* What happens on submit — the 8821 paperwork is generated FOR you. */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900">
+        <span className="font-semibold">📧 No forms to fill out — we generate the 8821s for you.</span>{' '}
+        When you submit, ModernTax creates a populated, signature-ready IRS Form 8821 for each entity below
+        (taxpayer details, periods, and designee already filled in) and <b>emails the PDFs to you instantly</b>.
+        Send them to your client to sign with whatever tool you already use, then upload the signed copies to the request.
+      </div>
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-red-700 text-sm">{error}</p>
