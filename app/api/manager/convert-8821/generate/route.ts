@@ -64,9 +64,11 @@ export async function POST(request: NextRequest) {
   const form_type: AllowedForm = (allowedForms as readonly string[]).includes(rawForm) ? rawForm as AllowedForm : '1120';
   const years = (body.years || '2022-2026').toString().trim();
 
-  // Default designee = Matthew Parker preset (matches what we registered with
-  // IRS as CAF 0316-30210R). Future: allow per-expert designee selection.
-  const designee = DESIGNEES.parker;
+  // House default designee for all auto-populated 8821s — Joel Abernathy as of
+  // 2026-07-09 (DESIGNEES.default; was Matthew Parker, before that LaTonya).
+  // The converted form gets re-signed carrying the designee whose queue the
+  // pull actually lands in.
+  const designee = DESIGNEES.default;
 
   try {
     const pdf = await generate8821PDF({
