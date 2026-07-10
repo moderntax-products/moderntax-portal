@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SlaCountdown } from './SlaCountdown';
 import { ExpertTranscriptUpload } from './ExpertTranscriptUpload';
 import { ExpertFlagIssue } from './ExpertFlagIssue';
@@ -83,17 +83,54 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
   const [faxError, setFaxError] = useState<string | null>(null);
   const [faxes, setFaxes] = useState<Array<{ fax_id: string; to: string; status: string; sent_at: string }>>([]);
 
-  const loadFaxes = async () => {
+  // Live delivery confirmation: after a send, poll every 8s until the fax
+  // reaches a terminal state so the expert sees "Delivered" while still on
+  // the phone with the IRS agent. (Agents give a different fax number on
+  // every call; the expert reads the confirmation straight off the card.)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const isTerminal = (status: string | undefined) => {
+    const s = (status || '').toUpperCase();
+    return s === 'COMPLETED' || s === 'DELIVERED' || s.includes('FAIL');
+  };
+
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  };
+
+  const loadFaxes = async (): Promise<any[]> => {
     try {
       const res = await fetch(`/api/expert/fax-8821?entityId=${entity.id}`);
-      if (res.ok) setFaxes((await res.json()).faxes || []);
+      if (res.ok) {
+        const list = (await res.json()).faxes || [];
+        setFaxes(list);
+        return list;
+      }
     } catch { /* non-fatal */ }
+    return [];
   };
+
+  const startPolling = () => {
+    stopPolling();
+    const startedAt = Date.now();
+    pollRef.current = setInterval(async () => {
+      const list = await loadFaxes();
+      const latest = list[0];
+      // Stop once delivered/failed, or give up after 10 minutes.
+      if ((latest && isTerminal(latest.status)) || Date.now() - startedAt > 10 * 60 * 1000) stopPolling();
+    }, 8000);
+  };
+
+  useEffect(() => stopPolling, []); // clear the interval on unmount
 
   const handleToggleFax = () => {
     const next = !showFax;
     setShowFax(next);
-    if (next) loadFaxes();
+    if (next) {
+      loadFaxes().then((list) => { if (list[0] && !isTerminal(list[0].status)) startPolling(); });
+    } else {
+      stopPolling();
+    }
   };
 
   const handleSendFax = async () => {
@@ -109,6 +146,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
       if (!res.ok) { setFaxError(data.error || 'Fax failed to send'); return; }
       setFaxNumber('');
       await loadFaxes();
+      startPolling(); // live-update until the delivery confirmation lands
     } catch {
       setFaxError('Fax failed to send — try again');
     } finally {
@@ -290,28 +328,19 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
           <p className="text-xs text-red-600">{downloadError}</p>
         )}
 
-        {/* In-dashboard IRS fax (Sinch) */}
+        {/* In-dashboard IRS fax (Sinch) — agent gives a fresh number each call */}
         {showFax && (
           <div className="border border-blue-200 bg-blue-50/50 rounded-lg p-3 space-y-2">
-            <p className="text-xs font-medium text-blue-900">Fax this entity&apos;s 8821 straight to the IRS — no external fax tool needed.</p>
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                { label: 'CAF Unit — Ogden', num: '855-214-7522' },
-                { label: 'CAF Unit — Memphis', num: '855-214-7519' },
-              ].map((p) => (
-                <button key={p.num} type="button" onClick={() => setFaxNumber(p.num)}
-                  className={`px-2 py-1 text-[11px] rounded border ${faxNumber === p.num ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100'}`}>
-                  {p.label} · {p.num}
-                </button>
-              ))}
-            </div>
+            <p className="text-xs font-medium text-blue-900">Fax this 8821 to the number the IRS agent gives you — confirmation appears below the moment it&apos;s delivered.</p>
             <div className="flex gap-2">
               <input
                 type="tel"
                 value={faxNumber}
                 onChange={(e) => setFaxNumber(e.target.value)}
-                placeholder="Fax number (e.g. the one the PPS rep gives you)"
+                placeholder="Fax number from the IRS agent (e.g. 855-375-5122)"
+                autoFocus
                 className="flex-1 px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={(e) => { if (e.key === 'Enter' && faxNumber.trim() && !sendingFax) handleSendFax(); }}
               />
               <button
                 onClick={handleSendFax}
@@ -322,9 +351,40 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
               </button>
             </div>
             {faxError && <p className="text-xs text-red-600">{faxError}</p>}
-            {faxes.length > 0 && (
+
+            {/* Live delivery status — latest fax gets the big banner */}
+            {faxes.length > 0 && (() => {
+              const latest = faxes[0];
+              const s = (latest.status || '').toUpperCase();
+              const delivered = s === 'COMPLETED' || s === 'DELIVERED';
+              const failed = s.includes('FAIL');
+              return (
+                <div className={`rounded-lg px-3 py-2.5 text-sm font-medium flex items-center gap-2 ${
+                  delivered ? 'bg-green-100 text-green-800 border border-green-300'
+                  : failed ? 'bg-red-100 text-red-800 border border-red-300'
+                  : 'bg-amber-50 text-amber-800 border border-amber-300'
+                }`}>
+                  {delivered ? (
+                    <>✅ <span><b>Delivered</b> to {latest.to} — you can confirm to the agent.</span></>
+                  ) : failed ? (
+                    <>❌ <span><b>Failed</b> to {latest.to} — double-check the number and resend.</span></>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4 animate-spin text-amber-600" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      <span><b>Transmitting</b> to {latest.to}… this updates automatically (faxes take 1–5 min).</span>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Earlier attempts, compact */}
+            {faxes.length > 1 && (
               <div className="space-y-1 pt-1">
-                {faxes.slice(0, 3).map((f) => {
+                {faxes.slice(1, 4).map((f) => {
                   const s = (f.status || '').toUpperCase();
                   const done = s === 'COMPLETED' || s === 'DELIVERED';
                   const failed = s.includes('FAIL');

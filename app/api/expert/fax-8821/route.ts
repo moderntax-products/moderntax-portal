@@ -137,12 +137,14 @@ export async function GET(request: NextRequest) {
     const gr = entity?.gross_receipts || {};
     const faxes: any[] = Array.isArray(gr.faxes) ? gr.faxes : [];
 
-    // Poll fallback: refresh any non-terminal entry older than 2 minutes in
-    // case the delivery callback never arrived.
+    // Live-confirmation path: the card polls this endpoint every ~8s after a
+    // send, so refresh any non-terminal entry from Sinch once it's >15s old —
+    // the expert needs "Delivered" on screen while still on the phone with
+    // the IRS agent (the callback is the fast path; this is the guarantee).
     let changed = false;
     for (const f of faxes) {
       const terminal = ['COMPLETED', 'FAILURE', 'FAILED', 'DELIVERED'].includes((f.status || '').toUpperCase());
-      const stale = Date.now() - Date.parse(f.sent_at || 0) > 2 * 60 * 1000;
+      const stale = Date.now() - Date.parse(f.updated_at || f.sent_at || 0) > 15 * 1000;
       if (!terminal && stale && f.fax_id) {
         const live = await getSinchFax(f.fax_id);
         if (live?.status && live.status !== f.status) { f.status = live.status; f.updated_at = new Date().toISOString(); changed = true; }
