@@ -26,6 +26,7 @@ export type AuditAction =
   | 'request_viewed'
   | 'entity_created'
   | 'transcript_downloaded'
+  | 'fax_sent'
   | 'file_uploaded'
   | 'batch_created'
   | 'profile_accessed'
