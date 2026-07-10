@@ -76,6 +76,45 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
   };
 
   const [downloading8821, setDownloading8821] = useState(false);
+  // In-dashboard IRS faxing (Sinch) — replaces the offline fax tool.
+  const [showFax, setShowFax] = useState(false);
+  const [faxNumber, setFaxNumber] = useState('');
+  const [sendingFax, setSendingFax] = useState(false);
+  const [faxError, setFaxError] = useState<string | null>(null);
+  const [faxes, setFaxes] = useState<Array<{ fax_id: string; to: string; status: string; sent_at: string }>>([]);
+
+  const loadFaxes = async () => {
+    try {
+      const res = await fetch(`/api/expert/fax-8821?entityId=${entity.id}`);
+      if (res.ok) setFaxes((await res.json()).faxes || []);
+    } catch { /* non-fatal */ }
+  };
+
+  const handleToggleFax = () => {
+    const next = !showFax;
+    setShowFax(next);
+    if (next) loadFaxes();
+  };
+
+  const handleSendFax = async () => {
+    setFaxError(null);
+    setSendingFax(true);
+    try {
+      const res = await fetch('/api/expert/fax-8821', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityId: entity.id, toNumber: faxNumber }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setFaxError(data.error || 'Fax failed to send'); return; }
+      setFaxNumber('');
+      await loadFaxes();
+    } catch {
+      setFaxError('Fax failed to send — try again');
+    } finally {
+      setSendingFax(false);
+    }
+  };
 
   const handleDownload8821 = async () => {
     if (!entity.admin_uploaded_8821_url && !entity.signed_8821_url) return;
@@ -204,6 +243,15 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
             </span>
           )}
 
+          {(entity.admin_uploaded_8821_url || entity.signed_8821_url) && ['assigned', 'in_progress'].includes(assignment.status) && (
+            <button
+              onClick={handleToggleFax}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100"
+            >
+              📠 {showFax ? 'Hide fax' : 'Fax 8821 to IRS'}
+            </button>
+          )}
+
           {assignment.status === 'assigned' && (
             <button
               onClick={handleStartWork}
@@ -240,6 +288,56 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
 
         {downloadError && (
           <p className="text-xs text-red-600">{downloadError}</p>
+        )}
+
+        {/* In-dashboard IRS fax (Sinch) */}
+        {showFax && (
+          <div className="border border-blue-200 bg-blue-50/50 rounded-lg p-3 space-y-2">
+            <p className="text-xs font-medium text-blue-900">Fax this entity&apos;s 8821 straight to the IRS — no external fax tool needed.</p>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { label: 'CAF Unit — Ogden', num: '855-214-7522' },
+                { label: 'CAF Unit — Memphis', num: '855-214-7519' },
+              ].map((p) => (
+                <button key={p.num} type="button" onClick={() => setFaxNumber(p.num)}
+                  className={`px-2 py-1 text-[11px] rounded border ${faxNumber === p.num ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100'}`}>
+                  {p.label} · {p.num}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="tel"
+                value={faxNumber}
+                onChange={(e) => setFaxNumber(e.target.value)}
+                placeholder="Fax number (e.g. the one the PPS rep gives you)"
+                className="flex-1 px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <button
+                onClick={handleSendFax}
+                disabled={sendingFax || !faxNumber.trim()}
+                className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {sendingFax ? 'Sending…' : 'Send fax'}
+              </button>
+            </div>
+            {faxError && <p className="text-xs text-red-600">{faxError}</p>}
+            {faxes.length > 0 && (
+              <div className="space-y-1 pt-1">
+                {faxes.slice(0, 3).map((f) => {
+                  const s = (f.status || '').toUpperCase();
+                  const done = s === 'COMPLETED' || s === 'DELIVERED';
+                  const failed = s.includes('FAIL');
+                  return (
+                    <div key={f.fax_id} className={`flex items-center justify-between text-[11px] px-2 py-1 rounded ${done ? 'bg-green-50 text-green-800' : failed ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-600'}`}>
+                      <span>→ {f.to}</span>
+                      <span className="font-medium">{done ? '✓ Delivered' : failed ? '✗ Failed' : s || 'Queued'} · {new Date(f.sent_at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Expandable sections */}
