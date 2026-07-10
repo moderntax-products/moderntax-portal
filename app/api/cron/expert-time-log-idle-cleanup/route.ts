@@ -14,10 +14,19 @@
  *    force-closed 15 min after it began — even while the expert was on a
  *    30–90 min IRS PPS hold. That shredded real worked time. — Joel A. 6/04.)
  *  • sor_upload idle >15 min (since last upload) → close
- *  • manual / irs_direct_dial are EXPLICIT clock-ins and are NEVER idle-closed.
- *    The expert punches out by hand (authoritative). An expert on a long IRS
- *    PPS hold makes no clicks and may background the tab, so ANY inactivity
- *    timeout shreds real worked time — the exact bug Joel hit repeatedly.
+ *  • manual / irs_direct_dial are EXPLICIT clock-ins and are NOT idle-closed on
+ *    the ordinary short timers. The expert punches out by hand (authoritative).
+ *    An expert on a long IRS PPS hold makes no clicks and may background the
+ *    tab, so a short inactivity timeout shreds real worked time — the exact bug
+ *    Joel hit repeatedly.
+ *  • PHANTOM GUARD (manual / irs_direct_dial): if such a session is idle for
+ *    >PHANTOM_IDLE_MINUTES (3 hr — well past the longest real PPS hold) AND has
+ *    ZERO production (0 tins_completed AND 0 attributed entities), it's a timer
+ *    left running on an abandoned tab, not real work. Close it at the last
+ *    activity bound (≈0 billable hours). Real work produces an entity/TIN or a
+ *    heartbeat within 3 hr, so this can't shred a genuine hold. This is the
+ *    hole that let Matt's iCloud-expert phantom bill the full 6-hr HARD_CAP on
+ *    2026-07-09 and fake a −89% daily margin.
  *  • bland_call / retell_call sessions are closed by the webhook on
  *    call-completed; this cron catches webhook misses (idle >2 hr)
  *  • Hard cap: ANY session open >6 hr gets closed (forgotten clock-out only)
@@ -49,7 +58,22 @@ const IDLE_BY_KIND: Record<string, number> = {
 // (Joel A. was repeatedly clocked out mid-call at 15 min — 6/04 & 6/05.)
 const NEVER_IDLE_CLOSE = new Set(['manual', 'irs_direct_dial']);
 
+// Phantom guard for the explicit clock-ins above: a session idle THIS long with
+// zero production is a forgotten/abandoned timer, not a hold. 3 hr sits well
+// past the longest real IRS PPS hold (~90 min) so it can't clip live work.
+const PHANTOM_IDLE_MINUTES = 180;
+
 const HARD_CAP_HOURS = 6;
+
+// True when a session shows no sign of real work: no verified units and no
+// entity attributed in notes (format "entities=[id1,id2]"). Used only to
+// justify closing an otherwise-never-idle-closed manual/PPS session.
+function hasZeroProduction(tinsCompleted: number, notes: string | null | undefined): boolean {
+  if ((Number(tinsCompleted) || 0) > 0) return false;
+  const m = (notes || '').match(/entities=\[([^\]]*)\]/);
+  const entityIds = (m?.[1] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return entityIds.length === 0;
+}
 
 export async function GET(request: NextRequest) {
   const unauthorized = requireBearer(request, process.env.CRON_SECRET);
@@ -60,7 +84,7 @@ export async function GET(request: NextRequest) {
   const nowIso = now.toISOString();
 
   const { data: open, error } = await sb.from('expert_time_logs')
-    .select('id, expert_id, source, start_at, updated_at, notes')
+    .select('id, expert_id, source, start_at, updated_at, notes, tins_completed')
     .is('end_at', null) as { data: any[] | null; error: any };
   if (error) return NextResponse.json({ error: 'Query failed', detail: error.message }, { status: 500 });
 
@@ -83,6 +107,12 @@ export async function GET(request: NextRequest) {
     } else if (!NEVER_IDLE_CLOSE.has(kind)) {
       const idleThreshold = IDLE_BY_KIND[kind] ?? 15;
       if (idleMinutes >= idleThreshold) reason = 'idle_timeout';
+    } else if (
+      // Phantom guard for explicit clock-ins: long idle + zero production only.
+      idleMinutes >= PHANTOM_IDLE_MINUTES &&
+      hasZeroProduction(s.tins_completed, s.notes)
+    ) {
+      reason = 'phantom_no_activity';
     }
     if (!reason) continue;
 

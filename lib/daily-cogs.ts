@@ -11,8 +11,12 @@
  *  5. AI extraction (Anthropic) — vision + text on convert-8821 + processor-AI
  *      (negligible today; ~$0.01-0.03 per call). Falls back to 0 if untracked.
  *  6. Payment rails (Stripe + Mercury) — % of revenue collected today
- *  7. Expert payouts (the big one) — hours_worked × profiles.hourly_rate
- *      from expert_time_logs that started today
+ *  7. Expert payouts (the big one) — expert_time_logs that started today,
+ *      run PER EXPERT through the same margin-guard payout engine payroll
+ *      uses (calculateExpertPayout): zero verified units ⇒ $0, and a slow
+ *      expert is capped at the per-TIN piece rate. Raw hours × rate is NOT
+ *      the cost — a forgotten clock-out with 0 completions costs $0, not
+ *      6 hrs of payout (that phantom faked a −89% margin on 2026-07-09).
  *
  * Returns a DailyCogsBreakdown matching AdminDailySummaryStats.cogs.
  * If a particular category is unconfigured or fails to compute, it's
@@ -21,6 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { calculateExpertPayout, PAYROLL_DEFAULTS } from './expert-payroll';
 
 export interface CogsLineItem {
   category:
@@ -241,13 +246,16 @@ export async function computeDailyCogs(
   }
 
   // ─── 7. Expert payouts (the big one) ─────────────────────────────────────
-  // Sum hours_worked from expert_time_logs that STARTED today (UTC), times
-  // each expert's profiles.hourly_rate. Falls back to a $40/hr default if
-  // the expert hasn't been rate-configured.
+  // COGS is what we'd actually PAY, not raw clocked hours. Aggregate today's
+  // logs per expert (hours + tins_completed), then run each expert through the
+  // same margin-guard engine payroll uses: zero completions ⇒ $0 (blocked),
+  // and a slow expert is capped at the per-TIN piece rate. This mirrors the
+  // real payable and stops a forgotten clock-out (0 TINs) from faking a margin
+  // crisis in the daily summary — the failure that showed up 2026-07-09.
   try {
     const { data: logsToday } = await supabase
       .from('expert_time_logs')
-      .select('expert_id, hours_worked')
+      .select('expert_id, hours_worked, tins_completed')
       .gte('start_at', dayStartUtc)
       .lt('start_at', dayEndUtc);
     const expertIds = Array.from(new Set((logsToday || []).map((l: any) => l.expert_id).filter(Boolean)));
@@ -257,21 +265,42 @@ export async function computeDailyCogs(
         .from('profiles')
         .select('id, hourly_rate')
         .in('id', expertIds);
-      for (const e of (experts || []) as any[]) rates[e.id] = Number(e.hourly_rate || 40);
+      for (const e of (experts || []) as any[]) rates[e.id] = Number(e.hourly_rate || PAYROLL_DEFAULTS.HOURLY_RATE);
+    }
+    // Aggregate hours + TINs per expert (the engine works on period totals).
+    const perExpert: Record<string, { hours: number; tins: number }> = {};
+    for (const l of (logsToday || []) as any[]) {
+      const id = l.expert_id;
+      if (!id) continue;
+      const agg = perExpert[id] || (perExpert[id] = { hours: 0, tins: 0 });
+      agg.hours += Number(l.hours_worked || 0);
+      agg.tins += Number(l.tins_completed || 0);
     }
     let payouts = 0;
     let totalHours = 0;
-    for (const l of (logsToday || []) as any[]) {
-      const rate = rates[l.expert_id] ?? 40;
-      const hrs = Number(l.hours_worked || 0);
-      payouts += hrs * rate;
-      totalHours += hrs;
+    let totalTins = 0;
+    let blockedHours = 0; // hours that produced $0 (zero-completion / phantom)
+    let cappedCount = 0;
+    for (const [id, agg] of Object.entries(perExpert)) {
+      const rate = rates[id] ?? PAYROLL_DEFAULTS.HOURLY_RATE;
+      const calc = calculateExpertPayout(agg.hours, agg.tins, rate);
+      payouts += calc.payoutAmount;
+      totalHours += agg.hours;
+      totalTins += agg.tins;
+      if (calc.status === 'BLOCKED_ZERO_PRODUCTION') blockedHours += agg.hours;
+      if (calc.status === 'CAP_OVERRIDE_TRIGGERED') cappedCount += 1;
     }
+    const flags: string[] = [];
+    if (blockedHours > 0) flags.push(`${blockedHours.toFixed(2)}h unpaid (0 completions — not billable)`);
+    if (cappedCount > 0) flags.push(`${cappedCount} capped to margin floor`);
     items.push({
       category: 'expert_payouts',
       label: 'Expert payouts',
       amount: round2(payouts),
-      detail: `${totalHours.toFixed(2)} hours logged across ${expertIds.length} expert(s) (per-expert hourly rates from profile)`,
+      detail:
+        `${totalHours.toFixed(2)}h / ${totalTins} TINs across ${expertIds.length} expert(s), ` +
+        `run through the margin-guard engine` +
+        (flags.length ? ` — ${flags.join('; ')}` : ''),
     });
   } catch (err) {
     items.push({ category: 'expert_payouts', label: 'Expert payouts', amount: 0, detail: '(query failed)' });
