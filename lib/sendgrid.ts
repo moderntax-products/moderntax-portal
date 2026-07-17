@@ -2777,7 +2777,12 @@ You just need the signature.</p>
   <p style="font-weight:700;font-size:16px;margin:0 0 12px 0;color:#0369a1;">Next steps</p>
   <ol style="margin:0;padding-left:20px;">
     <li style="margin-bottom:6px;">Have your taxpayer sign the attached form on the Section 7 signature line.</li>
-    <li style="margin-bottom:6px;">Upload the signed copy back onto the order in your ModernTax portal.</li>
+    <li style="margin-bottom:6px;">Send the signed copy back the easiest way for you:
+      <ul style="margin:6px 0 0;padding-left:18px;">
+        <li style="margin-bottom:4px;"><strong>Email it to <a href="mailto:intake@in.moderntax.io" style="color:#0369a1;">intake@in.moderntax.io</a></strong> with your loan number in the subject — it files to the right order automatically.</li>
+        <li>Or upload it onto the order in your ModernTax portal.</li>
+      </ul>
+    </li>
     <li>We submit it to the IRS and pull the transcripts — typical turnaround once signed is 24&ndash;48 hours.</li>
   </ol>
 </div>

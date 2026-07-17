@@ -107,6 +107,15 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ rejected: true, reason: 'sender has no client' }, { status: 200 });
   }
 
+  // 1b. Signed-8821-only email (PDF, no CSV): a processor replying / forwarding
+  // the SIGNED 8821 for an order that already exists. Attach it to the right
+  // entity and advance it to 8821_signed so auto-assign-experts queues it for
+  // an expert — no navigating back into the portal to upload. (The CSV path
+  // below is unchanged; this only fires when there's no CSV but there are PDFs.)
+  if (!parts.csvFile && parts.pdfFiles.length > 0) {
+    return await handleSigned8821Email(admin, request, parts, sender);
+  }
+
   // 2. Need at least a CSV/Excel file to extract entity data
   if (!parts.csvFile) {
     await sendBounceEmail(parts, 'no_csv_attached', sender);
@@ -439,4 +448,180 @@ No action needed — just FYI. Confirmation sent to the requester.`;
     subject: `[Email Intake] ${sender.clients?.name || ''} - ${loanNumber} (${entityCount} entit${entityCount === 1 ? 'y' : 'ies'})`,
     text,
   }).catch((e: any) => console.warn('[email-intake] matt notify failed:', e?.message));
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Signed-8821-only intake — attach an emailed signed 8821 to an existing order
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * A processor emailed the SIGNED 8821 (no CSV) for an order that already
+ * exists. Find the right entity, attach the PDF, advance it to 8821_signed.
+ *
+ * Matching, most-specific first:
+ *   1. reply address  intake+<entityId>@in.moderntax.io   (deterministic)
+ *   2. loan number in the subject/body  → entities under that loan (ideal)
+ *   3. exactly one open entity awaiting an 8821 for this client (sole-pending)
+ *   4. vision-read the TIN off the 8821 and match it (only when
+ *      ANTHROPIC_API_KEY is configured; otherwise skipped)
+ * Anything we can't confidently match is held for triage + flagged to Matt —
+ * we never guess onto the wrong loan.
+ */
+async function handleSigned8821Email(
+  admin: ReturnType<typeof createAdminClient>,
+  request: NextRequest,
+  parts: IncomingEmailParts,
+  sender: any,
+): Promise<NextResponse> {
+  // Candidate pool: this client's entities still awaiting a signed 8821.
+  const { data: rawCandidates } = await admin.from('request_entities')
+    .select('id, entity_name, tid, status, signed_8821_url, request_id, requests!inner(loan_number, client_id)')
+    .eq('requests.client_id', sender.client_id)
+    .in('status', ['pending', 'submitted', '8821_sent'])
+    .is('signed_8821_url', null) as { data: any[] | null };
+  let candidates = rawCandidates || [];
+
+  // (1) reply-address narrows to a single entity.
+  const addrEntityId = extractEntityIdFromTo(parts.to);
+  if (addrEntityId) {
+    const hit = candidates.filter((c) => c.id === addrEntityId);
+    if (hit.length) candidates = hit;
+  }
+  // (2) loan number narrows to that loan's entities.
+  const loanNumber = extractLoanNumber(parts.subject) || extractLoanNumber(parts.text);
+  if (candidates.length > 1 && loanNumber) {
+    const byLoan = candidates.filter(
+      (c) => String(c.requests?.loan_number || '').toLowerCase() === loanNumber.toLowerCase(),
+    );
+    if (byLoan.length) candidates = byLoan;
+  }
+
+  const attached: { entityName: string; loan: string | null }[] = [];
+  const unmatched: string[] = [];
+
+  for (const pdf of parts.pdfFiles) {
+    let target: any = null;
+    if (candidates.length === 1) {
+      // Sole remaining candidate — reply-address, single-entity loan, or the
+      // client only has one order open. The dominant, no-AI case.
+      target = candidates[0];
+    } else if (candidates.length > 1) {
+      // Multiple possibilities — only the TIN on the form can disambiguate.
+      const tin = await tinFromPdf(pdf.buffer);
+      if (tin) {
+        const digits = tin.replace(/\D/g, '');
+        target = candidates.find((c) => String(c.tid || '').replace(/\D/g, '') === digits) || null;
+      }
+    }
+    if (!target) { unmatched.push(pdf.name); continue; }
+
+    const storagePath = `8821/${target.id}/${Date.now()}-emailed-signed-${safeName(pdf.name)}`;
+    const { error: upErr } = await admin.storage.from('uploads').upload(storagePath, pdf.buffer, {
+      contentType: pdf.type || 'application/pdf', upsert: false,
+    });
+    if (upErr) { console.error('[email-intake] signed-8821 upload failed:', upErr.message); unmatched.push(pdf.name); continue; }
+
+    const update: Record<string, any> = { signed_8821_url: storagePath };
+    if (['pending', 'submitted', '8821_sent'].includes(target.status)) update.status = '8821_signed';
+    await admin.from('request_entities').update(update).eq('id', target.id);
+
+    attached.push({ entityName: target.entity_name, loan: target.requests?.loan_number || null });
+    // Don't let a second PDF land on the same entity.
+    candidates = candidates.filter((c) => c.id !== target.id);
+  }
+
+  // Hold any PDF we couldn't match for manual triage.
+  for (const name of unmatched) {
+    const pdf = parts.pdfFiles.find((p) => p.name === name);
+    if (!pdf) continue;
+    await admin.storage.from('uploads')
+      .upload(`${sender.client_id}/unmatched-8821/${Date.now()}-${safeName(name)}`, pdf.buffer, {
+        contentType: pdf.type || 'application/pdf', upsert: false,
+      }).catch(() => {});
+  }
+
+  await logAuditFromRequest(admin, request, {
+    action: 'transcript_request_received',
+    userId: sender.id,
+    userEmail: sender.email,
+    resourceType: 'request',
+    resourceId: attached.length ? 'signed_8821_attached' : 'signed_8821_unmatched',
+    details: {
+      via: 'email_signed_8821',
+      attached: attached.length,
+      unmatched: unmatched.length,
+      loan_number: loanNumber,
+      from_email: parts.fromEmail,
+      subject: parts.subject,
+    },
+  });
+
+  await sendSigned8821Result(parts, sender, attached, unmatched, loanNumber);
+
+  console.log(`[email-intake] signed-8821 from ${sender.email}: attached=${attached.length} unmatched=${unmatched.length} loan=${loanNumber || 'n/a'}`);
+  return NextResponse.json({ success: attached.length > 0, attached: attached.length, unmatched: unmatched.length });
+}
+
+/** Extract a UUID from a reply address like intake+<uuid>@in.moderntax.io. */
+function extractEntityIdFromTo(to: string): string | null {
+  const m = (to || '').match(/\+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})@/);
+  return m ? m[1] : null;
+}
+
+/** Vision-read the TIN off a signed 8821. Returns null if AI isn't configured. */
+async function tinFromPdf(buffer: Buffer): Promise<string | null> {
+  try {
+    const { extract8821WithVision } = await import('@/lib/extract-8821-vision');
+    const ex = await extract8821WithVision(buffer);
+    return ex.tin || null;
+  } catch (e: any) {
+    console.warn('[email-intake] vision TIN extract failed:', e?.message);
+    return null;
+  }
+}
+
+async function sendSigned8821Result(
+  parts: IncomingEmailParts,
+  sender: any,
+  attached: { entityName: string; loan: string | null }[],
+  unmatched: string[],
+  loanNumber: string | null,
+) {
+  const sgMod = await import('@sendgrid/mail');
+  const sgMail = sgMod.default;
+  if (!process.env.SENDGRID_API_KEY) return;
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  const firstName = (sender.full_name || '').split(' ')[0] || 'there';
+
+  if (attached.length > 0) {
+    const list = attached.map((a) => `  • ${a.entityName}${a.loan ? ` (Loan #${a.loan})` : ''} — filed, now queued for an expert`).join('\n');
+    const tail = unmatched.length
+      ? `\n\nWe couldn't match ${unmatched.length} other attachment${unmatched.length === 1 ? '' : 's'} to an order — reply with the loan number and we'll file ${unmatched.length === 1 ? 'it' : 'them'}.`
+      : '';
+    await sgMail.send({
+      to: parts.fromEmail,
+      from: { email: 'no-reply@moderntax.io', name: 'ModernTax Intake' },
+      replyTo: 'support@moderntax.io',
+      subject: `Re: ${parts.subject} — signed 8821 filed & queued`,
+      text: `Hi ${firstName},\n\nGot your signed 8821 — it's attached to your order and queued for an expert to pull transcripts (typically within 24 business hours):\n\n${list}${tail}\n\nNo further action needed.\n\nThanks,\nModernTax`,
+    }).catch((e: any) => console.warn('[email-intake] signed-8821 confirmation failed:', e?.message));
+  } else {
+    await sgMail.send({
+      to: parts.fromEmail,
+      from: { email: 'no-reply@moderntax.io', name: 'ModernTax Intake' },
+      replyTo: 'support@moderntax.io',
+      subject: `Re: ${parts.subject} — signed 8821 received (which order?)`,
+      text: `Hi ${firstName},\n\nWe received your signed 8821 but couldn't tell which order it belongs to${loanNumber ? ` (no open order matched loan #${loanNumber})` : ''}. Reply with the loan number in the subject and we'll file it right away — or upload it on the order in your portal.\n\nThanks,\nModernTax`,
+    }).catch((e: any) => console.warn('[email-intake] signed-8821 unmatched notice failed:', e?.message));
+  }
+
+  // Always flag to Matt when something couldn't be matched.
+  if (unmatched.length > 0) {
+    await sgMail.send({
+      to: 'matt@moderntax.io',
+      from: { email: 'no-reply@moderntax.io', name: 'ModernTax Portal' },
+      subject: `[Signed-8821 intake] ${unmatched.length} unmatched from ${sender.clients?.name || sender.email}`,
+      text: `A signed-8821 email couldn't be fully matched.\n\nFrom:     ${parts.fromEmail} (${sender.full_name}, ${sender.clients?.name})\nSubject:  ${parts.subject}\nLoan #:   ${loanNumber || '(none in subject)'}\nAttached: ${attached.length}\nUnmatched:${unmatched.length} → held under ${sender.client_id}/unmatched-8821/\n\nAttach them by hand on the order, or ask the sender for the loan number.`,
+    }).catch((e: any) => console.warn('[email-intake] matt unmatched notify failed:', e?.message));
+  }
 }
