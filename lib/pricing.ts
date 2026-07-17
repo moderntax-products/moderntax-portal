@@ -95,8 +95,10 @@ export const PRICE_DEPOSIT_ONBOARDING = 2500;
 // Add-ons
 // ---------------------------------------------------------------------------
 
-/** Entity Transcript (filing reqs + NAICS lookup) for EIN entities. */
-export const PRICE_ENTITY_TRANSCRIPT = 19.99;
+/** Entity Transcript (filing reqs + NAICS lookup) for EIN entities.
+ *  Free as of 2026-07-17 — a no-charge verification on every order (removes the
+ *  volume-processor billing friction; BFC / Cal Statewide ask). */
+export const PRICE_ENTITY_TRANSCRIPT = 0;
 
 /** SBA Cash-Flow Pack PDF (auto-generated after transcripts complete). */
 export const PRICE_CASH_FLOW_PACK = 49.99;

@@ -10,8 +10,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
+import { Download8821Button } from '@/components/Download8821Button';
 
-const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 const FILING_COMPLIANCE_PRICE = 29.99;
 
 export function ManualEntryFlow() {
@@ -356,6 +357,26 @@ export function ManualEntryFlow() {
                 </div>
               </div>
 
+              <div className="border border-mt-green/30 rounded-lg p-4 bg-mt-green/5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-[220px]">
+                    <p className="font-semibold text-mt-dark text-sm">Collecting the signature yourself?</p>
+                    <p className="text-xs text-gray-500 mt-1">Download a pre-filled Form 8821 — taxpayer info and ModernTax&apos;s designee are already filled in, ready to sign. We&apos;ll also email you a copy.</p>
+                  </div>
+                  <Download8821Button
+                    entityName={entity.entityName}
+                    tid={entity.tid}
+                    formType={entity.formType}
+                    years={entity.years}
+                    address={entity.address}
+                    city={entity.city}
+                    state={entity.state}
+                    zipCode={entity.zipCode}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
               {entity.tidKind === 'EIN' && (
                 <div className={`border rounded-lg p-4 transition-colors ${entity.entityTranscript ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
                   <label className="flex items-start gap-3 cursor-pointer">
@@ -365,9 +386,9 @@ export function ManualEntryFlow() {
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-mt-dark text-sm">Add Entity Transcript</span>
-                        <span className="text-blue-600 font-bold text-sm">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                        <span className="text-green-600 font-bold text-sm">Free</span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type (e.g., ordering 1065 when entity files 1120).</p>
+                      <p className="text-xs text-gray-500 mt-1">Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type (e.g., ordering 1065 when entity files 1120). Included free on every order.</p>
                     </div>
                   </label>
                 </div>
@@ -398,7 +419,7 @@ export function ManualEntryFlow() {
             {entities.filter(e => e.entityTranscript).map((e, i) => (
               <div key={`et-${e.id}`} className="flex justify-between text-gray-600">
                 <span>Entity Transcript — {e.entityName || `Entity ${i + 1}`}</span>
-                <span className="font-medium">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                <span className="font-medium text-green-600">Free</span>
               </div>
             ))}
             <div className="border-t pt-2 mt-2 flex justify-between font-bold text-mt-dark">

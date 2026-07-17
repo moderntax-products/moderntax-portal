@@ -2741,6 +2741,69 @@ Questions? Reply to this email or contact <a href="mailto:support@moderntax.io" 
 }
 
 /**
+ * Email the ORDERING PROCESSOR a fully-populated (unsigned) Form 8821 so they
+ * can collect their own taxpayer's signature and upload the signed copy back.
+ *
+ * This is the self-serve path for volume processors (CDCs / SBA closers) who
+ * handle 8821 signatures inside their own loan-doc packet and do NOT want a
+ * third party contacting their client — the BFC / Cal Statewide ask
+ * (2026-07-17). Distinct from send8821ManualSignatureEmail, which targets the
+ * BORROWER with "please sign and return to us" copy.
+ */
+export async function send8821ToProcessor(opts: {
+  processorEmail: string;
+  processorName?: string | null;
+  taxpayerName: string;
+  formType?: string;
+  pdfBytes: Uint8Array | Buffer;
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    throw new Error('SENDGRID_API_KEY not set — cannot send processor 8821 email');
+  }
+  const fileSafe = opts.taxpayerName.replace(/[^a-zA-Z0-9]+/g, '_');
+  const pdfFilename = `Form-8821-${fileSafe}.pdf`;
+  const pdfBase64 = Buffer.from(opts.pdfBytes).toString('base64');
+
+  const content = `
+<p>Hi${opts.processorName ? ' ' + escapeHtml(opts.processorName) : ''},</p>
+
+<p><strong>Attached</strong> is the pre-filled Form 8821 for
+<strong>${escapeHtml(opts.taxpayerName)}</strong>, ready for your taxpayer&apos;s
+signature. Everything is already filled in — the taxpayer&apos;s information,
+ModernTax as the authorized designee, and the tax forms and years you selected.
+You just need the signature.</p>
+
+<div style="background-color:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:20px;margin:24px 0;">
+  <p style="font-weight:700;font-size:16px;margin:0 0 12px 0;color:#0369a1;">Next steps</p>
+  <ol style="margin:0;padding-left:20px;">
+    <li style="margin-bottom:6px;">Have your taxpayer sign the attached form on the Section 7 signature line.</li>
+    <li style="margin-bottom:6px;">Upload the signed copy back onto the order in your ModernTax portal.</li>
+    <li>We submit it to the IRS and pull the transcripts — typical turnaround once signed is 24&ndash;48 hours.</li>
+  </ol>
+</div>
+
+<p style="font-size:13px;color:#666;margin-top:24px;">Reference: <code>${escapeHtml(pdfFilename)}</code>${opts.formType ? ' &middot; Form ' + escapeHtml(opts.formType) : ''}<br>
+Questions? Reply to this email or contact <a href="mailto:support@moderntax.io" style="color:#00C48C;">support@moderntax.io</a>.</p>
+`.trim();
+
+  const html = createEmailTemplate('Your pre-filled Form 8821', content);
+
+  await sgMail.send({
+    to: opts.processorEmail,
+    from: { email: fromEmail, name: 'ModernTax' },
+    subject: `Your pre-filled Form 8821 — ${opts.taxpayerName}`,
+    html,
+    replyTo: 'support@moderntax.io',
+    attachments: [{
+      content: pdfBase64,
+      filename: pdfFilename,
+      type: 'application/pdf',
+      disposition: 'attachment',
+    }],
+  });
+}
+
+/**
  * Notify client managers when a monitoring re-pull surfaces a MATERIAL
  * variance in income figures vs. the loan-approval baseline.
  *

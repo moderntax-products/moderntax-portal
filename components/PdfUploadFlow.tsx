@@ -8,8 +8,9 @@
 
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { Download8821Button } from '@/components/Download8821Button';
 
-const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 
 export function PdfUploadFlow() {
   const router = useRouter();
@@ -228,6 +229,28 @@ export function PdfUploadFlow() {
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Don't have the signed form yet? Generate a pre-filled one to sign —
+            same download+email available in every ordering workflow. */}
+        <div className="border border-mt-green/30 rounded-lg p-4 mb-6 bg-mt-green/5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex-1 min-w-[220px]">
+              <p className="font-semibold text-mt-dark text-sm">Don&apos;t have the signed 8821 yet?</p>
+              <p className="text-xs text-gray-500 mt-1">Download a pre-filled Form 8821 from the info above — ready to sign. We&apos;ll also email you a copy. Then upload the signed PDF below.</p>
+            </div>
+            <Download8821Button
+              entityName={entityName}
+              tid={tid}
+              formType={formType}
+              years={years}
+              address={address}
+              city={city}
+              state={stateRegion}
+              zipCode={zipCode}
+              disabled={isLoading}
+            />
           </div>
         </div>
 
