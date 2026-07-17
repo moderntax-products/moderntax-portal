@@ -9,7 +9,7 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
-const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 
 export function PdfUploadFlow() {
   const router = useRouter();

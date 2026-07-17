@@ -6,7 +6,8 @@
 import type { Client } from './types';
 
 // Billing rates
-export const RATE_ENTITY_TRANSCRIPT = 19.99;
+// Entity transcript is free as of 2026-07-17 (no-charge verification on every order).
+export const RATE_ENTITY_TRANSCRIPT = 0;
 
 /**
  * Client configuration database

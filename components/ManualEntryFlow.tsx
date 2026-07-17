@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 
-const ENTITY_TRANSCRIPT_PRICE = 19.99;
+const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 const FILING_COMPLIANCE_PRICE = 29.99;
 
 export function ManualEntryFlow() {
@@ -26,6 +26,9 @@ export function ManualEntryFlow() {
   const [isLoading, setIsLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-entity 8821 download+email state, keyed by entity id.
+  const [gen8821, setGen8821] = useState<Record<string, 'idle' | 'loading' | 'done' | 'error'>>({});
+  const [gen8821Msg, setGen8821Msg] = useState<Record<string, string>>({});
 
   const currentYear = new Date().getFullYear();
   const TAX_YEARS = Array.from({ length: 6 }, (_, i) => String(currentYear - i));
@@ -51,6 +54,62 @@ export function ManualEntryFlow() {
       const newYears = e.years.includes(year) ? e.years.filter((y) => y !== year) : [...e.years, year];
       return { ...e, years: newYears };
     }));
+  };
+
+  const handleDownload8821 = async (entity: (typeof entities)[0]) => {
+    // The taxpayer section needs at least a name + TIN to be a usable form.
+    if (!entity.entityName.trim() || !entity.tid.trim()) {
+      setGen8821((s) => ({ ...s, [entity.id]: 'error' }));
+      setGen8821Msg((s) => ({ ...s, [entity.id]: 'Enter the taxpayer name and TIN first.' }));
+      return;
+    }
+    setGen8821((s) => ({ ...s, [entity.id]: 'loading' }));
+    setGen8821Msg((s) => ({ ...s, [entity.id]: '' }));
+    try {
+      const res = await fetch('/api/entity/8821-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entityName: entity.entityName,
+          tid: entity.tid,
+          formType: entity.formType,
+          years: entity.years,
+          address: entity.address,
+          city: entity.city,
+          state: entity.state,
+          zipCode: entity.zipCode,
+          email: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not generate the 8821');
+
+      const filename = data.filename || '8821.pdf';
+      if (data.url) {
+        const a = document.createElement('a');
+        a.href = data.url;
+        a.download = filename;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else if (data.pdfBase64) {
+        const bytes = Uint8Array.from(atob(data.pdfBase64), (c) => c.charCodeAt(0));
+        const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      }
+      setGen8821((s) => ({ ...s, [entity.id]: 'done' }));
+      setGen8821Msg((s) => ({ ...s, [entity.id]: data.emailed ? `Downloaded — also emailed to ${data.emailedTo}` : 'Downloaded' }));
+    } catch (err) {
+      setGen8821((s) => ({ ...s, [entity.id]: 'error' }));
+      setGen8821Msg((s) => ({ ...s, [entity.id]: err instanceof Error ? err.message : 'Failed to generate 8821' }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -356,6 +415,23 @@ export function ManualEntryFlow() {
                 </div>
               </div>
 
+              <div className="border border-mt-green/30 rounded-lg p-4 bg-mt-green/5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-[220px]">
+                    <p className="font-semibold text-mt-dark text-sm">Collecting the signature yourself?</p>
+                    <p className="text-xs text-gray-500 mt-1">Download a pre-filled Form 8821 — taxpayer info and ModernTax&apos;s designee are already filled in, ready to sign. We&apos;ll also email you a copy.</p>
+                    {gen8821Msg[entity.id] && (
+                      <p className={`text-xs mt-2 font-medium ${gen8821[entity.id] === 'error' ? 'text-red-500' : 'text-green-600'}`}>{gen8821Msg[entity.id]}</p>
+                    )}
+                  </div>
+                  <button type="button" onClick={() => handleDownload8821(entity)}
+                    disabled={isLoading || gen8821[entity.id] === 'loading'}
+                    className="shrink-0 px-4 py-2 bg-mt-green text-white text-sm font-semibold rounded-lg hover:bg-mt-green/90 transition-colors disabled:opacity-50">
+                    {gen8821[entity.id] === 'loading' ? 'Generating…' : gen8821[entity.id] === 'done' ? 'Download again' : 'Download 8821'}
+                  </button>
+                </div>
+              </div>
+
               {entity.tidKind === 'EIN' && (
                 <div className={`border rounded-lg p-4 transition-colors ${entity.entityTranscript ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
                   <label className="flex items-start gap-3 cursor-pointer">
@@ -365,9 +441,9 @@ export function ManualEntryFlow() {
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-mt-dark text-sm">Add Entity Transcript</span>
-                        <span className="text-blue-600 font-bold text-sm">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                        <span className="text-green-600 font-bold text-sm">Free</span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type (e.g., ordering 1065 when entity files 1120).</p>
+                      <p className="text-xs text-gray-500 mt-1">Confirms IRS filing requirements before pulling income transcripts. Prevents blank results from requesting the wrong form type (e.g., ordering 1065 when entity files 1120). Included free on every order.</p>
                     </div>
                   </label>
                 </div>
@@ -398,7 +474,7 @@ export function ManualEntryFlow() {
             {entities.filter(e => e.entityTranscript).map((e, i) => (
               <div key={`et-${e.id}`} className="flex justify-between text-gray-600">
                 <span>Entity Transcript — {e.entityName || `Entity ${i + 1}`}</span>
-                <span className="font-medium">${ENTITY_TRANSCRIPT_PRICE.toFixed(2)}</span>
+                <span className="font-medium text-green-600">Free</span>
               </div>
             ))}
             <div className="border-t pt-2 mt-2 flex justify-between font-bold text-mt-dark">

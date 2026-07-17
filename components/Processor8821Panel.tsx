@@ -65,6 +65,7 @@ function parseYearsInput(raw: string): { years: string[]; errors: string[] } {
 export function Processor8821Panel({ entity, requestId: _requestId }: Processor8821PanelProps) {
   const [uploading, setUploading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [emailingMe, setEmailingMe] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -204,6 +205,36 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
     }
   };
 
+  // Email the processor a copy of the pre-filled 8821 (same form the download
+  // button produces). Uses the form-type/years currently shown in the panel.
+  const handleEmailToMe = async () => {
+    if (tidFormMismatch) {
+      setMessage({ type: 'error', text: tidFormMismatch });
+      return;
+    }
+    setEmailingMe(true);
+    setMessage(null);
+    try {
+      const { years: parsedYears } = parseYearsInput(yearsInput);
+      const res = await fetch('/api/entity/8821-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityId: entity.id, formType, years: parsedYears, email: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.detail || 'Could not email the 8821');
+      setMessage(
+        data.emailed
+          ? { type: 'success', text: `Emailed a copy to ${data.emailedTo}` }
+          : { type: 'error', text: 'Generated the form, but the email could not be sent.' },
+      );
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Email failed' });
+    } finally {
+      setEmailingMe(false);
+    }
+  };
+
   const handleUpload = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) {
@@ -336,6 +367,17 @@ export function Processor8821Panel({ entity, requestId: _requestId }: Processor8
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             {downloading ? 'Generating…' : `Download Pre-filled 8821 — ${templateLabel}`}
+          </button>
+          <button
+            type="button"
+            onClick={handleEmailToMe}
+            disabled={emailingMe}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            {emailingMe ? 'Emailing…' : 'Email me a copy'}
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-1.5">
