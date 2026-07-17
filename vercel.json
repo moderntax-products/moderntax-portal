@@ -38,6 +38,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/expire-accepted-batches",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/nudge",
       "schedule": "0 16 * * *"
     },
