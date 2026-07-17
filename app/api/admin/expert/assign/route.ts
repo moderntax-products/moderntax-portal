@@ -4,6 +4,7 @@ import { createServerRouteClient, createAdminClient } from '@/lib/supabase-serve
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 import { validateExpertDesigneeCreds } from '@/lib/8821-pdf';
+import { regenerateEntities8821 } from '@/lib/assignment-batch';
 
 export async function POST(request: Request) {
   try {
@@ -68,10 +69,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Verify all entities exist and have signed 8821s
+    // Verify all entities exist and have signed 8821s. Select the full set of
+    // designee-regeneration fields too, so we can re-issue the 8821 under this
+    // expert's CAF right here (below) instead of leaving a stale designee for
+    // an admin to fix with the manual Regenerate button.
     const { data: entities } = await adminSupabase
       .from('request_entities')
-      .select('id, entity_name, signed_8821_url, request_id, form_type')
+      .select('id, entity_name, signed_8821_url, request_id, form_type, tid, address, city, state, zip_code, years, signer_first_name, signer_last_name, gross_receipts')
       .in('id', entityIds);
 
     if (!entities || entities.length !== entityIds.length) {
@@ -132,6 +136,21 @@ export async function POST(request: Request) {
       .update({ status: 'irs_queue' })
       .in('id', entityIds);
 
+    // Regenerate each 8821 under THIS expert's designee credentials — the same
+    // step acceptBatch runs automatically. Without this, a direct (re)assignment
+    // left the previous/generic designee on the form and relied on an admin
+    // remembering to click "Regenerate 8821 w/ expert creds" (a wrong CAF on the
+    // form = a failed IRS PPS call). Best-effort: assignment already succeeded,
+    // so per-entity regen failures are reported, not fatal.
+    const { regenerated, errors: regenErrors } = await regenerateEntities8821(
+      adminSupabase,
+      expertProfile,
+      entities,
+    );
+    if (regenErrors.length > 0) {
+      console.error(`[expert/assign] 8821 regen failed for ${regenErrors.length}/${entities.length} entities:`, regenErrors);
+    }
+
     // Audit log
     await logAuditFromRequest(adminSupabase, request, {
       action: 'expert_assigned',
@@ -164,6 +183,8 @@ export async function POST(request: Request) {
       success: true,
       assignments: newAssignments,
       assigned_count: entityIds.length,
+      regenerated_8821_count: regenerated.length,
+      regen_errors: regenErrors.length > 0 ? regenErrors : undefined,
     });
   } catch (error) {
     console.error('Expert assign error:', error);
