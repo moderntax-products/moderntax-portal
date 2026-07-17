@@ -13,6 +13,7 @@
  */
 
 import { useState, useRef } from 'react';
+import { Download8821Button } from '@/components/Download8821Button';
 
 interface ExtractedTaxpayer {
   taxpayer_name: string | null;
@@ -339,6 +340,19 @@ export function ConvertVendor8821Flow() {
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-sm text-emerald-800">
                 <div className="font-semibold mb-1">✓ New 8821 downloaded</div>
                 <div className="text-xs">Forward it to <strong>{extracted?.signer_name || 'the taxpayer'}</strong>{extracted?.signer_email ? <> at <span className="font-mono">{extracted.signer_email}</span></> : null} for signature. Once signed, return here via <a href="/new/pdf" className="underline">Signed 8821 PDF upload</a> to create the transcript request.</div>
+                <div className="mt-3">
+                  <Download8821Button
+                    label="Email me a copy"
+                    entityName={form.taxpayer_name}
+                    tid={form.tin}
+                    formType={form.form_type}
+                    years={form.years}
+                    address={form.street_address}
+                    city={form.city}
+                    state={form.state}
+                    zipCode={form.zip_code}
+                  />
+                </div>
               </div>
             )}
           </div>

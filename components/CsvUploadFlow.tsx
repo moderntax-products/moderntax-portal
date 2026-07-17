@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
 import { PRICE_ERC_BASE, PRICE_ERC_FULL_SWEEP_PREMIUM, PRICE_ERC_FULL_SWEEP_TOTAL, PRICE_CHECK_REISSUE, PRICE_POST_CLOSE_MONITORING_MONTHLY, fmtUsd, fmtUsdShort } from '@/lib/pricing';
 import { LoanBillingForecast } from '@/components/LoanBillingForecast';
+import { Download8821Button } from '@/components/Download8821Button';
 
 const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 const CASH_FLOW_PACK_PRICE = 49.99;
@@ -953,9 +954,10 @@ export function CsvUploadFlow() {
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Address</th>
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Form</th>
                   <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500 uppercase">Years</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-mt-green uppercase whitespace-nowrap">8821</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-blue-600 uppercase whitespace-nowrap">
                     Entity Transcript
-                    <span className="block text-blue-400 font-normal normal-case">${ENTITY_TRANSCRIPT_PRICE}/ea</span>
+                    <span className="block text-green-500 font-normal normal-case">Free</span>
                   </th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-indigo-600 uppercase whitespace-nowrap">
                     Cash-Flow Pack
@@ -1037,6 +1039,19 @@ export function CsvUploadFlow() {
                       </select>
                     </td>
                     <td className="py-2.5 px-3 text-gray-600 text-xs">{entity.years || <span className="text-red-500 italic">missing</span>}</td>
+                    <td className="py-2.5 px-3 text-center">
+                      <Download8821Button compact label="8821"
+                        entityName={entity.legalName}
+                        tid={entity.tid}
+                        formType={entity.formType}
+                        years={entity.years}
+                        address={entity.address}
+                        city={entity.city}
+                        state={entity.state}
+                        zipCode={entity.zipCode}
+                        disabled={isLoading}
+                      />
+                    </td>
                     <td className="py-2.5 px-3 text-center">
                       {entity.tidKind === 'EIN' ? (
                         <input type="checkbox" checked={entity.entityTranscript} onChange={() => toggleEntityTranscript(entity.rowIndex)}
