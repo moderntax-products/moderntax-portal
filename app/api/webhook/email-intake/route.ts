@@ -568,8 +568,22 @@ function extractEntityIdFromTo(to: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Vision-read the TIN off a signed 8821. Returns null if AI isn't configured. */
+/**
+ * Read the TIN off a signed 8821 to disambiguate a multi-entity loan. Prefers
+ * Reducto (purpose-built doc extraction) when REDUCTO_API_KEY is set, else
+ * falls back to Anthropic vision. Returns null if neither is configured or
+ * both fail — the caller then holds the PDF for manual triage (never guesses).
+ */
 async function tinFromPdf(buffer: Buffer): Promise<string | null> {
+  try {
+    const { reductoConfigured, extract8821WithReducto } = await import('@/lib/extract-8821-reducto');
+    if (reductoConfigured()) {
+      const r = await extract8821WithReducto(buffer);
+      if (r.tin) return r.tin;
+    }
+  } catch (e: any) {
+    console.warn('[email-intake] reducto TIN extract failed:', e?.message);
+  }
   try {
     const { extract8821WithVision } = await import('@/lib/extract-8821-vision');
     const ex = await extract8821WithVision(buffer);
