@@ -58,8 +58,13 @@ export default function LoginPage() {
       if (!res.ok) {
         setError(result.error || 'Sign in failed.');
       } else {
-        // Cookies are now set by the server — navigate to dashboard
-        window.location.href = '/';
+        // Cookies are set by the server — send them where they were headed
+        // (a CTA deep-link preserved via ?redirect=), else the dashboard.
+        // Only same-origin relative paths are honored (open-redirect guard:
+        // must start with a single "/", never "//evil.com").
+        const raw = new URLSearchParams(window.location.search).get('redirect');
+        const dest = raw && /^\/(?!\/)/.test(raw) && !raw.startsWith('/login') ? raw : '/';
+        window.location.href = dest;
         return;
       }
     } catch (err) {

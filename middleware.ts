@@ -161,8 +161,16 @@ export async function middleware(request: NextRequest) {
   ];
   const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
   if (!user && !isPublic) {
+    // Preserve where they were headed so login can drop them straight back into
+    // that workflow — a CTA deep-link (e.g. /new/manual) → login → that page,
+    // instead of always dumping them on the dashboard.
+    const dest = request.nextUrl.pathname + request.nextUrl.search;
     const url = request.nextUrl.clone();
     url.pathname = '/login';
+    url.search = '';
+    if (dest && dest !== '/' && !dest.startsWith('/login')) {
+      url.searchParams.set('redirect', dest);
+    }
     const redirectResponse = NextResponse.redirect(url);
     return applySecurityHeaders(redirectResponse);
   }
