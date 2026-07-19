@@ -95,6 +95,7 @@ export async function POST(request: NextRequest) {
       contentUrl: signed.signedUrl,
       callbackUrl,
       headerText: `ModernTax 8821 - ${entity.entity_name}`.slice(0, 60),
+      fromSeed: user.id, // pin this expert to a stable sender number in the pool
     });
 
     // Log on the entity (gross_receipts.faxes[]) — callback updates status later.
