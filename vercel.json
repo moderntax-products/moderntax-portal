@@ -38,6 +38,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/storage-cleanup",
+      "schedule": "0 9 * * 0"
+    },
+    {
       "path": "/api/cron/nudge",
       "schedule": "0 16 * * *"
     },
