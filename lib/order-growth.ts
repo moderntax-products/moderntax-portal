@@ -281,10 +281,17 @@ I just wanted to make it easy if you've got files waiting.</p>
 /** NEXT-ORDER — fires right after an order completes. The compounding lever. */
 export async function sendNextOrderNudge(t: CompletionTarget): Promise<boolean> {
   const name = firstName(t.full_name);
-  const loan = t.loan_number ? ` for loan #${esc(t.loan_number)}` : '';
   const n = t.entity_count;
-  const subject = t.loan_number
-    ? `Transcripts are in for loan #${t.loan_number} — what's next?`
+  // loan_number is free-text and in practice often holds a COMPANY NAME rather
+  // than a number (e.g. "Kelley Erosion Control, Inc"), which made the subject
+  // read "for loan #Kelley Erosion Control, Inc". Only use the "loan #" prefix
+  // when it actually looks like an identifier; otherwise name it plainly.
+  const raw = (t.loan_number || '').trim();
+  const looksLikeLoanNo = raw.length > 0 && raw.length <= 20 && /\d/.test(raw) && !/\s/.test(raw);
+  const label = raw ? (looksLikeLoanNo ? `loan #${raw}` : raw) : '';
+  const loan = label ? ` for ${esc(label)}` : '';
+  const subject = label
+    ? `Transcripts are in for ${label} — what's next?`
     : `Your transcripts are in — what's next?`;
   const body = `
 <p>Hi ${esc(name)},</p>

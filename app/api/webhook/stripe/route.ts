@@ -441,6 +441,25 @@ export async function POST(request: NextRequest) {
           .eq('id', clientId);
 
         console.log(`[stripe-webhook] checkout.session.completed — client ${clientId} now has ${pm.type} ${brand} ····${last4}`);
+
+        // ─── Self-serve activation (2026-07-21) ────────────────────────────
+        // This is the link that was missing: activateTrial() existed but
+        // NOTHING called it, so a captured card never started the trial and
+        // never granted the free pull. When the card capture came from the
+        // self-serve flow, start the trial now — it stamps
+        // trial_card_captured_at/started/expires and sets
+        // trial_entities_allowed >= 1, which the order gate reads to let them
+        // place their first transcript at no cost. Idempotent, and best-effort
+        // so a trial hiccup can never fail the card save above.
+        if (session.metadata?.flow === 'trial_activation') {
+          try {
+            const { activateTrial } = await import('@/lib/trial-activate');
+            const r = await activateTrial(admin, clientId, session.metadata?.moderntax_user_id || null);
+            console.log(`[stripe-webhook] trial activation for client ${clientId}: ${r.already_active ? 'already active' : 'ACTIVATED — 1 free pull granted'}`);
+          } catch (e: any) {
+            console.error('[stripe-webhook] activateTrial failed (card still saved):', e?.message || e);
+          }
+        }
         break;
       }
 

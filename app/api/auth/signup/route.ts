@@ -217,29 +217,52 @@ export async function POST(request: NextRequest) {
       }, { status: 409 });
     }
 
-    // Look up the client domain for context, but DO NOT auto-create.
-    // Per matt 2026-04-28 directive: admin must add/verify the business
-    // before authorizing access. We capture domain + company_name on the
-    // profile and let the admin assign client_id (existing or new) at
-    // approval time.
+    // ─── SELF-SERVE ACTIVATION (Matt directive 2026-07-21) ───────────────────
+    // New signups no longer wait on admin approval. The checks ABOVE remain the
+    // anti-abuse backstop (work email must match the company website's domain,
+    // personal domains blocked, 5 signups/hr/IP) — the CREDIT CARD is the
+    // activation gate.
+    //
+    // We provision the org here so the user can log in and add a card, but
+    // ORDERING stays blocked by checkOrderGate ('card_required') until Stripe
+    // confirms the card. At that point the webhook calls activateTrial(), which
+    // grants trial_entities_allowed = 1 → their first transcript is free.
+    //
+    // If a client already exists for this domain we ATTACH to it rather than
+    // fragmenting the org, so a second signup from the same company lands with
+    // their teammates instead of creating a duplicate tenant.
     const { data: existingClient } = await admin
       .from('clients')
       .select('id, name')
       .eq('domain', companyDomain)
       .single() as { data: { id: string; name: string } | null; error: any };
 
-    // Create auth user but leave them unable to access the portal
-    // (banned) until an admin approves. Banning at the auth layer is
-    // belt-and-suspenders alongside the approval_status='pending' gate
-    // — even if the gate is bypassed in app code, the auth provider
-    // refuses to issue a session.
+    let activeClientId: string | null = existingClient?.id || null;
+    if (!activeClientId) {
+      const baseSlug = (companyName || companyDomain)
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'client';
+      const { data: newClient, error: clientErr } = await (admin.from('clients') as any)
+        .insert({
+          name: (companyName || companyDomain).trim(),
+          slug: `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`,
+          domain: companyDomain,
+          free_trial: true,
+        })
+        .select('id').single();
+      if (clientErr || !newClient) {
+        console.error('[signup] Failed to create client org:', clientErr);
+        return NextResponse.json({ error: 'Failed to create account' }, { status: 500 });
+      }
+      activeClientId = newClient.id as string;
+    }
+
+    // Create the auth user ACTIVE — no ban. They can sign in immediately; the
+    // order gate (not the auth layer) is what holds them until a card is added.
     const { data: authData, error: authError } = await admin.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
-      user_metadata: { full_name: fullName.trim(), pending_approval: true },
-      // app_metadata.banned_until lets admin lift it later via /admin
-      app_metadata: { banned_until: 'none' },
+      user_metadata: { full_name: fullName.trim() },
     });
 
     if (authError || !authData?.user) {
@@ -250,53 +273,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create account' }, { status: 500 });
     }
 
-    // SOC 2 CC6.2 — ban the user at the auth layer until an admin approves.
-    // Without this, /api/auth/login + direct Supabase JS client calls would
-    // succeed with a valid JWT (email_confirm:true above issues a session).
-    // 100-year ban = effectively indefinite; lifted by /api/admin/approve-signup.
-    const { error: banError } = await admin.auth.admin.updateUserById(authData.user.id, {
-      ban_duration: '876000h', // ~100 years
-    });
-    if (banError) {
-      console.error('[signup] CRITICAL: Failed to ban pending user — they can log in:', banError);
-      // Hard fail rather than leave a usable account behind.
-      await admin.auth.admin.deleteUser(authData.user.id).catch(() => {});
-      return NextResponse.json({ error: 'Failed to create account' }, { status: 500 });
-    }
-
-    // Persist all qualification + intake data on the profile. NOTE:
-    // client_id is left NULL so the user can't use any existing client's
-    // data. Admin assigns client_id at approval time.
+    // Profile is provisioned APPROVED as a processor on the org above.
     const { error: profileError } = await admin
       .from('profiles')
       .update({
         full_name: fullName.trim(),
-        role: 'manager',
-        client_id: null, // admin assigns at approval
+        role: 'processor',
+        client_id: activeClientId,
         title: title.trim(),
-        // New qualification fields (added by migration-signup-qualification.sql).
-        // Wrapped in try/catch fallback below in case migration hasn't run yet.
-        approval_status: 'pending',
+        approval_status: 'approved',
+        approved_at: new Date().toISOString(),
         referral_source: referralSource.trim(),
         use_case: useCase,
         use_case_other: useCase === 'other' ? useCaseOther.trim() : null,
-        // Stash the requested company info in title for now so admin can
-        // see what they typed even before the columns land. Real columns
-        // get populated when the migration runs.
       } as any)
       .eq('id', authData.user.id);
 
     if (profileError) {
       console.error('[signup] Profile update error (likely missing migration):', profileError);
-      // Fall back to a partial update without the new columns so the
-      // request still completes. Admin sees the user as 'pending' once
-      // migration runs and grandfathers them appropriately.
+      // Fall back to a partial update without the newer columns so the
+      // request still completes with a usable, org-attached account.
       await admin.from('profiles').update({
         full_name: fullName.trim(),
-        role: 'manager',
-        client_id: null,
+        role: 'processor',
+        client_id: activeClientId,
         title: title.trim(),
       }).eq('id', authData.user.id);
+    }
+
+    // Funnel: self-serve signup landed; card capture is the next step.
+    try {
+      const { logFunnelEvent } = await import('@/lib/funnel-events');
+      await logFunnelEvent(admin, 'signup_submitted', activeClientId, authData.user.id, {
+        self_serve: true,
+        company_domain: companyDomain,
+        attached_to_existing_client: !!existingClient?.id,
+      });
+    } catch (e) {
+      console.warn('[signup] funnel event failed (non-fatal):', e);
     }
 
     // Parse name for HubSpot
