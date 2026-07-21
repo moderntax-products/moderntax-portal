@@ -14,6 +14,10 @@
       "schedule": "0 16 * * 2-4"
     },
     {
+      "path": "/api/cron/order-growth",
+      "schedule": "0 17 * * 1-5"
+    },
+    {
       "path": "/api/cron/processor-delay-digest",
       "schedule": "0 13 * * *"
     },

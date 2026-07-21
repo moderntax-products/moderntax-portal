@@ -48,6 +48,8 @@ export type AuditAction =
   | 'irs_rejected_auto_fax_email'
   | 'expert_assignment_cancelled'
   | 'clearfirm_bot_processed'
+  | 'order_nudge_next'
+  | 'order_nudge_weekly'
   | 'irs_call_initiated'
   | 'irs_call_completed'
   | 'irs_call_failed'
