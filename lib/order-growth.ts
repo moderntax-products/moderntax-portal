@@ -163,15 +163,24 @@ export async function findRecentCompletions(
 }
 
 /**
- * Suppression: user ids that got a reengagement step recently. Reading the
- * reengagement_log is best-effort — if the table isn't there we simply don't
- * suppress (and the cooldown below still prevents spam).
+ * Suppression: user ids that ACTUALLY received a reengagement step recently.
+ *
+ * Must filter shadow=false. The reengagement cron logs a row for every step it
+ * *would* send while REENGAGEMENT_AUTOSEND is off — as of 2026-07-21 that table
+ * held 29 rows, all shadow, zero real sends. Counting those as "already
+ * contacted" would silently suppress genuine order-growth emails to processors
+ * who were never actually emailed, and it would compound every day the shadow
+ * cron runs. Shadow means nothing left the building, so it must not suppress.
+ *
+ * Reading the log is best-effort — if the table isn't there we simply don't
+ * suppress (and the per-user cooldown still prevents spam).
  */
 export async function recentlyReengaged(admin: SupabaseClient): Promise<Set<string>> {
   try {
     const { data } = await admin
       .from('reengagement_log')
-      .select('user_id, sent_at')
+      .select('user_id, sent_at, shadow')
+      .eq('shadow', false)
       .gte('sent_at', daysAgo(RECENT_REENGAGEMENT_DAYS)) as { data: any[] | null };
     return new Set((data || []).map((r) => r.user_id).filter(Boolean));
   } catch {
