@@ -963,8 +963,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Audit log: CSV upload completed
-    await logAuditFromRequest(supabase, request, {
+    // Audit log: CSV upload completed.
+    // Service-role client required — audit_log has no INSERT policy for
+    // `authenticated`, so the user-scoped client silently failed RLS here.
+    await logAuditFromRequest(admin, request, {
       action: 'file_uploaded',
       resourceType: 'batch',
       resourceId: batch.id,

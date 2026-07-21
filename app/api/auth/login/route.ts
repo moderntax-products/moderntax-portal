@@ -68,14 +68,18 @@ export async function POST(request: NextRequest) {
   });
 
   if (error) {
-    // SOC 2: Log failed login attempts
-    await logAuditFromRequest(supabase, request, {
+    // SOC 2: Log failed login attempts.
+    // Service-role client is required: audit_log has no INSERT policy for
+    // `authenticated`, and on a FAILED login there is no session at all — so
+    // the user-scoped client could never write this row. logAuditEvent
+    // swallows the RLS error, so these SOC 2 records were silently absent.
+    const adminClient = createAdminClient();
+    await logAuditFromRequest(adminClient, request, {
       action: 'login_failed',
       resourceType: 'auth',
       details: { email, reason: error.message },
     });
     // Analytics: track failed login
-    const adminClient = createAdminClient();
     await trackFromRequest(adminClient, request, {
       type: 'login_failed',
       userEmail: email,
@@ -84,15 +88,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 401 });
   }
 
-  // SOC 2: Log successful login
-  await logAuditFromRequest(supabase, request, {
+  // Analytics: track successful login
+  const adminClient = createAdminClient();
+
+  // SOC 2: Log successful login (service-role — see the failed-login note above).
+  await logAuditFromRequest(adminClient, request, {
     action: 'login',
     resourceType: 'auth',
     details: { email, method: 'password' },
   });
 
-  // Analytics: track successful login
-  const adminClient = createAdminClient();
   const { data: profile } = await supabase
     .from('profiles')
     .select('role, client_id')
