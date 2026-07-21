@@ -88,6 +88,17 @@ export async function POST(request: NextRequest) {
     // mode='setup' creates a SetupIntent under the hood that captures the card
     // for future off_session use. payment_method_types: ['card'] is the
     // explicit "card only — Mercury handles ACH" enforcement.
+    // Callers may route the customer back to their own page (e.g. the
+    // self-serve /trial-activate flow) instead of /payment-method. Previously
+    // this route ignored return_url/cancel_url/source entirely, so the trial
+    // round-trip bounced users to /payment-method and the "your free pull is
+    // ready" screen never rendered.
+    const isTrialActivation = body?.source === 'trial_activate' || body?.flow === 'trial_activation';
+    const safePath = (v: unknown, fallback: string) =>
+      typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') ? v : fallback;
+    const successPath = safePath(body?.return_url, isTrialActivation ? '/trial-activate' : '/payment-method');
+    const cancelPath = safePath(body?.cancel_url, successPath);
+
     const session = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: customerId,
@@ -95,11 +106,14 @@ export async function POST(request: NextRequest) {
       // success_url MUST contain {CHECKOUT_SESSION_ID} for the return flow
       // to know which session to confirm (we use it to display "Visa ending in
       // 4242" immediately, before the webhook lands).
-      success_url: `${baseUrl}/payment-method?status=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/payment-method?status=cancel`,
+      success_url: `${baseUrl}${successPath}?status=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}${cancelPath}?status=cancel`,
       metadata: {
         moderntax_client_id: effectiveClientId,
         moderntax_user_id: user.id,
+        // Discriminator the webhook needs to know this card capture should
+        // ALSO start the trial + grant the first free transcript.
+        ...(isTrialActivation ? { flow: 'trial_activation' } : {}),
       },
       // Show what they're saving the card for (renders on the Stripe page).
       custom_text: {

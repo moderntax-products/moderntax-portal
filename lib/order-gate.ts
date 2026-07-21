@@ -237,6 +237,16 @@ export async function checkOrderGate(
     if (hasPaymentMethod && creditBalance >= creditRate) {
       return { allowed: true, ...baseResult };
     }
+    // Self-serve activation (2026-07-21): a card on file + an unused trial
+    // allowance is enough for the FIRST transcript — that's the whole promise
+    // of "add a card, place your first order free". Without this, the standard
+    // branch returned 402 'credits_required' before the trial rules below ever
+    // ran, so every self-serve signup was blocked despite a valid card.
+    // trialRemaining is lifetime-capped (completed_count < trial_entities_allowed),
+    // so it self-exhausts after the free pull — no decrementer needed.
+    if (hasPaymentMethod && trialRemaining > 0) {
+      return { allowed: true, ...baseResult };
+    }
     return {
       allowed: false,
       reason: !hasPaymentMethod ? 'card_required' : 'credits_required',
