@@ -43,6 +43,9 @@ export function PdfUploadFlow() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
+  // >0 when the order came in without a signed form and the server generated
+  // a pre-filled 8821 for the processor to collect a signature with.
+  const [prefilledCount, setPrefilledCount] = useState(0);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || []);
@@ -54,7 +57,9 @@ export function PdfUploadFlow() {
     e.preventDefault();
     setError(null);
 
-    if (files.length === 0) { setError('Please select at least one PDF file'); return; }
+    // No file is a valid submission: the order is captured and the server
+    // generates a pre-filled 8821 to collect the signature with. See the
+    // "never block intake" note in app/api/upload/pdf/route.ts.
     if (!loanNumber.trim()) { setError('Loan number is required'); return; }
     if (!entityName.trim()) { setError('Entity name is required'); return; }
     if (!tid.trim()) { setError('Tax ID is required'); return; }
@@ -66,7 +71,9 @@ export function PdfUploadFlow() {
     if (!city.trim()) { setError('Taxpayer city is required'); return; }
     if (!stateRegion.trim()) { setError('Taxpayer state is required'); return; }
     if (!zipCode.trim()) { setError('Taxpayer ZIP is required'); return; }
-    if (!attestLegible) { setError('Please confirm the name, address, and SSN/EIN on the 8821 are typed and legible'); return; }
+    // Only meaningful when a signed form was actually attached — there is
+    // nothing to attest to the legibility of otherwise.
+    if (files.length > 0 && !attestLegible) { setError('Please confirm the name, address, and SSN/EIN on the 8821 are typed and legible'); return; }
 
     setIsLoading(true);
 
@@ -97,6 +104,7 @@ export function PdfUploadFlow() {
 
       setSuccess(true);
       setRequestId(data.request_id);
+      setPrefilledCount(data.prefilled_8821_generated || 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -112,10 +120,26 @@ export function PdfUploadFlow() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-2xl font-bold text-mt-dark mb-2">PDF Upload Complete</h2>
-        <p className="text-gray-600 mb-6">
-          Signed 8821 uploaded for <strong>{entityName}</strong> (Loan #{loanNumber})
-        </p>
+        <h2 className="text-2xl font-bold text-mt-dark mb-2">
+          {prefilledCount > 0 ? 'Order Received — 8821 On Its Way' : 'PDF Upload Complete'}
+        </h2>
+        {prefilledCount > 0 ? (
+          <div className="text-gray-600 mb-6">
+            <p>Order placed for <strong>{entityName}</strong> (Loan #{loanNumber})</p>
+            <p className="mt-3">
+              We&apos;ve emailed you a <strong>pre-filled Form 8821</strong> for this taxpayer.
+              Have them sign it, then upload the signed copy here or email it to{' '}
+              <strong>intake@in.moderntax.io</strong> with the loan number in the subject.
+            </p>
+            <p className="mt-3 text-sm text-gray-500">
+              We&apos;ll start pulling transcripts as soon as the signed form lands.
+            </p>
+          </div>
+        ) : (
+          <p className="text-gray-600 mb-6">
+            Signed 8821 uploaded for <strong>{entityName}</strong> (Loan #{loanNumber})
+          </p>
+        )}
         <div className="flex gap-4 justify-center">
           <button onClick={() => router.push(`/request/${requestId}`)}
             className="bg-mt-green text-white px-6 py-3 rounded-lg font-semibold hover:bg-opacity-90 transition-colors">
@@ -307,6 +331,8 @@ export function PdfUploadFlow() {
               </svg>
               <p className="text-gray-600 font-medium">Click to select signed 8821 PDF(s)</p>
               <p className="text-gray-400 text-sm mt-1">Supports .pdf &middot; Multiple files OK</p>
+              <p className="text-mt-dark text-sm mt-3 font-medium">Don&apos;t have a signed 8821 yet?</p>
+              <p className="text-gray-500 text-sm">Submit without one &mdash; we&apos;ll email you a pre-filled 8821 to collect the signature with.</p>
             </div>
           )}
         </div>
@@ -318,7 +344,10 @@ export function PdfUploadFlow() {
         </div>
 
         {/* Legibility attestation — the only handwritten part of the 8821 may be
-            the signature. Name / address / SSN-EIN must be typed & legible. */}
+            the signature. Name / address / SSN-EIN must be typed & legible.
+            Hidden when no form is attached: there's nothing to attest to yet,
+            and leaving it up blocked the order behind an unanswerable question. */}
+        {files.length > 0 && (
         <div className={`mt-6 border rounded-lg p-4 transition-colors ${attestLegible ? 'border-mt-green bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
           <label className="flex items-start gap-3 cursor-pointer">
             <input type="checkbox" checked={attestLegible} onChange={() => setAttestLegible(!attestLegible)} disabled={isLoading}
@@ -328,11 +357,17 @@ export function PdfUploadFlow() {
             </span>
           </label>
         </div>
+        )}
       </div>
 
-      <button type="submit" disabled={isLoading || files.length === 0 || !attestLegible}
+      {/* Never disabled on "no file" — a processor without a signed 8821 is a
+          real order we want, not an invalid form. Only the attestation (which
+          is itself only shown once a file is attached) can gate submit. */}
+      <button type="submit" disabled={isLoading || (files.length > 0 && !attestLegible)}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
-        {isLoading ? 'Uploading...' : 'Upload Signed 8821'}
+        {isLoading
+          ? (files.length > 0 ? 'Uploading...' : 'Submitting...')
+          : (files.length > 0 ? 'Upload Signed 8821' : 'Submit Order + Email Me the 8821')}
       </button>
     </form>
   );

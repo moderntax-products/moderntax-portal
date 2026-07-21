@@ -7,6 +7,7 @@ import { RATE_ENTITY_TRANSCRIPT } from '@/lib/clients';
 import { resolveFormType } from '@/lib/form-type-validation';
 import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 import { extractTaxpayerInfoFrom8821, normalizeTin } from '@/lib/extract-8821-pdf';
+import { autoGenerate8821sForRequest } from '@/lib/8821-autogen';
 
 export async function POST(request: NextRequest) {
   try {
@@ -91,9 +92,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (files.length === 0) {
-      return NextResponse.json({ error: 'No PDF files uploaded' }, { status: 400 });
-    }
+    // NOTE: a missing PDF is deliberately NOT an error. Processors routinely
+    // reach this screen needing an 8821 they don't have yet — most often the
+    // personal 1040 of a guarantor on a loan whose business 8821 is already
+    // signed. Rejecting the submission stranded the order entirely (the
+    // processor had to email an admin), so we now capture the order and
+    // generate a pre-filled 8821 for signature instead. Per Matt 2026-07-21:
+    // always take the order, surface the gap afterwards — never block intake.
+    const hasSignedPdf = files.length > 0;
 
     if (!loanNumber?.trim()) {
       return NextResponse.json({ error: 'Loan number is required' }, { status: 400 });
@@ -134,7 +140,7 @@ export async function POST(request: NextRequest) {
         client_id: profile.client_id,
         uploaded_by: user.id,
         intake_method: 'pdf',
-        entity_count: files.length,
+        entity_count: Math.max(files.length, 1),
         request_count: 1,
         status: 'completed',
       })
@@ -155,7 +161,9 @@ export async function POST(request: NextRequest) {
         batch_id: batch.id,
         loan_number: loanNumber.trim(),
         intake_method: 'pdf',
-        status: '8821_signed', // PDFs are already signed
+        // Only claim "signed" when a signed PDF actually arrived. Without one
+        // the order still lands, but as 'submitted' — it needs signature first.
+        status: hasSignedPdf ? '8821_signed' : 'submitted',
         notes: notes || null,
       })
       .select()
@@ -176,21 +184,35 @@ export async function POST(request: NextRequest) {
 
     let entityCount = 0;
 
-    for (const file of files) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const filePath = `${profile.client_id}/8821/${Date.now()}-${file.name}`;
+    // One pass per uploaded PDF, or a single fileless pass when the processor
+    // has no signed 8821 yet. `null` here means "order captured, 8821 pending".
+    const sources: (File | null)[] = hasSignedPdf ? files : [null];
 
-      // Upload to storage
-      const { error: uploadError } = await admin.storage
-        .from('uploads')
-        .upload(filePath, buffer, {
-          contentType: 'application/pdf',
-          upsert: false,
-        });
+    for (const file of sources) {
+      let filePath: string | null = null;
+      let buffer: Buffer | null = null;
 
-      if (uploadError) {
-        console.error('PDF upload error:', uploadError);
-        continue;
+      if (file) {
+        buffer = Buffer.from(await file.arrayBuffer());
+        const candidatePath = `${profile.client_id}/8821/${Date.now()}-${file.name}`;
+
+        // Upload to storage
+        const { error: uploadError } = await admin.storage
+          .from('uploads')
+          .upload(candidatePath, buffer, {
+            contentType: 'application/pdf',
+            upsert: false,
+          });
+
+        if (uploadError) {
+          // Previously this `continue`d, which silently discarded the entity
+          // and left an order the processor thought succeeded with nothing in
+          // it. Keep the entity — an order missing its PDF is recoverable by
+          // re-upload; an order that never existed is not.
+          console.error('PDF upload error (entity kept, 8821 pending):', uploadError);
+        } else {
+          filePath = candidatePath;
+        }
       }
 
       // The PDF intake form doesn't capture the taxpayer address or the signer
@@ -199,11 +221,13 @@ export async function POST(request: NextRequest) {
       // missing Line 1 / the signature block. Only trust the parse when the
       // extracted TIN matches this entity's TID.
       let extr: Awaited<ReturnType<typeof extractTaxpayerInfoFrom8821>> | null = null;
-      try {
-        const info = await extractTaxpayerInfoFrom8821(buffer);
-        if (info.tin && normalizeTin(info.tin) === normalizeTin(tid)) extr = info;
-      } catch (e) {
-        console.warn('[upload/pdf] taxpayer/signer extract failed (non-fatal):', e);
+      if (buffer) {
+        try {
+          const info = await extractTaxpayerInfoFrom8821(buffer);
+          if (info.tin && normalizeTin(info.tin) === normalizeTin(tid)) extr = info;
+        } catch (e) {
+          console.warn('[upload/pdf] taxpayer/signer extract failed (non-fatal):', e);
+        }
       }
 
       // Create entity
@@ -216,7 +240,7 @@ export async function POST(request: NextRequest) {
         years: parsedYears,
         fiscal_year_end_month: fiscalYearEndMonth,
         signed_8821_url: filePath,
-        status: '8821_signed',
+        status: filePath ? '8821_signed' : 'submitted',
         // Manually-entered taxpayer contact + address are authoritative; the
         // 8821 parse is only a fallback for the signer name fields.
         signer_email: signerEmail,
@@ -260,6 +284,33 @@ export async function POST(request: NextRequest) {
       } else {
         entityCount++;
       }
+    }
+
+    // When the order arrived without a signed 8821, generate a pre-filled one
+    // per entity and email it to the ordering processor so they can collect the
+    // signature themselves. autoGenerate8821sForRequest skips any entity that
+    // already has signed_8821_url, so this is a no-op on the normal path where
+    // every PDF uploaded cleanly. Non-fatal: the order is already saved, and a
+    // missing 8821 is recoverable from the request page.
+    let generated8821 = 0;
+    try {
+      const genAdmin = createAdminClient();
+      const res = await autoGenerate8821sForRequest(genAdmin, req.id, {
+        email: user.email!,
+        name: profile.full_name,
+      });
+      generated8821 = res.generated.length;
+      if (generated8821 > 0) {
+        console.log(`[pdf-upload] generated ${generated8821} pre-filled 8821(s), emailed=${res.emailed}`);
+        // The processor now has a form to chase a signature with.
+        await genAdmin.from('requests').update({ status: '8821_sent' }).eq('id', req.id);
+        await genAdmin.from('request_entities')
+          .update({ status: '8821_sent' })
+          .eq('request_id', req.id)
+          .is('signed_8821_url', null);
+      }
+    } catch (genErr) {
+      console.error('[pdf-upload] 8821 auto-generate failed (order kept):', genErr);
     }
 
     // Auto-post the intake instruction note on each created entity so
@@ -360,8 +411,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Audit log: PDF upload completed
-    await logAuditFromRequest(supabase, request, {
+    // Audit log: PDF upload completed.
+    // Must use the service-role client: audit_log has no INSERT policy for
+    // `authenticated`, so passing the user-scoped client made every write fail
+    // with "new row violates row-level security policy" — swallowed by
+    // logAuditEvent, so uploads looked fine while the trail silently went
+    // missing. Matches the admin-client convention used by the other callers.
+    await logAuditFromRequest(admin, request, {
       action: 'file_uploaded',
       resourceType: 'batch',
       resourceId: batch.id,
@@ -369,6 +425,7 @@ export async function POST(request: NextRequest) {
         intake_method: 'pdf',
         file_count: files.length,
         entity_count: entityCount,
+        prefilled_8821_count: generated8821,
         request_id: req.id,
         loan_number: loanNumber!.trim(),
       },
@@ -379,6 +436,9 @@ export async function POST(request: NextRequest) {
       batch_id: batch.id,
       request_id: req.id,
       entities_created: entityCount,
+      // Tells the UI which of the two outcomes to render.
+      signed_8821_received: hasSignedPdf,
+      prefilled_8821_generated: generated8821,
     });
   } catch (err) {
     console.error('PDF upload error:', err);
