@@ -220,16 +220,30 @@ export async function checkOrderGate(
   let createdAt: string | null = null;
   let creditBalance = 0;
   let creditRate = 99.99;
+  // Admin-granted: may consume the trial allowance with no card on file.
+  // Sales-led accounts only — see migration-trial-card-exempt.sql.
+  let trialCardExempt = false;
   {
     const cr = await adminSupabase.from('clients')
-      .select('created_at, credit_balance, credit_rate').eq('id', clientId).single();
+      .select('created_at, credit_balance, credit_rate, trial_card_exempt').eq('id', clientId).single();
     if (!cr.error && cr.data) {
       createdAt = (cr.data as any).created_at ?? null;
       creditBalance = Number((cr.data as any).credit_balance) || 0;
       creditRate = Number((cr.data as any).credit_rate) > 0 ? Number((cr.data as any).credit_rate) : 99.99;
+      trialCardExempt = !!(cr.data as any).trial_card_exempt;
     } else {
-      const cr2 = await adminSupabase.from('clients').select('created_at').eq('id', clientId).single();
-      createdAt = cr2.data ? (cr2.data as any).created_at : null;
+      // Pre-migration fallback: retry without the newer columns so envs that
+      // haven't run migration-trial-card-exempt.sql still resolve created_at.
+      const cr2 = await adminSupabase.from('clients')
+        .select('created_at, credit_balance, credit_rate').eq('id', clientId).single();
+      if (!cr2.error && cr2.data) {
+        createdAt = (cr2.data as any).created_at ?? null;
+        creditBalance = Number((cr2.data as any).credit_balance) || 0;
+        creditRate = Number((cr2.data as any).credit_rate) > 0 ? Number((cr2.data as any).credit_rate) : 99.99;
+      } else {
+        const cr3 = await adminSupabase.from('clients').select('created_at').eq('id', clientId).single();
+        createdAt = cr3.data ? (cr3.data as any).created_at : null;
+      }
     }
   }
   const STANDARD_PLAN_CUTOFF = '2026-06-06';
@@ -244,7 +258,17 @@ export async function checkOrderGate(
     // ran, so every self-serve signup was blocked despite a valid card.
     // trialRemaining is lifetime-capped (completed_count < trial_entities_allowed),
     // so it self-exhausts after the free pull — no decrementer needed.
-    if (hasPaymentMethod && trialRemaining > 0) {
+    // Sales-led accounts (2026-07-22): an admin-granted trial is consumable
+    // with NO card. We onboard these clients ourselves, so the card is not the
+    // trust signal here — our own decision to open the account is. Business
+    // Finance Capital was created post-cutoff and its manager was told she
+    // could order, but every attempt 402'd on card_required.
+    //
+    // Deliberately NOT folded into the line above: trial_card_exempt defaults
+    // to FALSE, so self-serve signups still need the card that replaced admin
+    // approval. The allowance stays the cap either way — trialRemaining is
+    // lifetime-capped against completed orders, so this self-exhausts.
+    if ((hasPaymentMethod || trialCardExempt) && trialRemaining > 0) {
       return { allowed: true, ...baseResult };
     }
     return {

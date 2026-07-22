@@ -96,8 +96,11 @@ export function PdfUploadFlow() {
     if (!tid.trim()) { setError('Tax ID is required'); return; }
     if (!signerFirstName.trim()) { setError('Signee first name is required'); return; }
     if (!signerLastName.trim()) { setError('Signee last name is required'); return; }
-    if (!signerEmail.trim()) { setError('Taxpayer email is required'); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail.trim())) { setError('Enter a valid taxpayer email'); return; }
+    // Optional — some lenders won't share a borrower's email with a vendor.
+    // Only validate the format when something was actually entered.
+    if (signerEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail.trim())) {
+      setError('Enter a valid taxpayer email, or leave it blank'); return;
+    }
     if (!address.trim()) { setError('Taxpayer street address is required'); return; }
     if (!city.trim()) { setError('Taxpayer city is required'); return; }
     if (!stateRegion.trim()) { setError('Taxpayer state is required'); return; }
@@ -296,9 +299,12 @@ export function PdfUploadFlow() {
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-xs font-medium text-gray-700 mb-1">Taxpayer email <span className="text-red-500">*</span></label>
-              <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="taxpayer@example.com" disabled={isLoading}
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Taxpayer email <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="Leave blank if you don't share client emails" disabled={isLoading}
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-mt-green focus:border-transparent disabled:opacity-50" />
+              <p className="text-xs text-gray-500 mt-1">We never contact your client. Add it only if you want them to receive IRS compliance alerts directly.</p>
             </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-medium text-gray-700 mb-1">Street address <span className="text-red-500">*</span></label>
