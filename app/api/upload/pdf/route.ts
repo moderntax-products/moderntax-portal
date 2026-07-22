@@ -448,11 +448,22 @@ export async function POST(request: NextRequest) {
     if (entityTranscriptRequested) {
       try {
         const notifyAdmin = createAdminClient();
-        const { data: managers } = await notifyAdmin
-          .from('profiles')
-          .select('email')
-          .eq('client_id', profile.client_id)
-          .eq('role', 'manager');
+        // Skip managers who opted out of per-order operational notifications
+        // (manager_notifications_paused). Guarded: pre-migration envs lack the
+        // column, so fall back to the unfiltered query rather than 500.
+        let managers: { email: string }[] | null = null;
+        {
+          const r = await notifyAdmin.from('profiles').select('email')
+            .eq('client_id', profile.client_id).eq('role', 'manager')
+            .eq('manager_notifications_paused', false);
+          if (r.error && /manager_notifications_paused|column .* does not exist|42703/i.test(r.error.message || '')) {
+            const r2 = await notifyAdmin.from('profiles').select('email')
+              .eq('client_id', profile.client_id).eq('role', 'manager');
+            managers = (r2.data as any) || null;
+          } else {
+            managers = (r.data as any) || null;
+          }
+        }
 
         if (managers && managers.length > 0) {
           const totalCost = entityCount * RATE_ENTITY_TRANSCRIPT;

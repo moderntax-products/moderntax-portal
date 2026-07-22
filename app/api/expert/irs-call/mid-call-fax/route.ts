@@ -30,16 +30,22 @@ export async function POST(request: NextRequest) {
     const blandViaMt = !requireHeaderSecret(request, 'x-bland-secret', process.env.MT_TOOL_SECRET);
     const mtOk = !requireHeaderSecret(request, 'x-mt-tool-secret', process.env.MT_TOOL_SECRET);
     const mtViaBland = !requireHeaderSecret(request, 'x-mt-tool-secret', process.env.BLAND_WEBHOOK_SECRET);
-    if (!blandOk && !blandViaMt && !mtOk && !mtViaBland) {
+    // The custom voice engine (services/voice-engine) is a server-to-server
+    // caller — it sends x-voice-engine-secret carrying VOICE_ENGINE_INTERNAL_SECRET.
+    const voiceOk = !requireHeaderSecret(request, 'x-voice-engine-secret', process.env.VOICE_ENGINE_INTERNAL_SECRET);
+    if (!blandOk && !blandViaMt && !mtOk && !mtViaBland && !voiceOk) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const body = await request.json();
-    const { entity_index, fax_number, session_id } = body as {
-      entity_index?: number;
-      fax_number?: string;
-      session_id?: string;
-    };
+    // Accept both the legacy snake_case fields (Bland/Retell) and the voice
+    // engine's camelCase + entity_id. entity_id, when present, targets the
+    // entity directly rather than by position — the voice engine knows the
+    // request_entities UUID, not the call-entity ordinal.
+    const entity_index: number | undefined = body.entity_index ?? body.entityIndex;
+    const fax_number: string | undefined = body.fax_number ?? body.faxNumber;
+    const session_id: string | undefined = body.session_id ?? body.sessionId;
+    const entity_id: string | undefined = body.entity_id ?? body.entityId;
 
     if (!fax_number) {
       return NextResponse.json({
@@ -97,7 +103,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const targetEntity = callEntities[entity_index || 0] || callEntities[0];
+    // Prefer an exact entity_id match (voice engine); fall back to positional
+    // index (Bland/Retell) so both callers resolve the same target.
+    const targetEntity =
+      (entity_id && callEntities.find((e) => e.entity_id === entity_id)) ||
+      callEntities[entity_index || 0] ||
+      callEntities[0];
 
     const { data: entity } = await adminSupabase
       .from('request_entities')

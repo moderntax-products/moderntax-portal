@@ -47,13 +47,22 @@ export async function POST(request: NextRequest) {
       .single() as { data: { name: string } | null; error: any };
     const clientName = clientRecord?.name || 'Unknown';
 
-    // Find managers in the same client org
+    // Find managers in the same client org, excluding anyone who opted out of
+    // operational notifications. Guarded so pre-migration envs still work.
     const adminClient = createAdminClient();
-    const { data: managers } = await adminClient
-      .from('profiles')
-      .select('email')
-      .eq('client_id', profile.client_id)
-      .eq('role', 'manager');
+    let managers: { email: string }[] | null = null;
+    {
+      const r = await adminClient.from('profiles').select('email')
+        .eq('client_id', profile.client_id).eq('role', 'manager')
+        .eq('manager_notifications_paused', false);
+      if (r.error && /manager_notifications_paused|column .* does not exist|42703/i.test(r.error.message || '')) {
+        const r2 = await adminClient.from('profiles').select('email')
+          .eq('client_id', profile.client_id).eq('role', 'manager');
+        managers = (r2.data as any) || null;
+      } else {
+        managers = (r.data as any) || null;
+      }
+    }
 
     if (managers && managers.length > 0) {
       const totalCost = entity_count * RATE_ENTITY_TRANSCRIPT;
