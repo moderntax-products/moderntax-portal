@@ -142,6 +142,53 @@ function TaxReturnTranscript() {
         <Row label="Section 179 Deduction" value="$8,500.00" />
       </div>
 
+      {/* Schedule L + K-1 shareholder blocks: present on the real IRS return
+          transcript for an 1120-S, and the two data sets lenders most often
+          CANNOT get from summary-data vendors — balance-sheet detail and
+          owner names WITH ownership percentages (beneficial-ownership checks
+          otherwise force collecting the actual return from the borrower just
+          to read the percentages off the K-1s). Added 2026-07-22 for a lender
+          evaluation that asked for exactly these fields. */}
+      <h3 className="font-bold mt-8 mb-2">— SCHEDULE L — BALANCE SHEETS PER BOOKS —</h3>
+      <div className="space-y-1">
+        <Row label="Cash (End of Year)" value="$84,213.00" />
+        <Row label="Accounts Receivable (End of Year)" value="$112,940.00" />
+        <Row label="Inventories (End of Year)" value="$96,487.00" />
+        <Row label="Buildings and Other Depreciable Assets" value="$412,806.00" />
+        <Row label="Less Accumulated Depreciation" value="-$187,332.00" />
+        <Row label="Total Assets (End of Year)" value="$519,114.00" />
+        <Row label="Accounts Payable (End of Year)" value="$74,921.00" />
+        <Row label="Mortgages, Notes, Bonds Payable &lt; 1 Yr" value="$36,000.00" />
+        <Row label="Other Current Liabilities" value="$28,414.00" />
+        <Row label="Mortgages, Notes, Bonds Payable &ge; 1 Yr" value="$248,159.00" />
+        <Row label="Total Liabilities (End of Year)" value="$387,494.00" />
+        <Row label="Capital Stock" value="$25,000.00" />
+        <Row label="Retained Earnings" value="$106,620.00" />
+        <Row label="Total Liabilities and Shareholders&apos; Equity" value="$519,114.00" />
+      </div>
+
+      <h3 className="font-bold mt-8 mb-2">— SCHEDULE K-1 — SHAREHOLDER INFORMATION —</h3>
+      <div className="mb-4">
+        <p className="mb-2">SHAREHOLDER 1 OF 2</p>
+        <div className="space-y-1">
+          <Row label="Shareholder Name" value="MARISOL VEGA" />
+          <Row label="Shareholder ID Number" value="XXX-XX-4471" />
+          <Row label="Stock Ownership Percentage" value="65.0000%" />
+          <Row label="Ordinary Business Income (Loss)" value="-$48,695.00" />
+          <Row label="Distributions" value="$42,000.00" />
+        </div>
+      </div>
+      <div>
+        <p className="mb-2">SHAREHOLDER 2 OF 2</p>
+        <div className="space-y-1">
+          <Row label="Shareholder Name" value="DANIEL J VEGA" />
+          <Row label="Shareholder ID Number" value="XXX-XX-8302" />
+          <Row label="Stock Ownership Percentage" value="35.0000%" />
+          <Row label="Ordinary Business Income (Loss)" value="-$26,220.00" />
+          <Row label="Distributions" value="$22,600.00" />
+        </div>
+      </div>
+
       <p className="mt-10 text-[10px] italic text-gray-600">
         This Product Contains Sensitive Taxpayer Data
       </p>
