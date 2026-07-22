@@ -136,14 +136,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Tax ID is required' }, { status: 400 });
     }
 
-    // Require the actual taxpayer email + full mailing address (uploaded-8821
-    // feature). These populate the entity + Form 8821 Line 1 and aren't reliably
-    // parseable from scanned forms, so we collect them explicitly.
+    // Require the taxpayer name + full mailing address (uploaded-8821 feature).
+    // These populate the entity + Form 8821 Line 1 and aren't reliably parseable
+    // from scanned forms, so we collect them explicitly.
     if (!signerFirstName || !signerLastName) {
       return NextResponse.json({ error: 'Signee first and last name are required' }, { status: 400 });
     }
-    if (!signerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail)) {
-      return NextResponse.json({ error: 'A valid taxpayer email is required' }, { status: 400 });
+    // Taxpayer email is OPTIONAL (2026-07-22). Several lenders — Business
+    // Finance Capital was explicit about it — will not hand a vendor their
+    // borrower's email address, and requiring it blocked them from ordering at
+    // all. Nothing on this path needs it: the 8821 is already signed, so no
+    // signature request is sent, and the ordering processor is the contact of
+    // record for every notification. When supplied it is still stored and used
+    // (expiration alerts, compliance enrollment); when absent we simply have no
+    // direct line to the taxpayer, which is the lender's call to make.
+    if (signerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(signerEmail)) {
+      return NextResponse.json({ error: 'That taxpayer email doesn\'t look valid. Leave it blank if you\'d rather not share it.' }, { status: 400 });
     }
     if (!tpAddress || !tpCity || !tpState || !tpZip) {
       return NextResponse.json({ error: 'Taxpayer street address, city, state, and ZIP are required' }, { status: 400 });
@@ -285,7 +293,9 @@ export async function POST(request: NextRequest) {
         status: filePath ? '8821_signed' : 'submitted',
         // Manually-entered taxpayer contact + address are authoritative; the
         // 8821 parse is only a fallback for the signer name fields.
-        signer_email: signerEmail,
+        // Optional — store NULL rather than '' so downstream "has a contact?"
+        // checks (expiration alerts, compliance enrollment) read cleanly.
+        signer_email: signerEmail?.trim() || null,
         address: tpAddress || extr?.address || null,
         city: tpCity || extr?.city || null,
         state: tpState || extr?.state || null,
