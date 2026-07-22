@@ -15,6 +15,7 @@ import { DirectResolutionRoadmap } from '@/components/DirectResolutionRoadmap';
 import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { LogoutButton } from '@/components/LogoutButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
+import { ReplaceSigned8821 } from '@/components/ReplaceSigned8821';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
 
 interface Props {
@@ -385,6 +386,19 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                           storagePath={entity.signed_8821_url}
                           label="Download Signed 8821"
                         />
+                        {/* Wrong-file recovery (Carla, 2026-07-22): once an
+                            8821 is attached, Processor8821Panel hides itself,
+                            so without this there is NO self-serve way to swap
+                            an unsigned/incorrect upload — the order sails to
+                            an expert with the bad file. Locked statuses are
+                            handled server-side. */}
+                        {!['completed', 'failed'].includes(entity.status) && (
+                          <ReplaceSigned8821
+                            entityId={entity.id}
+                            entityName={entity.entity_name}
+                            hasExisting
+                          />
+                        )}
                       </div>
                     )}
 
