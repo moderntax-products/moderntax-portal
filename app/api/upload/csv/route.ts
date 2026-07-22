@@ -937,11 +937,21 @@ export async function POST(request: NextRequest) {
     // Notify manager(s) if processor ordered entity transcripts
     if (entityTranscriptIndices.length > 0) {
       try {
-        const { data: managers } = await admin
-          .from('profiles')
-          .select('email')
-          .eq('client_id', profile.client_id)
-          .eq('role', 'manager');
+        // Skip managers who opted out (manager_notifications_paused); guarded
+        // so pre-migration envs degrade to the unfiltered query.
+        let managers: { email: string }[] | null = null;
+        {
+          const r = await admin.from('profiles').select('email')
+            .eq('client_id', profile.client_id).eq('role', 'manager')
+            .eq('manager_notifications_paused', false);
+          if (r.error && /manager_notifications_paused|column .* does not exist|42703/i.test(r.error.message || '')) {
+            const r2 = await admin.from('profiles').select('email')
+              .eq('client_id', profile.client_id).eq('role', 'manager');
+            managers = (r2.data as any) || null;
+          } else {
+            managers = (r.data as any) || null;
+          }
+        }
 
         if (managers && managers.length > 0) {
           const totalCost = entityTranscriptIndices.length * RATE_ENTITY_TRANSCRIPT;
