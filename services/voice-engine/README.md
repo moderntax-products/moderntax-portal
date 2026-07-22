@@ -35,7 +35,7 @@ Twilio Programmable Voice + ConversationRelay
 ├─ Phase B: hold sentinel ──────────── transcript-pattern watcher, LLM asleep
 └─ Phase C: agent loop ─────────────── Claude (streaming, tools, caching)
         │
-        ├─ tools: send_fax (existing Sinch endpoint), checkpoint, end_call
+        ├─ tools: send_fax (existing mid-call-fax endpoint), checkpoint, end_call
         └─ checkpoints → irs_call_sessions (verified_at, fax_sent_at, …)
 ```
 
@@ -48,7 +48,14 @@ receipt of an 8821 faxed at HH:MM under CAF …" — a short call, not a fresh
 - `callback_numbers` pool + state machine (waiting → imminent → answered)
 - `/api/webhook/twilio-callback-sms` — the IRS "you're next" text
 - `irs_call_sessions` schema, `lib/irs-pps-signal-extractor`, `lib/irs-call-classifier`
-- `/api/expert/irs-call/mid-call-fax` — the Sinch fax bridge
+- `/api/expert/irs-call/mid-call-fax` — the agent's fax tool. NOTE: today this
+  is a **manual-fax handoff**, not an automated bridge. It marks the entity
+  "fax pending manual", and the live-call UI surfaces the 8821 link + the fax
+  number the agent gave, for the listening expert to send and then confirm via
+  `mark-fax-sent`. In-app Sinch faxing exists separately (`lib/sinch-fax.ts`,
+  the expert-card "Fax 8821 to IRS" button) but is NOT wired into this route.
+  Automating it is a follow-up — until then a fully autonomous call still
+  needs a human for this one step
 - `lib/irs-callback-resume` context loading (expert creds, CAF, SOR)
 
 Inbound IRS callbacks hit the same service: Twilio number → `/twiml/inbound`

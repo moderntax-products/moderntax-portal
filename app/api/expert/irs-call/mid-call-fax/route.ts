@@ -6,7 +6,12 @@
  * fax the 8821 mid-call. The handler:
  *   1. Looks up the active call session + the entity at the requested index
  *   2. Resolves the entity's signed_8821_url from Supabase Storage
- *   3. Fires the fax via the configured provider (Phaxio / Twilio Fax / SignalWire)
+ *   3. Marks that entity "fax pending manual" and surfaces the 8821 + the
+ *      agent-supplied fax number to the listening expert, who sends it and
+ *      confirms via mark-fax-sent. (This line previously claimed the route
+ *      fired the fax via Phaxio / Twilio Fax / SignalWire. It does not —
+ *      see the interim-flow comment further down. In-app Sinch faxing is a
+ *      separate feature and is not wired in here yet.)
  *   4. Returns a `result` string the LLM speaks aloud verbatim — IMPORTANT:
  *      whatever we put in `result` is what the AI says. Phrase carefully.
  *
