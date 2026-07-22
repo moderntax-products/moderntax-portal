@@ -648,6 +648,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
                   <Link href="/admin/email-engagement" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Email engagement</Link>
                   <Link href="/admin/experts" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">IRS Experts</Link>
                   <Link href="/admin/expert-notes-queue" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50" title="Expert-authored notes pulled out of the auto-email path — review here before relaying to processors">Expert Notes Queue</Link>
+                  <Link href="/admin/platform" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50" title="Every ordering user and whether they can actually place an order right now — blocked users are defects, not prospects">Platform Visibility</Link>
                   <Link href="/admin/team" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Team</Link>
                   <Link href="/admin/payroll" className="block px-4 py-2 text-sm text-mt-dark hover:bg-gray-50">Payroll</Link>
                   <Link
