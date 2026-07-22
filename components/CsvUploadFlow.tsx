@@ -486,9 +486,20 @@ export function CsvUploadFlow() {
         && new URLSearchParams(window.location.search).get('demo') === '1';
       const endpoint = isDemo ? '/api/dev/demo-csv-upload' : '/api/upload/csv';
       const res = await fetch(endpoint, { method: 'POST', body: formData });
-      const data = await res.json();
+      // Read as text first: a body over the ~4.5 MB platform limit comes back
+      // as a plain-text 413, and res.json() would throw a raw parser error
+      // ("Unexpected token 'R'...") rather than anything the user can act on.
+      const rawBody = await res.text();
+      let data: any = null;
+      try { data = rawBody ? JSON.parse(rawBody) : null; } catch { /* handled below */ }
 
       if (!res.ok) {
+        if (!data?.error) {
+          setError(res.status === 413
+            ? 'That file is too large to upload (limit ~4.5 MB). Try splitting it into smaller batches.'
+            : `Upload failed (${res.status}). Please try again.`);
+          return;
+        }
         const detail = data.details
           ? '\n' + (Array.isArray(data.details) ? data.details.join('\n') : data.details)
           : '';

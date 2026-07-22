@@ -92,6 +92,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Files the browser already put in storage via /api/upload/sign-8821.
+    // Vercel caps a function request body at ~4.5 MB at the platform edge, so
+    // a scanned 8821 sent through this route as multipart never arrived — the
+    // client got an opaque 413 it couldn't even parse. The browser now uploads
+    // straight to Supabase Storage (50 MB bucket limit) and sends only paths.
+    // Both shapes are accepted: `files` still works for small/legacy callers.
+    let uploadedPaths: string[] = [];
+    const rawPaths = formData.get('uploaded_paths');
+    if (typeof rawPaths === 'string' && rawPaths.trim()) {
+      try {
+        const parsed = JSON.parse(rawPaths);
+        if (Array.isArray(parsed)) {
+          // Only accept paths inside this client's own prefix — the signing
+          // route assigns them, so anything else is a forged or stale value.
+          uploadedPaths = parsed
+            .filter((p): p is string => typeof p === 'string')
+            .filter((p) => p.startsWith(`${profile.client_id}/8821/`));
+        }
+      } catch {
+        return NextResponse.json({ error: 'Malformed uploaded_paths' }, { status: 400 });
+      }
+    }
+
     // NOTE: a missing PDF is deliberately NOT an error. Processors routinely
     // reach this screen needing an 8821 they don't have yet — most often the
     // personal 1040 of a guarantor on a loan whose business 8821 is already
@@ -99,7 +122,7 @@ export async function POST(request: NextRequest) {
     // processor had to email an admin), so we now capture the order and
     // generate a pre-filled 8821 for signature instead. Per Matt 2026-07-21:
     // always take the order, surface the gap afterwards — never block intake.
-    const hasSignedPdf = files.length > 0;
+    const hasSignedPdf = files.length > 0 || uploadedPaths.length > 0;
 
     if (!loanNumber?.trim()) {
       return NextResponse.json({ error: 'Loan number is required' }, { status: 400 });
@@ -140,7 +163,7 @@ export async function POST(request: NextRequest) {
         client_id: profile.client_id,
         uploaded_by: user.id,
         intake_method: 'pdf',
-        entity_count: Math.max(files.length, 1),
+        entity_count: Math.max(files.length + uploadedPaths.length, 1),
         request_count: 1,
         status: 'completed',
       })
@@ -184,17 +207,36 @@ export async function POST(request: NextRequest) {
 
     let entityCount = 0;
 
-    // One pass per uploaded PDF, or a single fileless pass when the processor
-    // has no signed 8821 yet. `null` here means "order captured, 8821 pending".
-    const sources: (File | null)[] = hasSignedPdf ? files : [null];
+    // One pass per PDF — whether it came through as multipart (`File`), was
+    // already put in storage by the browser (`string` path), or is absent
+    // entirely (`null` = order captured, 8821 still to be signed).
+    const sources: (File | string | null)[] = hasSignedPdf
+      ? [...uploadedPaths, ...files]
+      : [null];
 
-    for (const file of sources) {
+    for (const source of sources) {
       let filePath: string | null = null;
       let buffer: Buffer | null = null;
 
-      if (file) {
-        buffer = Buffer.from(await file.arrayBuffer());
-        const candidatePath = `${profile.client_id}/8821/${Date.now()}-${file.name}`;
+      if (typeof source === 'string') {
+        // Browser already uploaded it. Trust the path (validated against this
+        // client's prefix above) and pull the bytes back only so the taxpayer/
+        // signer extraction below can run — that download is server-to-server
+        // and not subject to the request-body cap.
+        filePath = source;
+        try {
+          const { data: blob, error: dlErr } = await admin.storage.from('uploads').download(source);
+          if (dlErr || !blob) {
+            console.error('[upload/pdf] could not read pre-uploaded file:', dlErr?.message);
+          } else {
+            buffer = Buffer.from(await blob.arrayBuffer());
+          }
+        } catch (e) {
+          console.warn('[upload/pdf] pre-uploaded download failed (non-fatal):', e);
+        }
+      } else if (source) {
+        buffer = Buffer.from(await source.arrayBuffer());
+        const candidatePath = `${profile.client_id}/8821/${Date.now()}-${source.name}`;
 
         // Upload to storage
         const { error: uploadError } = await admin.storage
@@ -423,7 +465,8 @@ export async function POST(request: NextRequest) {
       resourceId: batch.id,
       details: {
         intake_method: 'pdf',
-        file_count: files.length,
+        file_count: files.length + uploadedPaths.length,
+        direct_to_storage: uploadedPaths.length,
         entity_count: entityCount,
         prefilled_8821_count: generated8821,
         request_id: req.id,
