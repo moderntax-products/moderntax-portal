@@ -8,7 +8,35 @@
 
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { createClient } from '@supabase/supabase-js';
 import { Download8821Button } from '@/components/Download8821Button';
+
+/**
+ * Read an API response without assuming it's JSON.
+ *
+ * Vercel rejects request bodies over ~4.5 MB at the platform edge and returns
+ * plain text ("Request Entity Too Large"), so calling res.json() first threw
+ * `Unexpected token 'R', "Request En"... is not valid JSON` and that raw
+ * parser error was shown to the processor. Always branch on res.ok, and read
+ * as text before attempting a parse.
+ */
+async function readResponse(res: Response): Promise<{ ok: boolean; data: any; error: string | null }> {
+  const text = await res.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not JSON — handled below */ }
+
+  if (res.ok) return { ok: true, data, error: null };
+
+  if (data?.error) return { ok: false, data, error: data.error };
+  if (res.status === 413) {
+    return {
+      ok: false,
+      data: null,
+      error: 'That file is too large to send through the form. Please try again — if it keeps failing, email the signed 8821 to intake@in.moderntax.io with the loan number in the subject.',
+    };
+  }
+  return { ok: false, data: null, error: `Upload failed (${res.status}). Please try again.` };
+}
 
 const ENTITY_TRANSCRIPT_PRICE = 0; // free — entity verification included on every order (2026-07-17)
 
@@ -40,6 +68,9 @@ export function PdfUploadFlow() {
   // Filing-Compliance Report order (MOD-228 Phase 2): account transcript only.
   const [filingCompliance, setFilingCompliance] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  // Which step of the two-phase submit we're on (storage upload, then order
+  // creation) — a large scan can take a while and a dead button reads as broken.
+  const [uploadStage, setUploadStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
@@ -78,8 +109,45 @@ export function PdfUploadFlow() {
     setIsLoading(true);
 
     try {
+      // Send the PDFs straight to storage first, then post only their paths.
+      // Anything over ~4.5 MB total is rejected by Vercel before our API route
+      // runs, which is what blocked scanned 8821s entirely.
+      let uploadedPaths: string[] = [];
+      if (files.length > 0) {
+        setUploadStage('Uploading PDF…');
+        const signRes = await fetch('/api/upload/sign-8821', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: files.map((f) => ({ name: f.name, size: f.size })) }),
+        });
+        const signed = await readResponse(signRes);
+        if (!signed.ok) { setError(signed.error!); return; }
+
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        );
+        const slots: Array<{ path: string; token: string }> = signed.data.uploads;
+
+        for (const [i, f] of files.entries()) {
+          const slot = slots[i];
+          if (!slot) continue;
+          setUploadStage(files.length > 1 ? `Uploading PDF ${i + 1} of ${files.length}…` : 'Uploading PDF…');
+          const { error: upErr } = await supabase.storage
+            .from('uploads')
+            .uploadToSignedUrl(slot.path, slot.token, f, { contentType: 'application/pdf' });
+          if (upErr) {
+            setError(`Could not upload "${f.name}": ${upErr.message}`);
+            return;
+          }
+          uploadedPaths.push(slot.path);
+        }
+      }
+
+      setUploadStage('Creating order…');
       const formData = new FormData();
-      files.forEach((f) => formData.append('files', f));
+      // Files are already in storage — send paths, not bytes.
+      if (uploadedPaths.length > 0) formData.append('uploaded_paths', JSON.stringify(uploadedPaths));
       formData.append('loan_number', loanNumber.trim());
       formData.append('entity_name', entityName.trim());
       formData.append('tid', tid.trim());
@@ -98,9 +166,9 @@ export function PdfUploadFlow() {
       if (notes) formData.append('notes', notes);
 
       const res = await fetch('/api/upload/pdf', { method: 'POST', body: formData });
-      const data = await res.json();
+      const { ok, data, error: resErr } = await readResponse(res);
 
-      if (!res.ok) { setError(data.error || 'Upload failed'); return; }
+      if (!ok) { setError(resErr!); return; }
 
       setSuccess(true);
       setRequestId(data.request_id);
@@ -109,6 +177,7 @@ export function PdfUploadFlow() {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsLoading(false);
+      setUploadStage(null);
     }
   };
 
@@ -366,7 +435,7 @@ export function PdfUploadFlow() {
       <button type="submit" disabled={isLoading || (files.length > 0 && !attestLegible)}
         className="w-full bg-mt-green text-white py-4 rounded-lg font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg">
         {isLoading
-          ? (files.length > 0 ? 'Uploading...' : 'Submitting...')
+          ? (uploadStage || (files.length > 0 ? 'Uploading...' : 'Submitting...'))
           : (files.length > 0 ? 'Upload Signed 8821' : 'Submit Order + Email Me the 8821')}
       </button>
     </form>

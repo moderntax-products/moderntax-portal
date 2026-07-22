@@ -81,9 +81,20 @@ export function Admin8821Upload({
         body: formData,
       });
 
-      const data = await res.json();
+      // Read as text first: an over-limit body is rejected at the platform
+      // edge with a plain-text 413, and res.json() would throw a raw parser
+      // error ("Unexpected token 'R'...") instead of anything actionable.
+      const raw = await res.text();
+      let data: any = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch { /* handled below */ }
       if (!res.ok) {
-        setMessage({ type: 'error', text: data.error || 'Upload failed' });
+        setMessage({
+          type: 'error',
+          text: data?.error
+            || (res.status === 413
+              ? 'That PDF is too large to upload here (limit ~4.5 MB).'
+              : `Upload failed (${res.status}).`),
+        });
         return;
       }
 
