@@ -18,6 +18,10 @@
       "schedule": "0 17 * * 1-5"
     },
     {
+      "path": "/api/cron/first-order-activation",
+      "schedule": "0 18 * * 2"
+    },
+    {
       "path": "/api/cron/processor-delay-digest",
       "schedule": "0 13 * * *"
     },

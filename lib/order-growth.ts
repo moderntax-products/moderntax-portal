@@ -188,21 +188,39 @@ export async function recentlyReengaged(admin: SupabaseClient): Promise<Set<stri
   }
 }
 
-/** User ids already sent `action` within `days` (dedupe via audit_log). */
+/**
+ * User ids already sent `action` within `days` (dedupe via audit_log).
+ *
+ * COLUMN NAMES MATTER HERE. audit_log has no `user_id` or `resource_id`
+ * column — logAuditEvent maps its interface onto the real table as
+ * `userId → organization_id` (a repurposed column) and
+ * `resourceId → entity_id`. Selecting the interface names made PostgREST
+ * return `column audit_log.user_id does not exist`, which the destructure
+ * silently swallowed as `data: null` — so this returned an EMPTY set and
+ * suppressed nothing. Both the weekly cooldown and the per-request dedupe
+ * were inert, meaning a processor could be nudged on every single run.
+ * Caught 2026-07-22, the day autosend first went live.
+ */
 export async function alreadySent(
   admin: SupabaseClient,
   action: string,
   days: number,
 ): Promise<Set<string>> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from('audit_log')
-    .select('user_id, resource_id')
+    .select('organization_id, entity_id')
     .eq('action', action)
-    .gte('created_at', daysAgo(days)) as { data: any[] | null };
+    .gte('created_at', daysAgo(days)) as { data: any[] | null; error: any };
+  if (error) {
+    // Fail CLOSED-ish: a dedupe query that errors must be loud. Silently
+    // returning an empty set is what caused the original bug.
+    console.error(`[order-growth] alreadySent(${action}) query failed — dedupe unavailable:`, error.message);
+    throw new Error(`dedupe query failed for ${action}: ${error.message}`);
+  }
   const s = new Set<string>();
   for (const r of data || []) {
-    if (r.user_id) s.add(r.user_id);
-    if (r.resource_id) s.add(r.resource_id); // request-scoped dedupe
+    if (r.organization_id) s.add(r.organization_id); // userId
+    if (r.entity_id) s.add(r.entity_id);             // request-scoped dedupe
   }
   return s;
 }
