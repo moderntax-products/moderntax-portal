@@ -282,35 +282,42 @@ import sgMail from '@sendgrid/mail';
 
 const sendGridApiKey = process.env.SENDGRID_API_KEY;
 if (sendGridApiKey) sgMail.setApiKey(sendGridApiKey);
-const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io';
+/**
+ * Sent from Matt's own address as PLAIN TEXT — deliberately not the
+ * notifications@ sender or the branded HTML shell the other lifecycle emails
+ * use.
+ *
+ * Jeff Jaddoe (Cal Statewide, 90 days signed up, zero orders) told us on
+ * 2026-07-22: "I thought your emails were spam. I will give Modern Tax a try
+ * on my next file." He wasn't disinterested and he wasn't blocked — the email
+ * just didn't look like a person wrote it. Two of his colleagues are on the
+ * same domain and the same list, so they were likely filing them the same way.
+ *
+ * Deliverability is not the issue (zero spam reports, one bounce in ten days
+ * across all traffic) — presentation is. The two highest-signal replies we got
+ * that week both came from plain personal email. A first touch asking someone
+ * to try the product should look like the founder wrote it, because he did.
+ */
+const fromEmail = 'matt@moderntax.io';
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
-
-const esc = (s: string) =>
-  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export const firstName = (full: string | null | undefined): string =>
   (full || '').trim().split(/\s+/)[0] || 'there';
 
-function shell(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
-  return `
-<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;color:#13213e;">
-  <div style="background:linear-gradient(135deg,#0A1929,#102A43);padding:22px 24px;border-radius:10px 10px 0 0;">
-    <div style="color:#fff;font-size:17px;font-weight:700;">${esc(title)}</div>
-  </div>
-  <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;padding:24px;background:#fff;line-height:1.6;font-size:15px;">
-    ${body}
-    <div style="margin:26px 0 6px;">
-      <a href="${ctaUrl}" style="display:inline-block;background:#00C48C;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:8px;">${esc(ctaLabel)}</a>
-    </div>
-    <p style="font-size:12px;color:#8b93a7;margin-top:22px;">
-      You're getting this because you have a ModernTax account.
-      Reply "pause" and I'll stop these.
-    </p>
-  </div>
-</div>`.trim();
-}
-
-async function send(to: string, subject: string, html: string, text: string): Promise<boolean> {
+/**
+ * TEXT ONLY — no `html` field at all.
+ *
+ * Not an oversight. A branded HTML shell (dark header, gradient, big green
+ * CTA button) is what made these read as bulk mail. Sending text/plain from a
+ * real person's address is the strongest available signal that a human wrote
+ * it, and it renders identically everywhere. The CTA is a bare URL, which is
+ * what a person would actually paste.
+ *
+ * Transactional mail (8821 delivery, transcript-ready, invoices) keeps the
+ * branded template — recipients EXPECT those to look like system output. This
+ * is the one email whose whole job is to not look like system output.
+ */
+async function send(to: string, subject: string, text: string): Promise<boolean> {
   if (!sendGridApiKey) {
     console.warn('[first-order-activation] SENDGRID_API_KEY not set — skipping send');
     return false;
@@ -318,10 +325,9 @@ async function send(to: string, subject: string, html: string, text: string): Pr
   try {
     await sgMail.send({
       to,
-      from: { email: fromEmail, name: 'Matt at ModernTax' },
+      from: { email: fromEmail, name: 'Matt Parker' },
       replyTo: 'matt@moderntax.io',
       subject,
-      html,
       text,
     });
     return true;
@@ -350,54 +356,29 @@ export async function sendFirstOrderNudge(t: ActivationTarget): Promise<boolean>
     : `${name}, want to pull your first transcript?`;
 
   const lead = hasTeam
-    ? `<p>${esc(t.teammateName!)} and the team at <strong>${esc(team || 'your office')}</strong>
-       have been running transcript pulls through ModernTax, but nothing's come through under
-       your login yet. If that's just because you haven't had a reason to try it, here's what
-       it looks like.</p>`
-    : `<p>You set up a ModernTax account but haven't placed an order yet. No pressure at all
-       &mdash; but if a file has been waiting on IRS transcripts, this is the short version of
-       how it works.</p>`;
-
-  const body = `
-<p>Hi ${esc(name)},</p>
-${lead}
-<ul style="margin:10px 0 0;padding-left:20px;">
-  <li style="margin-bottom:8px;">Enter the taxpayer once &mdash; a <strong>pre-filled Form 8821</strong>
-      downloads and lands in your inbox. No blank templates.</li>
-  <li style="margin-bottom:8px;">Don't have it signed yet? Submit the order anyway. We'll send you
-      the form and hold the order until the signature comes back.</li>
-  <li style="margin-bottom:8px;">Email the signed copy to <strong>intake@in.moderntax.io</strong>
-      with the loan number in the subject and it files itself.</li>
-  <li>Entity verification is included free, and you're never billed for a rejected pull.</li>
-</ul>
-<p style="margin-top:14px;">Most orders come back within 24 hours.</p>
-<p style="font-size:14px;color:#4b5563;">If something didn't work when you tried before, tell me
-what happened &mdash; a few people hit bugs on our end recently and I'd rather hear about it than
-assume you weren't interested.</p>`;
+    ? `${t.teammateName} and the team at ${team || 'your office'} have been running transcript pulls through ModernTax, but nothing's come through under your login yet. If that's just because you haven't had a reason to try it, here's the short version of how it works.`
+    : `You set up a ModernTax account but haven't placed an order yet. No pressure at all — but if a file has been waiting on IRS transcripts, here's the short version of how it works.`;
 
   const text = `Hi ${name},
 
-${hasTeam
-  ? `${t.teammateName} and the team at ${team || 'your office'} have been running transcript pulls through ModernTax, but nothing's come through under your login yet.`
-  : `You set up a ModernTax account but haven't placed an order yet.`}
+${lead}
 
-- Enter the taxpayer once — a pre-filled Form 8821 downloads and lands in your inbox.
-- Don't have it signed yet? Submit the order anyway; we'll send the form and hold the order.
-- Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it files itself.
-- Entity verification is free, and you're never billed for a rejected pull.
+- Enter the taxpayer once and a pre-filled Form 8821 downloads and lands in your inbox. No blank templates.
+- Don't have it signed yet? Submit the order anyway. We'll send you the form and hold the order until the signature comes back.
+- Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it attaches itself to the order.
+- Entity verification is included free, and you're never billed for a rejected pull.
 
 Most orders come back within 24 hours.
 
-If something didn't work when you tried before, tell me what happened — a few people hit bugs on our end recently and I'd rather hear about it than assume you weren't interested.
+You can start one here: ${appUrl}/new
 
-Place an order: ${appUrl}/new
+If something didn't work when you tried before, just tell me what happened. A few people hit real bugs on our end recently and I'd rather hear about it than assume you weren't interested.
 
-— Matt`;
+Matt Parker
+ModernTax
+matt@moderntax.io
 
-  return send(t.email, subject, shell(
-    hasTeam ? 'Your team is already pulling transcripts' : 'Your first transcript pull',
-    body,
-    'Place your first order',
-    `${appUrl}/new`,
-  ), text);
+(If you'd rather not get these, reply "pause" and I'll stop.)`;
+
+  return send(t.email, subject, text);
 }
