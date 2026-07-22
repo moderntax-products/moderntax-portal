@@ -9,7 +9,6 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
-import { Download8821Button } from '@/components/Download8821Button';
 
 /**
  * Read an API response without assuming it's JSON.
@@ -77,6 +76,9 @@ export function PdfUploadFlow() {
   // >0 when the order came in without a signed form and the server generated
   // a pre-filled 8821 for the processor to collect a signature with.
   const [prefilledCount, setPrefilledCount] = useState(0);
+  // 1-hour signed link to the generated 8821 (fileless orders) — offered on
+  // the success screen so the form is in hand immediately, not just emailed.
+  const [prefilledUrl, setPrefilledUrl] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || []);
@@ -176,6 +178,7 @@ export function PdfUploadFlow() {
       setSuccess(true);
       setRequestId(data.request_id);
       setPrefilledCount(data.prefilled_8821_generated || 0);
+      setPrefilledUrl(data.prefilled_8821_download_url || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -203,6 +206,14 @@ export function PdfUploadFlow() {
               Have them sign it, then upload the signed copy here or email it to{' '}
               <strong>intake@in.moderntax.io</strong> with the loan number in the subject.
             </p>
+            {prefilledUrl && (
+              <p className="mt-3">
+                <a href={prefilledUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-block border border-mt-green text-mt-green px-4 py-2 rounded-lg font-semibold text-sm hover:bg-mt-green/5 transition-colors">
+                  Download the pre-filled 8821 now
+                </a>
+              </p>
+            )}
             <p className="mt-3 text-sm text-gray-500">
               We&apos;ll start pulling transcripts as soon as the signed form lands.
             </p>
@@ -331,27 +342,32 @@ export function PdfUploadFlow() {
           </div>
         </div>
 
-        {/* Don't have the signed form yet? Generate a pre-filled one to sign —
-            same download+email available in every ordering workflow. */}
-        <div className="border border-mt-green/30 rounded-lg p-4 mb-6 bg-mt-green/5">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex-1 min-w-[220px]">
-              <p className="font-semibold text-mt-dark text-sm">Don&apos;t have the signed 8821 yet?</p>
-              <p className="text-xs text-gray-500 mt-1">Download a pre-filled Form 8821 from the info above — ready to sign. We&apos;ll also email you a copy. Then upload the signed PDF below.</p>
+        {/* Don't have the signed form yet? ONE action: create the order AND
+            get the pre-filled 8821 (download + email). This used to be a bare
+            Download8821Button that generated the form WITHOUT an order —
+            Elena (BFC, 2026-07-22) entered the taxpayer, got the form, got the
+            signature, then found an empty queue with nothing to attach it to
+            and was told to re-key everything. The form and the order must not
+            be separable on this screen. Hidden once a PDF is attached — the
+            main submit covers that path. */}
+        {files.length === 0 && (
+          <div className="border border-mt-green/30 rounded-lg p-4 mb-6 bg-mt-green/5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex-1 min-w-[220px]">
+                <p className="font-semibold text-mt-dark text-sm">Don&apos;t have the signed 8821 yet?</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Submit now and we&apos;ll create the order, hand you a pre-filled Form 8821 built
+                  from the info above, and email you a copy. When it comes back signed, upload it
+                  on the order page or email it to intake@in.moderntax.io &mdash; no re-typing.
+                </p>
+              </div>
+              <button type="submit" disabled={isLoading}
+                className="bg-mt-green text-white px-4 py-2.5 rounded-lg font-semibold text-sm hover:bg-opacity-90 transition-colors disabled:opacity-50 whitespace-nowrap">
+                {isLoading ? 'Creating…' : 'Create order & get 8821'}
+              </button>
             </div>
-            <Download8821Button
-              entityName={entityName}
-              tid={tid}
-              formType={formType}
-              years={years}
-              address={address}
-              city={city}
-              state={stateRegion}
-              zipCode={zipCode}
-              disabled={isLoading}
-            />
           </div>
-        </div>
+        )}
 
         {/* Filing-Compliance Report order (MOD-228 Phase 2) */}
         <div className={`mb-6 border rounded-lg p-4 transition-colors ${filingCompliance ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-gray-50'}`}>

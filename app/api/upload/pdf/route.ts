@@ -345,6 +345,12 @@ export async function POST(request: NextRequest) {
     // every PDF uploaded cleanly. Non-fatal: the order is already saved, and a
     // missing 8821 is recoverable from the request page.
     let generated8821 = 0;
+    // Signed URL for the generated form so the client can offer an immediate
+    // download on the success screen. Elena's feedback (2026-07-22): she
+    // generated a form, got it by email, and then had nothing in her queue —
+    // the order and the form must come out of ONE action, and that action
+    // should hand back both artifacts (order id + the PDF) on the spot.
+    let prefilledDownloadUrl: string | null = null;
     try {
       const genAdmin = createAdminClient();
       const res = await autoGenerate8821sForRequest(genAdmin, req.id, {
@@ -360,6 +366,11 @@ export async function POST(request: NextRequest) {
           .update({ status: '8821_sent' })
           .eq('request_id', req.id)
           .is('signed_8821_url', null);
+        try {
+          const { data: signed } = await genAdmin.storage.from('uploads')
+            .createSignedUrl(res.generated[0].storagePath, 3600);
+          prefilledDownloadUrl = signed?.signedUrl || null;
+        } catch { /* email copy still arrives — download link is best-effort */ }
       }
     } catch (genErr) {
       console.error('[pdf-upload] 8821 auto-generate failed (order kept):', genErr);
@@ -492,6 +503,9 @@ export async function POST(request: NextRequest) {
       // Tells the UI which of the two outcomes to render.
       signed_8821_received: hasSignedPdf,
       prefilled_8821_generated: generated8821,
+      // 1-hour link to the generated form (fileless orders only) so the
+      // success screen can offer it immediately alongside the emailed copy.
+      prefilled_8821_download_url: prefilledDownloadUrl,
     });
   } catch (err) {
     console.error('PDF upload error:', err);

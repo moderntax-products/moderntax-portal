@@ -530,6 +530,108 @@ async function handleSigned8821Email(
     candidates = candidates.filter((c) => c.id !== target.id);
   }
 
+  // Second chance — the REPLACE path. A PDF that matched no awaiting entity
+  // may be the corrected copy for one that already carries a WRONG 8821.
+  // Carla DeGuzman (Cal Statewide, 2026-07-22) uploaded the unsigned copy;
+  // her entity had signed_8821_url populated and status irs_queue, so the
+  // primary pool above excluded it on BOTH filters and her signed copy would
+  // have dead-ended in the triage hold. Replacement only ever happens on a
+  // DETERMINISTIC match — the intake+<entityId> reply address or a loan-number
+  // hit, with the TIN on the form disambiguating multi-entity loans. No
+  // sole-pending fallback here: "the client's only open order" is a fine
+  // guess for a first attach, but never for an overwrite.
+  if (unmatched.length > 0 && (addrEntityId || loanNumber)) {
+    let replacePool: any[] = [];
+    const { data: rp } = await admin.from('request_entities')
+      .select('id, entity_name, tid, status, signed_8821_url, gross_receipts, request_id, requests!inner(loan_number, client_id)')
+      .eq('requests.client_id', sender.client_id)
+      .not('signed_8821_url', 'is', null)
+      .not('status', 'in', '(completed,failed)') as { data: any[] | null };
+    replacePool = (rp || []).filter((c) =>
+      addrEntityId
+        ? c.id === addrEntityId
+        : String(c.requests?.loan_number || '').toLowerCase() === loanNumber!.toLowerCase(),
+    );
+
+    const stillUnmatched: string[] = [];
+    for (const name of unmatched) {
+      const pdf = parts.pdfFiles.find((p) => p.name === name);
+      if (!pdf || replacePool.length === 0) { stillUnmatched.push(name); continue; }
+
+      let target: any = null;
+      if (replacePool.length === 1) {
+        target = replacePool[0];
+      } else {
+        const tin = await tinFromPdf(pdf.buffer);
+        if (tin) {
+          const digits = tin.replace(/\D/g, '');
+          target = replacePool.find((c) => String(c.tid || '').replace(/\D/g, '') === digits) || null;
+        }
+      }
+      if (!target) { stillUnmatched.push(name); continue; }
+
+      const storagePath = `8821/${target.id}/${Date.now()}-emailed-replacement-${safeName(pdf.name)}`;
+      const { error: upErr } = await admin.storage.from('uploads').upload(storagePath, pdf.buffer, {
+        contentType: pdf.type || 'application/pdf', upsert: false,
+      });
+      if (upErr) {
+        console.error('[email-intake] replacement 8821 upload failed:', upErr.message);
+        stillUnmatched.push(name);
+        continue;
+      }
+
+      // Same mechanics as /api/entity/replace-8821: swap, keep the old file
+      // in an on-entity audit trail, advance only pre-signature statuses.
+      const history = Array.isArray(target.gross_receipts?.replaced_8821_history)
+        ? target.gross_receipts.replaced_8821_history
+        : [];
+      history.push({ path: target.signed_8821_url, replaced_at: new Date().toISOString(), replaced_by: sender.id, via: 'email' });
+      const update: Record<string, any> = {
+        signed_8821_url: storagePath,
+        gross_receipts: { ...(target.gross_receipts || {}), replaced_8821_history: history },
+      };
+      if (['pending', 'submitted', '8821_sent'].includes(target.status)) update.status = '8821_signed';
+      await admin.from('request_entities').update(update).eq('id', target.id);
+
+      // Surface the swap where the expert will see it.
+      try {
+        await (admin.from('entity_notes' as any) as any).insert({
+          entity_id: target.id,
+          author_id: sender.id,
+          author_role: 'processor',
+          author_name: sender.full_name || sender.email,
+          kind: 'status_update',
+          body: `Signed 8821 replaced via email by ${sender.full_name || sender.email}. The previously attached copy is superseded — download the current file before faxing or calling.`,
+        });
+      } catch { /* non-fatal */ }
+      try {
+        const { data: assignment } = await admin.from('expert_assignments')
+          .select('expert_id').eq('entity_id', target.id).is('completed_at', null)
+          .maybeSingle() as { data: { expert_id: string } | null };
+        if (assignment?.expert_id && process.env.SENDGRID_API_KEY) {
+          const { data: expert } = await admin.from('profiles')
+            .select('email').eq('id', assignment.expert_id).single() as { data: { email: string } | null };
+          if (expert?.email) {
+            const sgMod = await import('@sendgrid/mail');
+            sgMod.default.setApiKey(process.env.SENDGRID_API_KEY);
+            await sgMod.default.send({
+              to: expert.email,
+              from: { email: process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io', name: 'ModernTax' },
+              replyTo: 'matt@moderntax.io',
+              subject: `8821 replaced on ${target.entity_name} — re-download before calling`,
+              text: `The signed 8821 on ${target.entity_name} (loan ${target.requests?.loan_number || '—'}) was just replaced by the processor.\n\nIf you already downloaded the previous copy, discard it — it was superseded. Download the current file from your assignment card before faxing or calling PPS.\n\n— ModernTax`,
+            });
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      attached.push({ entityName: target.entity_name, loan: target.requests?.loan_number || null });
+      replacePool = replacePool.filter((c) => c.id !== target.id);
+    }
+    unmatched.length = 0;
+    unmatched.push(...stillUnmatched);
+  }
+
   // Hold any PDF we couldn't match for manual triage.
   for (const name of unmatched) {
     const pdf = parts.pdfFiles.find((p) => p.name === name);
