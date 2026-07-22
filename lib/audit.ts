@@ -50,6 +50,7 @@ export type AuditAction =
   | 'clearfirm_bot_processed'
   | 'order_nudge_next'
   | 'order_nudge_weekly'
+  | 'first_order_activation'
   | 'irs_call_initiated'
   | 'irs_call_completed'
   | 'irs_call_failed'
