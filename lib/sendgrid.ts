@@ -2806,7 +2806,10 @@ You just need the signature.</p>
 Questions? Reply to this email or contact <a href="mailto:support@moderntax.io" style="color:#00C48C;">support@moderntax.io</a>.</p>
 `.trim();
 
-  const html = createEmailTemplate('Your pre-filled Form 8821', content);
+  const html = createEmailTemplate('Your pre-filled Form 8821', content, {
+    text: 'Start a new order',
+    url: `${appUrl}/new`,
+  });
 
   await sgMail.send({
     to: opts.processorEmail,
