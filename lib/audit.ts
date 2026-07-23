@@ -51,6 +51,7 @@ export type AuditAction =
   | 'order_nudge_next'
   | 'order_nudge_weekly'
   | 'first_order_activation'
+  | 'weekly_feature_digest'
   | 'irs_call_initiated'
   | 'irs_call_completed'
   | 'irs_call_failed'
