@@ -60,6 +60,26 @@ jobs:
         #     the dependencies audit — both need major-version upgrades).
         # When you upgrade Next or xlsx, remove the corresponding IDs
         # from .audit-ci.json so the gate tightens again.
+        #
+        # 2026-07-23 — three NEW high Next.js advisories landed and turned
+        # main red. All three are fixed only by next@16 (semver-major from
+        # our 14.2.35), so they are allowlisted pending that upgrade. Each
+        # was checked against THIS codebase first, and none of the three
+        # vulnerable surfaces is in use:
+        #
+        #   GHSA-m99w-x7hq-7vfj  DoS via App Router Server Actions
+        #   GHSA-89xv-2m56-2m9x  SSRF via Server Actions on custom servers
+        #     -> zero files contain 'use server', no serverActions config,
+        #        and we run on Vercel rather than a custom server.
+        #   GHSA-p9j2-gv94-2wf4  SSRF via rewrites with an attacker-
+        #                        controlled destination hostname
+        #     -> we declare no rewrites at all: next.config.js has no
+        #        rewrites() and vercel.json has only installCommand,
+        #        crons and headers.
+        #
+        # These suppress REAL advisories, they don't dismiss them. Re-check
+        # the conditions above before adding a rewrite or a Server Action,
+        # and drop all three IDs once Next is upgraded.
         run: npx audit-ci --config .audit-ci.json
 
       - name: Lint (next lint)
