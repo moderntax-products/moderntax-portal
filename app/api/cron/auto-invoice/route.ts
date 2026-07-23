@@ -18,6 +18,7 @@ import {
 } from '@/lib/mercury';
 import { requireBearer } from '@/lib/auth-util';
 import { PRICE_POST_CLOSE_MONITORING_MONTHLY } from '@/lib/pricing';
+import { getCompedEntityIds } from '@/lib/comp-eval';
 
 export const maxDuration = 60;
 
@@ -136,6 +137,12 @@ export async function GET(request: NextRequest) {
       '3256293c-6c98-42bc-a828-2b73a603048e', // California Statewide CDC
     ]);
 
+    // Entities on a comped eval (e.g. Biz2Credit's Tax Guard head-to-head) —
+    // tracked like any order but left off the invoice. Computed once for the
+    // whole run; scoped by user, so it never touches a shared reseller client's
+    // real billable volume. See lib/comp-eval.ts.
+    const compedEntityIds = await getCompedEntityIds(supabase);
+
     for (const client of clients) {
       clientsProcessed++;
 
@@ -243,6 +250,7 @@ export async function GET(request: NextRequest) {
               if (completedDate < billableStart || completedDate > periodEndDate) return;
               if (entity.gross_receipts?.pre_billed?.invoice_id) return;
       if (entity.credit_paid) return; // paid from prepaid credit wallet — not Mercury-billed
+              if (compedEntityIds.has(entity.id)) return; // comped eval pull — tracked, not billed
               periodEntities += 1;
             });
           });
@@ -296,6 +304,7 @@ export async function GET(request: NextRequest) {
               // and any future ad-hoc pre-bill path.
               if (entity.gross_receipts?.pre_billed?.invoice_id) return;
       if (entity.credit_paid) return; // paid from prepaid credit wallet — not Mercury-billed
+              if (compedEntityIds.has(entity.id)) return; // comped eval pull — tracked, not billed
 
               // Reorder SKU — flat $29.99 instead of the tier rate.
               // Stamped by the reorder-from-history admin route.

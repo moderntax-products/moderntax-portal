@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
+import { getCompedEntityIds } from '@/lib/comp-eval';
 
 export async function GET(request: NextRequest) {
   try {
@@ -151,6 +152,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Comped eval pulls — tracked, not billed. Scoped by user so a shared
+    // reseller client's real volume is untouched. See lib/comp-eval.ts. Keeps
+    // this preview in lockstep with the auto-invoice cron.
+    const compedEntityIds = await getCompedEntityIds(admin);
+
     // If free trial, get the first 3 entities across all time to exclude them
     let freeEntityIds = new Set<string>();
     if (client.free_trial) {
@@ -174,6 +180,7 @@ export async function POST(request: NextRequest) {
         if (freeEntityIds.has(entity.id)) return;
         if (entity.non_billable === true) return; // post-migration column path
         if (nonBillableFromAudit.has(entity.id)) return; // pre-migration audit_log path
+        if (compedEntityIds.has(entity.id)) return; // comped eval pull — tracked, not billed
 
         totalEntities += 1;
         const rate = req.intake_method === 'csv' ? rateCsv : ratePdf;
