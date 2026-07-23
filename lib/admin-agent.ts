@@ -286,3 +286,147 @@ export async function decideOnThread(ctx: ThreadContext): Promise<AgentDecision>
     return escalateFallback(err instanceof Error ? err.message : String(err));
   }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Transcript-gap detector.
+//
+// Matt 2026-06-25: a script pulled a taxpayer's transcripts but didn't detect
+// that he had filed Married-Filing-Jointly with his WIFE's SSN listed first, so
+// the years came back "No record of return filed" under his SSN — the joint
+// return actually posts under the spouse's (primary) account. "These are tasks
+// that the agentic AI agent for the admin should be able to recognize and
+// administer." This recognizes that signature (and its cousins) and posts the
+// processor-facing instruction note so nobody chases a transcript that, under
+// the queried SSN, will never appear.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface TranscriptGapContext {
+  entityName: string;
+  formType: string | null;
+  /** Years the order asked for. */
+  requestedYears: string[];
+  /** Requested years that DID come back with a usable return. */
+  yearsWithData: string[];
+  /** Years whose pull returned an IRS "No record" / "data not found" page. */
+  emptyYears: string[];
+  /** Requested years with no usable transcript at all (the gap to explain). */
+  gapYears: string[];
+  /** Distinct TIN last-4s seen across everything that was pulled. >1 ⇒ a second
+   *  SSN (e.g. a spouse) is in play — the strongest MFJ-primary signal. */
+  distinctTinSuffixes: string[];
+}
+
+export interface TranscriptGapVerdict {
+  likely_cause: 'mfj_spouse_primary' | 'unfiled' | 'wrong_tin' | 'unknown';
+  /** Short, processor-facing instruction note to post on the entity thread. */
+  note_body: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+/** Deterministic, no-AI fallback so a gap is never silently dropped. */
+function transcriptGapFallback(ctx: TranscriptGapContext): TranscriptGapVerdict {
+  const gaps = ctx.gapYears.join(', ') || ctx.emptyYears.join(', ');
+  const multiTin = ctx.distinctTinSuffixes.length > 1;
+  if (multiTin) {
+    const spouse = ctx.distinctTinSuffixes.slice(-1)[0];
+    return {
+      likely_cause: 'mfj_spouse_primary',
+      confidence: 'medium',
+      note_body: [
+        `⚠️ Transcript gap — ${gaps} likely filed jointly under a spouse (primary) SSN. Action needed before chasing these years.`,
+        '',
+        `The pull touched more than one SSN (${ctx.distinctTinSuffixes.map(s => `…${s}`).join(', ')}), and ${gaps} came back "No record of return filed" under the primary taxpayer's SSN. On a Married-Filing-Jointly return the joint record posts under whichever spouse is listed first — so it won't appear under the other spouse's SSN.`,
+        '',
+        'To obtain these years:',
+        `1) Re-pull under the SPOUSE's SSN (the …${spouse} account).`,
+        "2) That requires a SEPARATE 8821 signed by the spouse — on a joint return each spouse authorizes access under their own SSN.",
+        '',
+        "Do NOT re-request these years under the primary taxpayer's SSN — they will never appear.",
+      ].join('\n'),
+    };
+  }
+  return {
+    likely_cause: 'unknown',
+    confidence: 'low',
+    note_body: [
+      `⚠️ Transcript gap — ${gaps} came back with no usable return under the queried SSN.`,
+      '',
+      'This is either genuinely unfiled for those years, or the return was filed under a different SSN (e.g. a joint return under a spouse listed first). Please verify before telling the borrower a year is missing — and if it was filed jointly, re-pull under the primary spouse\'s SSN (which needs that spouse\'s own signed 8821).',
+    ].join('\n'),
+  };
+}
+
+/**
+ * Classify why a transcript pull came back incomplete and draft the in-portal
+ * instruction note. Always returns a postable verdict (AI when available, a
+ * grounded template otherwise).
+ */
+export async function analyzeTranscriptGap(ctx: TranscriptGapContext): Promise<TranscriptGapVerdict> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return transcriptGapFallback(ctx);
+
+  const system = [
+    'You are ModernTax Support triaging an INCOMPLETE IRS transcript pull on a single tax entity.',
+    'A script pulled transcripts but some requested years came back empty ("No record of return filed" /',
+    '"Requested data not found"). Your job: classify the most likely cause and write a SHORT, practical',
+    'instruction note for the processor/expert so nobody wastes time chasing a transcript that will never',
+    'appear under the queried SSN.',
+    '',
+    'The most common cause we miss: a MARRIED-FILING-JOINTLY return where the SPOUSE is the primary',
+    'taxpayer (their SSN is listed first). The joint return then posts under the spouse\'s account, so it',
+    'returns "No record" under the other spouse\'s SSN. The tell-tale signal is MORE THAN ONE distinct SSN',
+    'appearing in the same pull. The fix is to re-pull under the spouse\'s SSN — which needs a SEPARATE 8821',
+    'signed by that spouse (each spouse authorizes access under their own SSN).',
+    'Other causes: genuinely unfiled years (no second SSN, year simply has no return anywhere), or the',
+    'wrong TIN was queried.',
+    '',
+    'GROUND your note ONLY in the signals provided — do not invent SSNs, names, dates, or balances. Mask',
+    'any SSN as its last 4 only (e.g. "…6226"). Keep the note under ~140 words, plain and direct.',
+    '',
+    'Respond with STRICT JSON only (no prose, no code fences):',
+    '{',
+    '  "likely_cause": "mfj_spouse_primary" | "unfiled" | "wrong_tin" | "unknown",',
+    '  "note_body": string,            // the processor-facing instruction note',
+    '  "confidence": "high" | "medium" | "low"',
+    '}',
+  ].join('\n');
+
+  const user = [
+    `Entity: ${ctx.entityName}`,
+    ctx.formType ? `Form: ${ctx.formType}` : '',
+    `Requested years: ${ctx.requestedYears.join(', ') || 'unknown'}`,
+    `Years that returned a usable return: ${ctx.yearsWithData.join(', ') || 'none'}`,
+    `Years that returned "No record / data not found": ${ctx.emptyYears.join(', ') || 'none'}`,
+    `Requested years still missing: ${ctx.gapYears.join(', ') || 'none'}`,
+    `Distinct SSN last-4s seen in the pull: ${ctx.distinctTinSuffixes.map(s => `…${s}`).join(', ') || 'one only'}`,
+    '',
+    'Classify the cause and write the instruction note now.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: MODEL, max_tokens: 600, system, messages: [{ role: 'user', content: user }] }),
+    });
+    if (!res.ok) return transcriptGapFallback(ctx);
+    const data: any = await res.json();
+    const content: string = (data?.content?.[0]?.text || '').trim();
+    if (!content) return transcriptGapFallback(ctx);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content.replace(/^```(?:json)?\n?/i, '').replace(/```$/i, '').trim());
+    } catch { return transcriptGapFallback(ctx); }
+    const note = typeof parsed.note_body === 'string' ? parsed.note_body.trim() : '';
+    if (!note) return transcriptGapFallback(ctx);
+    return {
+      likely_cause: ['mfj_spouse_primary', 'unfiled', 'wrong_tin', 'unknown'].includes(parsed.likely_cause)
+        ? parsed.likely_cause : 'unknown',
+      note_body: note,
+      confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
+    };
+  } catch (err) {
+    console.error('[admin-agent] analyzeTranscriptGap failed:', err);
+    return transcriptGapFallback(ctx);
+  }
+}
