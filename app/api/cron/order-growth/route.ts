@@ -28,8 +28,11 @@ import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
 import { logAuditEvent } from '@/lib/audit';
 import {
-  findLapsedProcessors, findRecentCompletions, recentlyReengaged, alreadySent,
-  sendWeeklyOrderNudge, sendNextOrderNudge,
+  // findRecentCompletions / sendNextOrderNudge are intentionally NOT imported
+  // here anymore — the next-order ask moved into the completion email. They
+  // remain exported from lib/order-growth.ts for that path's use.
+  findLapsedProcessors, recentlyReengaged, alreadySent,
+  sendWeeklyOrderNudge,
   LAPSED_DAYS, WEEKLY_COOLDOWN_DAYS, MAX_SENDS_PER_RUN, DAILY_ORDER_TARGET,
 } from '@/lib/order-growth';
 
@@ -50,7 +53,6 @@ export async function GET(request: NextRequest) {
   const laTime = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
   const la = new Date(laTime);
   const isWeeklyDay = la.getDay() === WEEKLY_DOW;
-  const isWeekend = la.getDay() === 0 || la.getDay() === 6;
 
   const result = {
     mode: autoSend ? 'live' : 'shadow',
@@ -62,33 +64,22 @@ export async function GET(request: NextRequest) {
 
   let budget = MAX_SENDS_PER_RUN;
 
-  // ── 1. NEXT-ORDER (daily, weekdays only) ────────────────────────────────
-  if (!isWeekend || force) {
-    try {
-      const completions = await findRecentCompletions(admin);
-      const done = await alreadySent(admin, 'order_nudge_next', 3);
-      result.next_order.eligible = completions.length;
-      for (const c of completions) {
-        if (budget <= 0) break;
-        if (done.has(c.request_id)) { result.next_order.skipped_deduped++; continue; }
-        result.next_order.recipients.push(`${c.email} (loan ${c.loan_number || '—'})`);
-        if (autoSend) {
-          const ok = await sendNextOrderNudge(c);
-          if (ok) {
-            result.next_order.sent++;
-            budget--;
-            await logAuditEvent(admin, {
-              action: 'order_nudge_next', userId: c.id, userEmail: c.email,
-              resourceType: 'request', resourceId: c.request_id,
-              details: { loan_number: c.loan_number, entity_count: c.entity_count, order_count: c.orderCount },
-            });
-          }
-        }
-      }
-    } catch (e: any) {
-      result.errors.push(`next_order: ${e?.message || e}`);
-    }
-  }
+  // ── 1. NEXT-ORDER — no longer a separate email (Matt 2026-07-23) ────────
+  // The "another file? place your next order" ask now rides INSIDE the
+  // transcript-completion email (lib/sendgrid.ts sendCompletionNotification),
+  // which already fires exactly once per completed order at the moment of
+  // highest intent — the processor is still in the file.
+  //
+  // Sending a second standalone nudge the next day meant anyone who completed
+  // several orders in one window got a burst of near-identical emails: Robin
+  // Kim received THREE at once on 2026-07-23. Folding the CTA into the email
+  // she already receives makes it one nudge per order, in the expected email,
+  // with no separate marketing send to rate-cap or dedupe. That is the
+  // per-order cap Matt asked for — enforced structurally, not with a counter.
+  //
+  // findRecentCompletions / sendNextOrderNudge stay in lib/order-growth.ts;
+  // only the standalone cron send is removed.
+  result.next_order.recipients.push('folded into the completion email');
 
   // ── 2. WEEKLY LAPSED (Tuesdays) ─────────────────────────────────────────
   if (isWeeklyDay || force) {
