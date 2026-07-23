@@ -296,6 +296,21 @@ export async function sendCompletionNotification(
   <li>Download all supporting documents</li>
   <li>Use this information for your lending decision</li>
 </ol>
+<!--
+  Inline next-order nudge (Matt 2026-07-22). The order-growth cron sends a
+  separate "what's next?" email the following day; this is the same ask at the
+  moment of highest intent, while the processor is still in the file. Kept to
+  one short block so this stays a delivery notice rather than a pitch.
+-->
+<div style="margin-top:22px;padding-top:16px;border-top:1px solid #e5e7eb;">
+  <p style="margin:0 0 12px;font-size:14px;color:#4b5563;">
+    Another file waiting on transcripts? Enter the taxpayer once and a pre-filled 8821
+    comes straight back to you. Email the signed copy to
+    <strong>intake@in.moderntax.io</strong> with the loan number in the subject and it
+    attaches itself to the order. Entity verification is included free.
+  </p>
+  <a href="${appUrl}/new" style="display:inline-block;background:#00C48C;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:6px;font-size:14px;">Start your next order</a>
+</div>
   `.trim();
 
   const html = createEmailTemplate('Transcripts Ready', content, {
