@@ -76,10 +76,18 @@ jobs:
         #     -> we declare no rewrites at all: next.config.js has no
         #        rewrites() and vercel.json has only installCommand,
         #        crons and headers.
+        #   GHSA-6g55-p6wh-862q  PostCSS arbitrary file read via an attacker-
+        #                        controlled sourceMappingURL in a CSS comment
+        #                        (pinned transitively by next; only next@16
+        #                        clears it)
+        #     -> postcss runs at BUILD time on our own CSS (Tailwind /
+        #        autoprefixer). It never processes attacker-supplied CSS, so
+        #        the sourceMappingURL vector is not reachable.
         #
         # These suppress REAL advisories, they don't dismiss them. Re-check
-        # the conditions above before adding a rewrite or a Server Action,
-        # and drop all three IDs once Next is upgraded.
+        # the conditions above before adding a rewrite, a Server Action, or
+        # any path that runs postcss on untrusted CSS, and drop these IDs once
+        # Next is upgraded.
         run: npx audit-ci --config .audit-ci.json
 
       - name: Lint (next lint)
