@@ -26,7 +26,9 @@
     "GHSA-m99w-x7hq-7vfj",
     "GHSA-89xv-2m56-2m9x",
     "GHSA-p9j2-gv94-2wf4",
-    "GHSA-6g55-p6wh-862q"
+    "GHSA-6g55-p6wh-862q",
+    "GHSA-mh99-v99m-4gvg",
+    "GHSA-r28c-9q8g-f849"
   ],
   "report-type": "summary"
 }
