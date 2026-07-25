@@ -213,67 +213,53 @@ export async function checkOrderGate(
     return { allowed: true, ...baseResult };
   }
 
-  // Standard-plan clients (created on/after the 2026-06-06 cutoff) order out of
-  // a prepaid credit wallet: they must have a card on file AND enough credits
-  // for at least one request. Guarded fetch so pre-migration envs degrade to
-  // the legacy rules below. (migration-client-credits.sql)
+  // Standard-plan clients (created on/after the 2026-06-06 cutoff) unlock
+  // ordering with a CARD ON FILE — then buy credits or pay per request. Credit
+  // balance is no longer part of the allow/block decision (the debit still
+  // happens downstream on completion), so the gate only needs created_at and
+  // the card-exempt flag. Guarded fetch so pre-migration envs still resolve
+  // created_at. (migration-client-credits.sql / migration-trial-card-exempt.sql)
   let createdAt: string | null = null;
-  let creditBalance = 0;
-  let creditRate = 99.99;
   // Admin-granted: may consume the trial allowance with no card on file.
   // Sales-led accounts only — see migration-trial-card-exempt.sql.
   let trialCardExempt = false;
   {
     const cr = await adminSupabase.from('clients')
-      .select('created_at, credit_balance, credit_rate, trial_card_exempt').eq('id', clientId).single();
+      .select('created_at, trial_card_exempt').eq('id', clientId).single();
     if (!cr.error && cr.data) {
       createdAt = (cr.data as any).created_at ?? null;
-      creditBalance = Number((cr.data as any).credit_balance) || 0;
-      creditRate = Number((cr.data as any).credit_rate) > 0 ? Number((cr.data as any).credit_rate) : 99.99;
       trialCardExempt = !!(cr.data as any).trial_card_exempt;
     } else {
-      // Pre-migration fallback: retry without the newer columns so envs that
-      // haven't run migration-trial-card-exempt.sql still resolve created_at.
-      const cr2 = await adminSupabase.from('clients')
-        .select('created_at, credit_balance, credit_rate').eq('id', clientId).single();
-      if (!cr2.error && cr2.data) {
-        createdAt = (cr2.data as any).created_at ?? null;
-        creditBalance = Number((cr2.data as any).credit_balance) || 0;
-        creditRate = Number((cr2.data as any).credit_rate) > 0 ? Number((cr2.data as any).credit_rate) : 99.99;
-      } else {
-        const cr3 = await adminSupabase.from('clients').select('created_at').eq('id', clientId).single();
-        createdAt = cr3.data ? (cr3.data as any).created_at : null;
-      }
+      // Pre-migration fallback: retry without the newer column.
+      const cr3 = await adminSupabase.from('clients').select('created_at').eq('id', clientId).single();
+      createdAt = cr3.data ? (cr3.data as any).created_at : null;
     }
   }
   const STANDARD_PLAN_CUTOFF = '2026-06-06';
   if (!!createdAt && createdAt >= STANDARD_PLAN_CUTOFF) {
-    if (hasPaymentMethod && creditBalance >= creditRate) {
+    // Model (Matt 2026-07-24): a CARD ON FILE is what unlocks ordering. Once a
+    // card is saved, the customer can either prepay credits OR pay per request
+    // (PAYG — billed per completed transaction via the monthly per-TIN invoice
+    // / off-session charge). So a saved card alone is sufficient; a positive
+    // credit balance is a convenience, not a second gate. This replaces the
+    // earlier "card AND credits >= rate" requirement (which 402'd card-holding
+    // customers who simply hadn't prepaid) and the "first pull free" trial —
+    // there is no free pull; the card is the price of admission.
+    if (hasPaymentMethod) {
       return { allowed: true, ...baseResult };
     }
-    // Self-serve activation (2026-07-21): a card on file + an unused trial
-    // allowance is enough for the FIRST transcript — that's the whole promise
-    // of "add a card, place your first order free". Without this, the standard
-    // branch returned 402 'credits_required' before the trial rules below ever
-    // ran, so every self-serve signup was blocked despite a valid card.
-    // trialRemaining is lifetime-capped (completed_count < trial_entities_allowed),
-    // so it self-exhausts after the free pull — no decrementer needed.
-    // Sales-led accounts (2026-07-22): an admin-granted trial is consumable
-    // with NO card. We onboard these clients ourselves, so the card is not the
-    // trust signal here — our own decision to open the account is. Business
-    // Finance Capital was created post-cutoff and its manager was told she
-    // could order, but every attempt 402'd on card_required.
-    //
-    // Deliberately NOT folded into the line above: trial_card_exempt defaults
-    // to FALSE, so self-serve signups still need the card that replaced admin
-    // approval. The allowance stays the cap either way — trialRemaining is
-    // lifetime-capped against completed orders, so this self-exhausts.
-    if ((hasPaymentMethod || trialCardExempt) && trialRemaining > 0) {
+    // Sales-led comp (2026-07-22): an admin-granted card-exempt trial is
+    // consumable with NO card — accounts WE onboard for an eval (BFC,
+    // PetitionHQ, Biz2Credit). trial_card_exempt defaults to FALSE, so this is
+    // always a deliberate per-account exception, never the self-serve default.
+    // The allowance is the cap and self-exhausts against completed orders.
+    if (trialCardExempt && trialRemaining > 0) {
       return { allowed: true, ...baseResult };
     }
+    // No card, no comp → the one thing to do is add a card.
     return {
       allowed: false,
-      reason: !hasPaymentMethod ? 'card_required' : 'credits_required',
+      reason: 'card_required',
       status: 402,
       ...baseResult,
     };
@@ -334,14 +320,14 @@ export function buildOrderGateErrorBody(gate: OrderGateResult) {
       };
     case 'card_required':
       return {
-        error: `Add a payment method to place your first order. It takes about a minute, and your first transcript pull is on us — you won't be charged for it.`,
+        error: `Add a card on file to start ordering. Once it's saved you can buy credits up front or just pay per request — your choice.`,
         code: gate.reason,
         client_name: gate.clientName,
         cta: { label: 'Add a card', href: '/payment-method' },
         enroll_url: `${PORTAL}/payment-method`,
         next_steps: [
           'Open Payment Settings and add a card (Stripe-secured; we never see the number).',
-          'Your first pull is free — the card is just what activates ordering.',
+          'Then either buy credits up front, or pay per request — a card on file covers both.',
           'Place your order again and it will go straight through.',
         ],
         ...gateDisplayContext(gate),

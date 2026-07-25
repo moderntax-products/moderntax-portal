@@ -125,8 +125,6 @@ export default async function DashboardPage({
   let clientBillingRatePdf = PRICE_STANDARD; // $99.99 default for any client without an explicit contracted rate
   let clientBillingRateCsv = PRICE_STANDARD;
   let clientCreatedAt: string | null = null;
-  let clientCreditBalance = 0;
-  let clientCreditRate = PRICE_STANDARD;
   // SLA tier — server-rendered into PremiumSlaSurface so the component
   // never silently fails on a client-side RLS error. Two-phase select
   // (with column-existence fallback) so pre-migration envs still load.
@@ -153,8 +151,6 @@ export default async function DashboardPage({
     if (typeof clientRecord?.billing_rate_pdf === 'number') clientBillingRatePdf = clientRecord.billing_rate_pdf;
     if (typeof clientRecord?.billing_rate_csv === 'number') clientBillingRateCsv = clientRecord.billing_rate_csv;
     clientCreatedAt = clientRecord?.created_at ?? null;
-    if (typeof clientRecord?.credit_balance === 'number') clientCreditBalance = clientRecord.credit_balance;
-    if (typeof clientRecord?.credit_rate === 'number' && clientRecord.credit_rate > 0) clientCreditRate = clientRecord.credit_rate;
     if (clientRecord?.free_trial === false) clientFreeTrial = false;
     if (clientRecord?.monitoring_default_enabled === false) monitoringDefaultEnabled = false;
     if (clientRecord?.cash_flow_auto_attach === true) cashFlowAutoAttach = true;
@@ -211,20 +207,19 @@ export default async function DashboardPage({
   const trialRemaining = Math.max(0, TRIAL_FREE_PULLS - totalCompletedEntities);
   const trialExhausted = trialRemaining === 0;
   // New (standard-plan) clients — created on/after the cutoff — must have a
-  // card on file BEFORE they can order; every order is then auto-billed per
-  // order (Stripe). This is the $99.99 plan introduced 2026-06-06.
+  // card on file BEFORE they can order. Model (Matt 2026-07-24): the CARD is
+  // what unlocks ordering; once it's on file the customer buys credits OR pays
+  // per request (PAYG). A credit balance is a convenience, not a second gate —
+  // mirrors the order-gate standard branch exactly.
   const isStandardPlanClient = !!clientCreatedAt && clientCreatedAt >= STANDARD_PLAN_CUTOFF;
-  // Standard-plan clients order out of a prepaid credit wallet: they must have
-  // a card on file AND enough credits to cover at least one request.
-  const hasEnoughCredits = clientCreditBalance >= clientCreditRate;
 
   // Hard-block ordering when:
-  //   • standard-plan (new) client without a card OR without enough credits, OR
+  //   • standard-plan (new) client without a card on file, OR
   //   • legacy client whose trial is used AND no card AND no recent paid invoice.
   // Established Mercury ACH customers (paid invoice in last 90 days) keep
   // ordering normally — manager still gets a softer nudge to add a card.
   const needsPaymentMethod = isStandardPlanClient
-    ? (!hasPaymentMethod || !hasEnoughCredits)
+    ? !hasPaymentMethod
     : (trialExhausted && !hasPaymentMethod && !hasRecentPaidInvoice);
   const managerShouldAddCard = !isStandardPlanClient && trialExhausted && !hasPaymentMethod && hasRecentPaidInvoice;
 
@@ -735,9 +730,11 @@ export default async function DashboardPage({
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-red-900">New orders paused — payment method required</h3>
+                  <h3 className="text-lg font-bold text-red-900">Add a card to start ordering</h3>
                   <p className="text-sm text-red-800 mt-1 leading-relaxed">
-                    Your team has used all {TRIAL_FREE_PULLS} free trial pulls ({totalCompletedEntities} completed). Add a card or bank account to keep ordering. Auto-charges happen at completion at your tier&rsquo;s per-pull rate — no setup fee, cancel anytime.
+                    {isStandardPlanClient
+                      ? <>A card on file is all it takes to order. Once it&rsquo;s saved you can buy credits up front or just pay per request &mdash; a completed pull is billed at your tier&rsquo;s rate. No setup fee, cancel anytime.</>
+                      : <>Your team has used all {TRIAL_FREE_PULLS} free trial pulls ({totalCompletedEntities} completed). Add a card or bank account to keep ordering. Auto-charges happen at completion at your tier&rsquo;s per-pull rate &mdash; no setup fee, cancel anytime.</>}
                   </p>
                   {!isManager && (
                     <p className="text-xs text-red-700 mt-2 italic">

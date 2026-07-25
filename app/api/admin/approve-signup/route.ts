@@ -141,19 +141,16 @@ export async function POST(request: NextRequest) {
         slug,
         domain: new_client.domain.trim().toLowerCase(),
         intake_methods: ['csv', 'pdf', 'manual'],
-        free_trial: new_client.free_trial !== false, // default true for new clients
-        // Born ORDERABLE (2026-07-24). Without this, the client's created_at
-        // defaults to now() >= STANDARD_PLAN_CUTOFF, so it lands in the
-        // standard-plan gate branch, which needs a card + credits and 402s the
-        // FIRST order — while approval reports success. That "born blocked"
-        // state stranded Elena (BFC) and is the manual step we kept repeating
-        // for every sales-led account (BFC, PetitionHQ, PetitionHQ...). An
-        // account WE onboard is trusted, so seed a card-free trial: the first
-        // orders clear and billing converts the account afterward. The
-        // allowance is the cap and self-exhausts, so this is not unlimited
-        // free ordering.
-        trial_entities_allowed: 2,
-        trial_card_exempt: true,
+        // No free trial. Model (Matt 2026-07-24): a card on file is what unlocks
+        // ordering — buy credits or pay per request. New accounts are born
+        // needing a card, which the gate reports as an ACTIONABLE 'card_required'
+        // ("add a card"), not the old dead-end. This deliberately drops the
+        // brief card-free-trial seeding (#91): that gave 2 free pulls, which the
+        // card-on-file model replaces. Sales-led evals that should skip the card
+        // (BFC, PetitionHQ, Biz2Credit) still get trial_card_exempt set
+        // explicitly per-account — it is a deliberate exception, never the
+        // default.
+        free_trial: false,
       })
       .select('id, name')
       .single() as { data: { id: string; name: string } | null; error: any };
@@ -220,14 +217,19 @@ export async function POST(request: NextRequest) {
   // where a stale zero-credit client is the usual culprit.
   let orderReady = true;
   let orderBlockReason: string | null = null;
+  // 'card_required' is the EXPECTED state for a fresh account under the
+  // card-on-file model — the customer self-serves it by adding a card, nothing
+  // for the admin to fix. Only reasons the admin must act on (no client, a
+  // stale mercury/credits misconfig, a gate error) should raise the warning.
+  const adminMustFix = (r: string | null) => !!r && r !== 'card_required';
   if (assignedClientId) {
     try {
       const { checkOrderGate } = await import('@/lib/order-gate');
       const gate = await checkOrderGate(admin, assignedClientId);
       orderReady = gate.allowed;
       orderBlockReason = gate.allowed ? null : (gate.reason || 'blocked');
-      if (!gate.allowed) {
-        console.warn(`[approve-signup] APPROVED BUT BLOCKED: ${target.email} on client ${assignedClientId} — gate=${gate.reason}. Customer cannot order until fixed.`);
+      if (adminMustFix(orderBlockReason)) {
+        console.warn(`[approve-signup] APPROVED BUT BLOCKED: ${target.email} on client ${assignedClientId} — gate=${gate.reason}. Admin must fix before the customer can order.`);
       }
     } catch (gateErr) {
       console.error('[approve-signup] post-approval gate check failed (non-blocking):', gateErr);
@@ -241,11 +243,13 @@ export async function POST(request: NextRequest) {
     client_id: assignedClientId,
     client_name: assignedClientName,
     role: assignedRole,
-    // The admin UI should surface this prominently when false — an approved
-    // customer who still can't order is the exact failure we're closing.
+    // true = can order now (card-exempt eval or existing billing). false with
+    // reason 'card_required' just means the customer adds a card first — normal.
     order_ready: orderReady,
-    ...(orderReady ? {} : {
-      warning: `Approved, but this account still can't place an order (gate: ${orderBlockReason}). Fix its billing/trial setup before the customer tries — check /admin/platform.`,
-    }),
+    order_block_reason: orderBlockReason,
+    // Only surfaced when the ADMIN must act (not the routine add-a-card case).
+    ...(adminMustFix(orderBlockReason) ? {
+      warning: `Approved, but this account can't order for a reason the customer can't self-fix (gate: ${orderBlockReason}). Sort its billing setup before they try — check /admin/platform.`,
+    } : {}),
   });
 }
