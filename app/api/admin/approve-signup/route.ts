@@ -142,6 +142,18 @@ export async function POST(request: NextRequest) {
         domain: new_client.domain.trim().toLowerCase(),
         intake_methods: ['csv', 'pdf', 'manual'],
         free_trial: new_client.free_trial !== false, // default true for new clients
+        // Born ORDERABLE (2026-07-24). Without this, the client's created_at
+        // defaults to now() >= STANDARD_PLAN_CUTOFF, so it lands in the
+        // standard-plan gate branch, which needs a card + credits and 402s the
+        // FIRST order — while approval reports success. That "born blocked"
+        // state stranded Elena (BFC) and is the manual step we kept repeating
+        // for every sales-led account (BFC, PetitionHQ, PetitionHQ...). An
+        // account WE onboard is trusted, so seed a card-free trial: the first
+        // orders clear and billing converts the account afterward. The
+        // allowance is the cap and self-exhausts, so this is not unlimited
+        // free ordering.
+        trial_entities_allowed: 2,
+        trial_card_exempt: true,
       })
       .select('id, name')
       .single() as { data: { id: string; name: string } | null; error: any };
@@ -199,6 +211,29 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  // Post-approval gate check (2026-07-24). Approval used to report success
+  // without ever verifying the customer could actually place an order — which
+  // is how Elena, Joaquin and Stephen ended up approved-but-blocked with no
+  // signal to anyone. Run the real gate now; if it still blocks, the approval
+  // stands (the account exists) but the admin gets a loud warning to fix it
+  // BEFORE the customer hits the wall. Covers the existing-client path too,
+  // where a stale zero-credit client is the usual culprit.
+  let orderReady = true;
+  let orderBlockReason: string | null = null;
+  if (assignedClientId) {
+    try {
+      const { checkOrderGate } = await import('@/lib/order-gate');
+      const gate = await checkOrderGate(admin, assignedClientId);
+      orderReady = gate.allowed;
+      orderBlockReason = gate.allowed ? null : (gate.reason || 'blocked');
+      if (!gate.allowed) {
+        console.warn(`[approve-signup] APPROVED BUT BLOCKED: ${target.email} on client ${assignedClientId} — gate=${gate.reason}. Customer cannot order until fixed.`);
+      }
+    } catch (gateErr) {
+      console.error('[approve-signup] post-approval gate check failed (non-blocking):', gateErr);
+    }
+  }
+
   return NextResponse.json({
     success: true,
     action: 'approved',
@@ -206,5 +241,11 @@ export async function POST(request: NextRequest) {
     client_id: assignedClientId,
     client_name: assignedClientName,
     role: assignedRole,
+    // The admin UI should surface this prominently when false — an approved
+    // customer who still can't order is the exact failure we're closing.
+    order_ready: orderReady,
+    ...(orderReady ? {} : {
+      warning: `Approved, but this account still can't place an order (gate: ${orderBlockReason}). Fix its billing/trial setup before the customer tries — check /admin/platform.`,
+    }),
   });
 }

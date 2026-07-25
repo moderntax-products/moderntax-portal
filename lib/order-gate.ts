@@ -305,24 +305,79 @@ export async function checkOrderGate(
  * consistent across CSV/PDF/email intake endpoints.
  */
 export function buildOrderGateErrorBody(gate: OrderGateResult) {
-  const isMercuryBlock = gate.reason === 'mercury_required';
+  // Every blocked reason now returns an ACTIONABLE body — a specific message,
+  // a CTA, and next steps. Previously only 'mercury_required' did; the two
+  // reasons the standard-plan branch actually returns for a first-time
+  // customer ('card_required', 'credits_required') fell through to a generic
+  // "Account not configured for orders. Contact support." with null CTA/links.
+  // That dead-end was independently flagged by two activation audits as the
+  // single most likely first-order conversion killer (2026-07-24): it hits
+  // exactly the newly-approved customers who make up the 54% who never place
+  // a second — sorry, a FIRST — order. A blocked order should always tell the
+  // customer the one thing they can do about it.
+  const PORTAL = 'https://portal.moderntax.io';
+  switch (gate.reason) {
+    case 'mercury_required':
+      return {
+        error: `Payment method required. Connect your Mercury account to submit new requests — open Payment Settings on the Invoicing page (2-min self-serve flow). Existing in-flight requests are unaffected.`,
+        code: gate.reason,
+        client_name: gate.clientName,
+        cta: { label: 'Connect Mercury account', href: '/invoicing#payment-settings' },
+        enroll_url: `${PORTAL}/invoicing`,
+        next_steps: [
+          'Sign in to portal.moderntax.io and open the Invoicing page.',
+          'In the Payment Settings card, fill in AP email + billing address (one-time), then click Enroll Mercury.',
+          'Mercury auto-creates the customer record + sends future invoices to your AP email — ACH-payable from your bank in one click.',
+          'Existing in-flight requests are unaffected; only NEW requests are gated until enrollment completes.',
+        ],
+        ...gateDisplayContext(gate),
+      };
+    case 'card_required':
+      return {
+        error: `Add a payment method to place your first order. It takes about a minute, and your first transcript pull is on us — you won't be charged for it.`,
+        code: gate.reason,
+        client_name: gate.clientName,
+        cta: { label: 'Add a card', href: '/payment-method' },
+        enroll_url: `${PORTAL}/payment-method`,
+        next_steps: [
+          'Open Payment Settings and add a card (Stripe-secured; we never see the number).',
+          'Your first pull is free — the card is just what activates ordering.',
+          'Place your order again and it will go straight through.',
+        ],
+        ...gateDisplayContext(gate),
+      };
+    case 'credits_required':
+      return {
+        error: `Your prepaid balance is used up. Top up your credits to keep ordering — it's instant and you can buy exactly what you need.`,
+        code: gate.reason,
+        client_name: gate.clientName,
+        cta: { label: 'Buy credits', href: '/billing/buy-credits' },
+        enroll_url: `${PORTAL}/billing/buy-credits`,
+        next_steps: [
+          'Open Buy Credits and choose an amount (covers as many pulls as you need).',
+          'Credits apply immediately — no waiting on an invoice.',
+          'Re-submit your order and it clears against the new balance.',
+        ],
+        ...gateDisplayContext(gate),
+      };
+    default:
+      // Genuinely unknown state — keep the honest fallback, but point at a
+      // human instead of a dead link, and surface the code for support.
+      return {
+        error: `We couldn't place this order and it isn't something you can fix from here (code: ${gate.reason || 'unknown'}). Reply to this or email support@moderntax.io and we'll sort it out fast.`,
+        code: gate.reason,
+        client_name: gate.clientName,
+        cta: { label: 'Email support', href: 'mailto:support@moderntax.io' },
+        enroll_url: null,
+        next_steps: null,
+        ...gateDisplayContext(gate),
+      };
+  }
+}
+
+/** Shared display context appended to every gate error body. */
+function gateDisplayContext(gate: OrderGateResult) {
   return {
-    error: isMercuryBlock
-      ? `Payment method required. Connect your Mercury account to submit new requests — open Payment Settings on the Invoicing page (2-min self-serve flow). Existing in-flight requests are unaffected.`
-      : 'Account not configured for orders. Contact support.',
-    code: gate.reason,
-    client_name: gate.clientName,
-    cta: isMercuryBlock
-      ? { label: 'Connect Mercury account', href: '/invoicing#payment-settings' }
-      : null,
-    enroll_url: isMercuryBlock ? 'https://portal.moderntax.io/invoicing' : null,
-    next_steps: isMercuryBlock ? [
-      'Sign in to portal.moderntax.io and open the Invoicing page.',
-      'In the Payment Settings card, fill in AP email + billing address (one-time), then click Enroll Mercury.',
-      'Mercury auto-creates the customer record + sends future invoices to your AP email — ACH-payable from your bank in one click.',
-      'Existing in-flight requests are unaffected; only NEW requests are gated until enrollment completes.',
-    ] : null,
-    // Display context (no longer affects allow/block decisions but useful for UI)
     completed_count: gate.completedCount,
     trial_remaining: gate.trialRemaining,
     has_recent_paid_invoice: gate.hasRecentPaidInvoice,
