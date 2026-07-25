@@ -83,11 +83,19 @@ jobs:
         #     -> postcss runs at BUILD time on our own CSS (Tailwind /
         #        autoprefixer). It never processes attacker-supplied CSS, so
         #        the sourceMappingURL vector is not reachable.
+        #   GHSA-r28c-9q8g-f849  PostCSS path traversal in previous-source-map
+        #                        auto-loading (sibling of 6g55; pinned by next).
+        #     -> same reasoning: postcss runs at BUILD time on our own
+        #        Tailwind/autoprefixer CSS, never on attacker-supplied input.
+        #   GHSA-mh99-v99m-4gvg  brace-expansion DoS via unbounded expansion
+        #                        (out-of-memory crash).
+        #     -> transitive BUILD-TIME dep (eslint tooling / minimatch); it
+        #        never expands untrusted runtime input in the shipped app.
         #
         # These suppress REAL advisories, they don't dismiss them. Re-check
         # the conditions above before adding a rewrite, a Server Action, or
-        # any path that runs postcss on untrusted CSS, and drop these IDs once
-        # Next is upgraded.
+        # any path that runs postcss / brace-expansion on untrusted input, and
+        # drop these IDs once the pinning dep (next / eslint) is upgraded.
         run: npx audit-ci --config .audit-ci.json
 
       - name: Lint (next lint)
