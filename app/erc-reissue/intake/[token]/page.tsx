@@ -13,12 +13,13 @@ import ErcIntakeForm from './ErcIntakeForm';
 import { formatUsdAmount } from '@/lib/erc-reissue';
 
 interface PageProps {
-  params: { token: string };
+  params: Promise<{ token: string }>;
 }
 
 export const dynamic = 'force-dynamic';
 
-export default async function ErcIntakePage({ params }: PageProps) {
+export default async function ErcIntakePage(props: PageProps) {
+  const params = await props.params;
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,

@@ -20,7 +20,8 @@ export const runtime = 'nodejs';
 
 const CUSTOMER_VISIBLE_KINDS = ['question', 'answer', 'note', 'support'];
 
-export async function GET(_request: NextRequest, { params }: { params: { token: string } }) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) return NextResponse.json({ error: 'This link is no longer valid.' }, { status: 404 });
   const admin = createAdminClient();
@@ -40,7 +41,8 @@ export async function GET(_request: NextRequest, { params }: { params: { token: 
   return NextResponse.json({ notes: thread });
 }
 
-export async function POST(request: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) {
     try {

@@ -49,10 +49,8 @@ const STAGE_DEFS: { key: string; label: string; merchantCopy: string }[] = [
   { key: 'check_received',            label: 'Check received',               merchantCopy: 'You confirmed receipt of both checks. Engagement complete!' },
 ];
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { token: string } },
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const cookieStore = await cookies();
   const supabase = createServerRouteClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();

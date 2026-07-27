@@ -63,12 +63,14 @@ type ReviewData = {
 
 const money = (n?: number) => (typeof n === 'number' ? `$${n.toLocaleString('en-US')}` : '—');
 
-export default async function ReviewPage({
-  params, searchParams,
-}: {
-  params: { token: string };
-  searchParams?: { paid?: string; cancel?: string };
-}) {
+export default async function ReviewPage(
+  props: {
+    params: Promise<{ token: string }>;
+    searchParams?: Promise<{ paid?: string; cancel?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) {
     return <Notice title="This link isn’t valid" body="The link may be mistyped or expired. Please use the most recent link we emailed you." />;

@@ -16,12 +16,10 @@ import { PRICE_STANDARD } from '@/lib/pricing';
 // their existing ordering flow (Mercury ACH / trial). (2026-06-06 directive)
 const STANDARD_PLAN_CUTOFF = '2026-06-06';
 
-export default async function DashboardPage({
-  searchParams,
-}: {
+export default async function DashboardPage(props: {
   searchParams?: Promise<{ search?: string; status?: string; mine?: string }>;
 }) {
-  const params: { search?: string; status?: string; mine?: string } = searchParams ? await searchParams : {};
+  const params: { search?: string; status?: string; mine?: string } = (await props.searchParams) ?? {};
   const searchQuery = (params.search ?? '').trim();
   const statusFilter = params.status ?? 'all';
   const mineOnly = params.mine === '1';

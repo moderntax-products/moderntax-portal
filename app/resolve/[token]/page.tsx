@@ -1,11 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
 interface ResolvePageProps {
-  params: { token: string };
-  searchParams: { unsubscribe?: string };
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ unsubscribe?: string }>;
 }
 
-export default async function ResolvePage({ params, searchParams }: ResolvePageProps) {
+export default async function ResolvePage(props: ResolvePageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!

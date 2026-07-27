@@ -54,7 +54,8 @@ function formatAddr(addr: any): string {
   return [line1, csz].filter(Boolean).join(', ');
 }
 
-export default async function AuthorizePage({ params }: { params: { token: string } }) {
+export default async function AuthorizePage(props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) {
     return <Notice title="This link isn’t valid" body="The link may be mistyped or expired. Please use the most recent link we emailed you." />;
@@ -98,7 +99,6 @@ export default async function AuthorizePage({ params }: { params: { token: strin
       <div style={{ color: C.muted, fontSize: 15, marginBottom: 20 }}>
         {entity.entity_name} · EIN {ein} · Confidential
       </div>
-
       {/* Recoverable summary */}
       <div style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, padding: '20px 22px', margin: '16px 0' }}>
         <div style={{ fontSize: 12.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em', color: C.muted }}>Confirmed recoverable from the IRS</div>
@@ -124,7 +124,6 @@ export default async function AuthorizePage({ params }: { params: { token: strin
           </table>
         )}
       </div>
-
       {/* The one step left */}
       <div style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, padding: '20px 22px', margin: '16px 0' }}>
         <h2 style={{ fontSize: 17, margin: '0 0 8px' }}>You’re one step away</h2>
@@ -138,7 +137,6 @@ export default async function AuthorizePage({ params }: { params: { token: strin
           already paid; there’s nothing more to pay.
         </p>
       </div>
-
       {alreadyConfirmed ? (
         <div style={{ background: '#eef7f0', border: '1px solid #bfe0c9', borderRadius: 12, padding: 24, textAlign: 'center', margin: '16px 0' }}>
           <h2 style={{ margin: '0 0 8px', fontSize: 18, color: C.good }}>Thanks — noted ✓</h2>
@@ -183,7 +181,6 @@ export default async function AuthorizePage({ params }: { params: { token: strin
           </div>
         </>
       )}
-
       <div style={{ color: C.muted, fontSize: 12.5, marginTop: 28, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
         Refund amounts and timing are confirmed by the IRS, not ModernTax, and IRS processing times are outside our control. The
         reissued checks are mailed directly to you; ModernTax never receives, endorses, or deposits them. © 2026 ModernTax, Inc.

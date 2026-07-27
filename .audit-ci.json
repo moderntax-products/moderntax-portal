@@ -4,31 +4,9 @@
   "high": true,
   "critical": true,
   "allowlist": [
-    "GHSA-9g9p-9gw9-jx7f",
-    "GHSA-h25m-26qc-wcjf",
-    "GHSA-ggv3-7p47-pfv8",
-    "GHSA-3x4c-7xq6-9pq8",
-    "GHSA-q4gf-8mx6-v5v3",
-    "GHSA-8h8q-6873-q5fj",
-    "GHSA-3g8h-86w9-wvmq",
-    "GHSA-ffhc-5mcf-pf4q",
-    "GHSA-vfv6-92ff-j949",
-    "GHSA-gx5p-jg67-6x7h",
-    "GHSA-h64f-5h5j-jqjh",
-    "GHSA-c4j6-fc7j-m34r",
-    "GHSA-wfc6-r584-vfw7",
-    "GHSA-36qx-fr4f-26g5",
     "GHSA-4r6h-8v6p-xvw6",
     "GHSA-5pgg-2g8v-p4x9",
-    "GHSA-5j98-mcp5-4vw2",
-    "GHSA-hmw2-7cc7-3qxx",
-    "GHSA-96hv-2xvq-fx4p",
-    "GHSA-m99w-x7hq-7vfj",
-    "GHSA-89xv-2m56-2m9x",
-    "GHSA-p9j2-gv94-2wf4",
-    "GHSA-6g55-p6wh-862q",
-    "GHSA-mh99-v99m-4gvg",
-    "GHSA-r28c-9q8g-f849"
+    "GHSA-mh99-v99m-4gvg"
   ],
   "report-type": "summary"
 }
