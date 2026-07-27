@@ -103,6 +103,34 @@ export const PRICE_ENTITY_TRANSCRIPT = 0;
 /** SBA Cash-Flow Pack PDF (auto-generated after transcripts complete). */
 export const PRICE_CASH_FLOW_PACK = 49.99;
 
+/**
+ * Payroll-Liability Report add-on (2026-07-25, SBA-lender ask via Cal
+ * Statewide). Pulls the entity's Form 941 (employer quarterly payroll)
+ * account transcripts and reports any outstanding payroll-tax liability,
+ * unfiled quarters, and Trust Fund Recovery exposure — the lien risk SBA
+ * underwriters care about. Two-tier price: prepay clients (credit pool /
+ * subscription) get $22; one-off (PAYG) buyers pay $30 full.
+ */
+export const PRICE_PAYROLL_LIABILITY = 30;       // one-off / PAYG full add-on
+export const PRICE_PAYROLL_LIABILITY_PREPAY = 22; // credit-pool / subscription clients
+
+/**
+ * A client "prepays" when they order out of a credit pool or a subscription —
+ * i.e. the money is already with us. Those clients get the $22 rate; everyone
+ * else (per-request PAYG) pays the $30 one-off. Resolved at attach time and
+ * captured on the entity so a later billing-model change never re-prices a
+ * report already delivered.
+ */
+export function payrollLiabilityPrice(client: {
+  credit_balance?: number | null;
+  billing_model?: string | null;
+} | null | undefined): { price: number; prepay: boolean } {
+  const prepay =
+    (Number(client?.credit_balance) || 0) > 0 ||
+    client?.billing_model === 'subscription';
+  return { price: prepay ? PRICE_PAYROLL_LIABILITY_PREPAY : PRICE_PAYROLL_LIABILITY, prepay };
+}
+
 /** Monitoring enrollment fee (one-time per entity at enroll). */
 export const PRICE_MONITORING_MONTHLY = 19.99;
 

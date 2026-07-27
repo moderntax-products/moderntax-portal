@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
+import { applyPayrollLiabilityAutoAttach } from '@/lib/payroll-liability';
 import { sendAdminNewRequestNotification } from '@/lib/sendgrid';
 import { validateFormTypeMatchesTidKind, inferFormTypeFromTidKind } from '@/lib/form-type-validation';
 import { sha256Hex, safeEqual } from '@/lib/auth-util';
@@ -351,6 +352,16 @@ export async function POST(request: NextRequest) {
       fullyServed = result.requestCompleted;
     } catch (fulfillErr) {
       console.error('[transcript-intake] auto-fulfill-from-record error (non-fatal):', fulfillErr);
+    }
+
+    // Payroll-Liability Report auto-attach (no-op unless the client opted in).
+    try {
+      const n = await applyPayrollLiabilityAutoAttach(supabase, req.id, {
+        userId: (client as any)?.id || 'api', name: (client as any)?.name || 'API intake',
+      });
+      if (n > 0) console.log(`[transcript-intake] payroll-liability add-on attached to ${n} entity(ies)`);
+    } catch (plErr) {
+      console.warn('[transcript-intake] payroll-liability auto-attach failed (non-fatal):', plErr);
     }
 
     // --- Usage stats ---
