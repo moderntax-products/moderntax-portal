@@ -18,7 +18,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 
-const ALLOWED_FLAGS = ['monitoring_default_enabled', 'cash_flow_auto_attach'] as const;
+const ALLOWED_FLAGS = ['monitoring_default_enabled', 'cash_flow_auto_attach', 'payroll_liability_auto_attach'] as const;
 type AllowedFlag = (typeof ALLOWED_FLAGS)[number];
 
 export async function POST(request: NextRequest) {

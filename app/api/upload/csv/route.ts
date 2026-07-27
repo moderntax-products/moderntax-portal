@@ -13,6 +13,7 @@ import {
   normalizeFormType,
   validateFormTypeMatchesTidKind,
 } from '@/lib/form-type-validation';
+import { applyPayrollLiabilityAutoAttach } from '@/lib/payroll-liability';
 import * as XLSX from 'xlsx';
 
 // Vision-extracting up to 15 pre-signed 8821 PDFs (Centerstone flat-rate
@@ -908,6 +909,16 @@ export async function POST(request: NextRequest) {
       autogen8821 = { generated: gen.generated.length, emailed: gen.emailed };
     } catch (genErr) {
       console.warn('[csv-upload] 8821 autogen failed (non-fatal):', genErr);
+    }
+
+    // Payroll-Liability Report auto-attach (no-op unless the client opted in).
+    try {
+      const n = await applyPayrollLiabilityAutoAttach(admin, req.id, {
+        userId: user.id, name: profile.full_name || user.email || 'ModernTax',
+      });
+      if (n > 0) console.log(`[csv-upload] payroll-liability add-on attached to ${n} entity(ies)`);
+    } catch (plErr) {
+      console.warn('[csv-upload] payroll-liability auto-attach failed (non-fatal):', plErr);
     }
 
     // Notify all admins about the new request in real-time
