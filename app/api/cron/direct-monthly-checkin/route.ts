@@ -51,6 +51,9 @@ export async function GET(request: NextRequest) {
   let sent = 0;
   let shadow = 0;
   let skipped = 0;
+  // Dedupe by email — a customer with several entities gets ONE monthly note,
+  // not one per entity (but we still stamp every entity so the throttle holds).
+  const emailedThisRun = new Set<string>();
 
   for (const entity of entities || []) {
     const r = buildCheckin(entity);
@@ -60,6 +63,19 @@ export async function GET(request: NextRequest) {
     const gr = entity.gross_receipts || {};
     const lastSent = gr.checkin?.last_sent_at ? Date.parse(gr.checkin.last_sent_at) : 0;
     if (lastSent && now - lastSent < RESEND_THROTTLE_DAYS * DAY_MS) { skipped++; continue; }
+
+    // Already sent to this customer this run — stamp the entity and move on.
+    const emailKey = r.email.trim().toLowerCase();
+    if (emailedThisRun.has(emailKey)) {
+      const history0 = Array.isArray(gr.checkin?.history) ? gr.checkin.history : [];
+      history0.push({ month: monthLabel, mode: 'deduped', subject: '(covered by another entity)', sent_at: new Date(now).toISOString() });
+      await admin.from('request_entities').update({
+        gross_receipts: { ...gr, checkin: { ...(gr.checkin || {}), last_sent_at: new Date(now).toISOString(), count: (gr.checkin?.count || 0) + 1, history: history0 } },
+      }).eq('id', entity.id);
+      skipped++;
+      continue;
+    }
+    emailedThisRun.add(emailKey);
 
     const { subject, html, text } = checkinEmail(r, monthLabel);
     const mode = autoSend ? 'sent' : 'shadow';

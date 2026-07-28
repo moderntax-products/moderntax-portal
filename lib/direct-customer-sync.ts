@@ -16,6 +16,7 @@
  */
 
 import { listMercuryInvoices, listMercuryCustomers } from '@/lib/mercury';
+import { validateEmailDeliverable } from '@/lib/email-validate';
 
 /**
  * Name fragments identifying our B2B partner/lender clients — these are the
@@ -44,6 +45,8 @@ export interface SyncResult {
   directPayers: DirectPayer[];
   taggedEntities: { entityId: string; entityName: string; source: string; amount: number | null }[];
   directClientEntities: number;
+  /** Contacts whose email won't deliver (bad format / no MX) — need attention. */
+  undeliverable: { entityName: string; email: string; reason: string }[];
   errors: string[];
 }
 
@@ -58,6 +61,7 @@ export async function syncDirectCustomersFromMercury(
   const dryRun = !!opts.dryRun;
   const errors: string[] = [];
   const taggedEntities: SyncResult['taggedEntities'] = [];
+  const undeliverable: SyncResult['undeliverable'] = [];
 
   // ── 1. Mercury paid customers → Direct payers ─────────────────────────────
   let directPayers: DirectPayer[] = [];
@@ -82,6 +86,15 @@ export async function syncDirectCustomersFromMercury(
   const nowIso = new Date().toISOString();
   async function tag(entity: any, source: string, amount: number | null, email: string | null) {
     const gr = entity.gross_receipts || {};
+    const resolvedEmail = email || gr.direct_customer?.email || gr.owner_contact?.email || null;
+
+    // Validate deliverability (format + MX) so a dead/typo'd domain is flagged
+    // before the monthly check-in tries to send to it.
+    const check = await validateEmailDeliverable(resolvedEmail);
+    if (resolvedEmail && !check.valid) {
+      undeliverable.push({ entityName: entity.entity_name, email: resolvedEmail, reason: check.reason });
+    }
+
     const next = {
       ...gr,
       direct_customer: {
@@ -89,7 +102,8 @@ export async function syncDirectCustomersFromMercury(
         paying: true,
         source,
         amount: amount ?? gr.direct_customer?.amount ?? null,
-        email: email || gr.direct_customer?.email || gr.owner_contact?.email || null,
+        email: resolvedEmail,
+        email_check: { valid: check.valid, reason: check.reason, checked_at: check.checkedAt },
         synced_at: nowIso,
       },
     };
@@ -131,5 +145,5 @@ export async function syncDirectCustomersFromMercury(
     }
   }
 
-  return { dryRun, directPayers, taggedEntities, directClientEntities, errors };
+  return { dryRun, directPayers, taggedEntities, directClientEntities, undeliverable, errors };
 }

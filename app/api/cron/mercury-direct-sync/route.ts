@@ -35,8 +35,9 @@ export async function GET(request: NextRequest) {
     console.log(
       `[mercury-direct-sync] ${dryRun ? 'DRY-RUN ' : ''}payers=${result.directPayers.length} ` +
       `tagged=${result.taggedEntities.length} directClient=${result.directClientEntities} ` +
-      `errors=${result.errors.length}`,
+      `undeliverable=${result.undeliverable.length} errors=${result.errors.length}`,
     );
+    if (result.undeliverable.length) console.warn('[mercury-direct-sync] undeliverable emails:', result.undeliverable);
     if (result.errors.length) console.warn('[mercury-direct-sync] errors:', result.errors);
     return NextResponse.json({
       ok: true,
@@ -44,6 +45,7 @@ export async function GET(request: NextRequest) {
       payers: result.directPayers.map((p) => ({ name: p.name, paid: p.paid })),
       tagged: result.taggedEntities.length,
       directClientEntities: result.directClientEntities,
+      undeliverable: result.undeliverable,
       errors: result.errors,
     });
   } catch (err: any) {
