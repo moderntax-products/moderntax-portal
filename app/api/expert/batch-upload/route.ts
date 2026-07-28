@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
       .from('expert_assignments')
       .select(`
         id, entity_id, status,
-        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls, transcript_html_urls, status, request_id,
+        request_entities(id, entity_name, tid, tid_kind, form_type, years, transcript_urls, transcript_html_urls, status, request_id, gross_receipts,
           requests(client_id, requested_by, loan_number))
       `)
       .eq('expert_id', profile.id)
@@ -193,21 +193,48 @@ export async function POST(request: NextRequest) {
         // Only one TIN match — safe to use
         match = tinMatches[0];
         matchStrategy = 'tin-only (unique)';
-      } else if (tinMatches.length > 1 && transcriptName) {
-        // Multiple TIN matches — pick the one with best name similarity
-        let bestScore = 0;
-        for (const candidate of tinMatches) {
-          const score = nameSimilarity(candidate.request_entities?.entity_name || '');
-          if (score > bestScore) {
-            bestScore = score;
-            match = candidate;
-          }
-        }
-        if (match) matchStrategy = `tin+name (score=${bestScore.toFixed(2)}, ${tinMatches.length} candidates)`;
       } else if (tinMatches.length > 1) {
-        // Multiple TIN matches, no name to disambiguate — use first (avoid wrong match)
-        match = tinMatches[0];
-        matchStrategy = `tin-only (first of ${tinMatches.length})`;
+        // Multiple entities share this EIN — the common case is a completed
+        // base order (e.g. 1120S) plus an open re-order for the SAME EIN. Name
+        // similarity alone can't tell them apart (identical entity names), so
+        // it used to coin-flip and could file 941 quarters onto the closed
+        // 1120S instead of the payroll re-order. Narrow the pool first.
+        const isPayrollForm = ['941', '940', '943', '944'].includes(targetForm);
+        let pool = tinMatches;
+
+        // (a) Payroll transcripts belong to the entity that actually ORDERED
+        // the payroll-liability add-on — a plain 1120S order can't be their home.
+        if (isPayrollForm) {
+          const addonMatches = tinMatches.filter(
+            (a: any) => a.request_entities?.gross_receipts?.payroll_liability_order?.requested === true
+          );
+          if (addonMatches.length > 0) pool = addonMatches;
+        }
+
+        // (b) Prefer still-open entities over completed ones — a re-order beats
+        // a closed base order when both carry the same EIN.
+        const openPool = pool.filter((a: any) => a.request_entities?.status !== 'completed');
+        const finalPool = openPool.length > 0 ? openPool : pool;
+
+        if (finalPool.length === 1) {
+          match = finalPool[0];
+          matchStrategy = isPayrollForm ? 'tin+payroll-addon' : 'tin+open (unique)';
+        } else if (transcriptName) {
+          // Still ambiguous — disambiguate by name similarity within the pool
+          let bestScore = 0;
+          for (const candidate of finalPool) {
+            const score = nameSimilarity(candidate.request_entities?.entity_name || '');
+            if (score > bestScore) {
+              bestScore = score;
+              match = candidate;
+            }
+          }
+          if (!match) match = finalPool[0];
+          matchStrategy = `tin+name (score=${bestScore.toFixed(2)}, ${finalPool.length}/${tinMatches.length} candidates)`;
+        } else {
+          match = finalPool[0];
+          matchStrategy = `tin-only (first of ${finalPool.length}/${tinMatches.length})`;
+        }
       }
     }
 
