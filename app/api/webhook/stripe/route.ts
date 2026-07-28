@@ -188,6 +188,59 @@ export async function POST(request: NextRequest) {
           break;
         }
 
+        // -------------------------------------------------------------------
+        // ModernTax Direct Purchase Order (multi-line outcome services). On
+        // success: flip the entity's PO approved → paid, stamp the amount +
+        // Stripe ref, append to the payment ledger, and draw down any account
+        // credit that was applied as a coupon. Idempotent via credit_ledger
+        // stripe_ref = session.id.
+        // -------------------------------------------------------------------
+        if (session.metadata?.flow === 'direct_po') {
+          const entityId = session.metadata.entity_id;
+          if (!entityId) { console.warn('[stripe-webhook] direct_po without entity_id'); break; }
+          const amountPaid = (session.amount_total || 0) / 100;
+          const creditApplied = Number(session.metadata.credit_applied) || 0;
+
+          const { data: already } = await (admin.from('credit_ledger' as any) as any)
+            .select('id').eq('stripe_ref', session.id).maybeSingle();
+          if (already) { console.log(`[stripe-webhook] direct_po ${session.id} already processed`); break; }
+
+          const { data: ent } = await admin.from('request_entities')
+            .select('gross_receipts, requests!inner(client_id)').eq('id', entityId).single() as { data: any };
+          const clientId = ent?.requests?.client_id || null;
+          const gr = ent?.gross_receipts || {};
+          const po = gr.purchase_order || {};
+          const nowIso = new Date().toISOString();
+          const payments = Array.isArray(gr.payments) ? gr.payments : [];
+          payments.push({
+            kind: 'direct_po', po_number: po.poNumber || session.metadata.po_number || null,
+            amount: amountPaid, credit_applied: creditApplied, stripe_ref: session.id, paid_at: nowIso,
+          });
+          const newGr = {
+            ...gr,
+            purchase_order: { ...po, status: 'paid', paidAt: nowIso, stripeRef: session.id, fee_paid_amount: amountPaid },
+            payments,
+          };
+          await (admin.from('request_entities') as any).update({ gross_receipts: newGr }).eq('id', entityId);
+
+          let balanceAfter: number | null = null;
+          if (clientId && creditApplied > 0) {
+            const { data: c } = await admin.from('clients').select('credit_balance').eq('id', clientId).single() as { data: any };
+            balanceAfter = Math.max(0, (Number(c?.credit_balance) || 0) - creditApplied);
+            await (admin.from('clients') as any).update({ credit_balance: balanceAfter }).eq('id', clientId);
+            await (admin.from('credit_ledger' as any) as any).insert({
+              client_id: clientId, kind: 'redemption', amount: -creditApplied, balance_after: balanceAfter,
+              stripe_ref: `${session.id}:credit`, note: 'Account credit applied to Direct purchase order',
+            });
+          }
+          await (admin.from('credit_ledger' as any) as any).insert({
+            client_id: clientId, kind: 'filing_fee', amount: amountPaid, balance_after: balanceAfter,
+            stripe_ref: session.id, note: `Direct PO ${po.poNumber || session.metadata.po_number || ''} (entity ${entityId.slice(0, 8)})`,
+          });
+          console.log(`[stripe-webhook] direct_po: paid $${amountPaid} (credit $${creditApplied}) for entity ${entityId}`);
+          break;
+        }
+
         // Tier upgrade flow (mode=payment for Tier B, mode=subscription for
         // Tier C). On success, flip the client's billing_model + rates
         // so the next auto-invoice run uses the new tier.
