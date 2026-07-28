@@ -576,6 +576,14 @@ export const TRUST_FUND_RATIO = 0.67;
 export const PREMIUM_PAYROLL_THRESHOLD = 250_000;
 
 /**
+ * Default blended hourly rate for a bespoke resolution engagement quoted off
+ * the Compliance Audit board. These are billable-hour cases with NO fixed SKU —
+ * the team enters hours (or a flat amount) per case; this is only the prefilled
+ * rate. Matt 2026-07-28.
+ */
+export const PRICE_RESOLUTION_HOURLY_DEFAULT = 350;
+
+/**
  * Interpolate a phase fee within its band by trust-fund exposure. Anchored so
  * a ~$250k exposure sits at the band floor and ~$2M+ at the ceiling; rounded
  * to the nearest $500 so quotes read cleanly.
