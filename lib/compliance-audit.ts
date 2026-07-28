@@ -15,6 +15,21 @@
 
 export type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 
+/**
+ * Evidence strength — separates a real billable opportunity from noise:
+ *  - 'confirmed' → a dollar balance was actually parsed (exposure > 0).
+ *  - 'flag_only' → compliance flags exist but no balance was parsed (audit /
+ *    no-record / civil-penalty indicators). Needs triage before it's an ask.
+ */
+export type Evidence = 'confirmed' | 'flag_only';
+
+/** ModernTax Direct paying-customer signal, cross-referenced from Mercury/Stripe. */
+export interface DirectCustomer {
+  paying: boolean;
+  source: 'mercury' | 'stripe' | 'direct_client';
+  amount: number | null;
+}
+
 export interface ComplianceCase {
   entityId: string;
   entityName: string;
@@ -28,6 +43,8 @@ export interface ComplianceCase {
   issueLabels: string[];
   /** Best-known dollar exposure (0 when flags exist but no balance parsed). */
   exposure: number;
+  /** Confirmed balance vs flag-only — the real-opportunity discriminator. */
+  evidence: Evidence;
   severity: Severity;
   complianceScore: number | null;
   /** One-line summary for the board row. */
@@ -35,6 +52,8 @@ export interface ComplianceCase {
   /** True if a Direct purchase order / token already exists for this entity. */
   hasDirectPO: boolean;
   directToken?: string;
+  /** Set when the entity belongs to a paying ModernTax Direct customer. */
+  directCustomer?: DirectCustomer;
   /** Engagements already quoted/paid against this case. */
   engagementStatus?: 'quoted' | 'paid' | null;
 }
@@ -133,6 +152,10 @@ export function auditEntity(row: AuditRow): ComplianceCase | null {
       ? 'quoted'
       : null;
 
+  const dc = gr.direct_customer;
+  const directCustomer: DirectCustomer | undefined =
+    dc && dc.paying ? { paying: true, source: dc.source, amount: dc.amount ?? null } : undefined;
+
   return {
     entityId: row.id,
     entityName: row.entity_name,
@@ -143,39 +166,62 @@ export function auditEntity(row: AuditRow): ComplianceCase | null {
     issues,
     issueLabels: issues.map((i) => ISSUE_LABELS[i] || i),
     exposure: Math.round(exposure),
+    evidence: exposure > 0 ? 'confirmed' : 'flag_only',
     severity,
     complianceScore: row.compliance_score,
     summary: summarize(issues, exposure, gr),
     hasDirectPO: !!po,
     directToken: gr.direct_token || undefined,
+    directCustomer,
     engagementStatus,
   };
 }
 
-/** Audit + rank a batch of rows (exposure desc, then severity). */
+/**
+ * Audit + rank a batch of rows. Confirmed-balance cases sort ahead of
+ * flag-only ones (real opportunity first), then by exposure, then severity.
+ */
 export function auditEntities(rows: AuditRow[]): ComplianceCase[] {
   const cases = rows.map(auditEntity).filter((c): c is ComplianceCase => c !== null);
   const sevRank = { CRITICAL: 3, WARNING: 2, INFO: 1 } as const;
-  return cases.sort((a, b) => b.exposure - a.exposure || sevRank[b.severity] - sevRank[a.severity]);
+  const evRank = { confirmed: 1, flag_only: 0 } as const;
+  return cases.sort(
+    (a, b) =>
+      evRank[b.evidence] - evRank[a.evidence] ||
+      b.exposure - a.exposure ||
+      sevRank[b.severity] - sevRank[a.severity],
+  );
 }
 
 export interface AuditSummary {
   totalCases: number;
   bySeverity: Record<Severity, number>;
   totalExposure: number;
-  withExposure: number;
+  /** Cases with a parsed dollar balance — the real billable opportunities. */
+  confirmed: number;
+  /** Cases with flags but no parsed balance — need triage. */
+  flagOnly: number;
+  /** Dollar exposure across confirmed-balance cases only. */
+  confirmedExposure: number;
+  /** Cases whose entity belongs to a paying ModernTax Direct customer. */
+  directCustomers: number;
 }
 
 export function summarizeAudit(cases: ComplianceCase[]): AuditSummary {
   const bySeverity = { CRITICAL: 0, WARNING: 0, INFO: 0 } as Record<Severity, number>;
   let totalExposure = 0;
-  let withExposure = 0;
+  let confirmed = 0;
+  let flagOnly = 0;
+  let confirmedExposure = 0;
+  let directCustomers = 0;
   for (const c of cases) {
     bySeverity[c.severity]++;
     totalExposure += c.exposure;
-    if (c.exposure > 0) withExposure++;
+    if (c.evidence === 'confirmed') { confirmed++; confirmedExposure += c.exposure; }
+    else flagOnly++;
+    if (c.directCustomer?.paying) directCustomers++;
   }
-  return { totalCases: cases.length, bySeverity, totalExposure, withExposure };
+  return { totalCases: cases.length, bySeverity, totalExposure, confirmed, flagOnly, confirmedExposure, directCustomers };
 }
 
 function usd(n: number): string {
