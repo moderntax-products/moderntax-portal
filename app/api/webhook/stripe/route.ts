@@ -241,6 +241,51 @@ export async function POST(request: NextRequest) {
           break;
         }
 
+        // -------------------------------------------------------------------
+        // Bespoke resolution engagement (billable-hour, custom amount, no SKU)
+        // quoted off the Compliance Audit board. On success: flip the matching
+        // `quoted` engagement on the entity to `paid` and record the payment.
+        // Idempotent via credit_ledger stripe_ref = session.id.
+        // -------------------------------------------------------------------
+        if (session.metadata?.flow === 'resolution_engagement') {
+          const entityId = session.metadata.entity_id;
+          if (!entityId) { console.warn('[stripe-webhook] resolution_engagement without entity_id'); break; }
+          const amountPaid = (session.amount_total || 0) / 100;
+
+          const { data: already } = await (admin.from('credit_ledger' as any) as any)
+            .select('id').eq('stripe_ref', session.id).maybeSingle();
+          if (already) { console.log(`[stripe-webhook] resolution_engagement ${session.id} already processed`); break; }
+
+          const { data: ent } = await admin.from('request_entities')
+            .select('gross_receipts, requests!inner(client_id)').eq('id', entityId).single() as { data: any };
+          const clientId = ent?.requests?.client_id || null;
+          const gr = ent?.gross_receipts || {};
+          const nowIso = new Date().toISOString();
+          const engagements = Array.isArray(gr.engagements) ? gr.engagements : [];
+          // Mark the engagement quoted with this session as paid (or append one).
+          let matched = false;
+          for (const e of engagements) {
+            if (e.checkout_session === session.id) { e.status = 'paid'; e.paid_at = nowIso; e.paid_amount = amountPaid; matched = true; }
+          }
+          if (!matched) {
+            engagements.push({
+              status: 'paid', description: session.metadata.description || 'Resolution engagement',
+              amount: amountPaid, paid_amount: amountPaid, checkout_session: session.id, paid_at: nowIso,
+            });
+          }
+          const payments = Array.isArray(gr.payments) ? gr.payments : [];
+          payments.push({ kind: 'resolution_engagement', amount: amountPaid, stripe_ref: session.id, paid_at: nowIso });
+          await (admin.from('request_entities') as any)
+            .update({ gross_receipts: { ...gr, engagements, payments } }).eq('id', entityId);
+
+          await (admin.from('credit_ledger' as any) as any).insert({
+            client_id: clientId, kind: 'filing_fee', amount: amountPaid, balance_after: null,
+            stripe_ref: session.id, note: `Resolution engagement — ${session.metadata.description || ''} (entity ${entityId.slice(0, 8)})`,
+          });
+          console.log(`[stripe-webhook] resolution_engagement: paid $${amountPaid} for entity ${entityId}`);
+          break;
+        }
+
         // Tier upgrade flow (mode=payment for Tier B, mode=subscription for
         // Tier C). On success, flip the client's billing_model + rates
         // so the next auto-invoice run uses the new tier.
