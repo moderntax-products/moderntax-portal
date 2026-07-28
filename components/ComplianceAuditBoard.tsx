@@ -31,6 +31,8 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
   const [q, setQ] = useState('');
   const [sev, setSev] = useState<'ALL' | Severity>('ALL');
   const [issue, setIssue] = useState('ALL');
+  const [evidence, setEvidence] = useState<'ALL' | 'confirmed' | 'flag_only'>('ALL');
+  const [directOnly, setDirectOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const issueOptions = useMemo(() => {
@@ -44,10 +46,12 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
     return cases.filter((c) => {
       if (sev !== 'ALL' && c.severity !== sev) return false;
       if (issue !== 'ALL' && !c.issues.includes(issue)) return false;
+      if (evidence !== 'ALL' && c.evidence !== evidence) return false;
+      if (directOnly && !c.directCustomer?.paying) return false;
       if (needle && !(`${c.entityName} ${c.client} ${c.tid || ''}`.toLowerCase().includes(needle))) return false;
       return true;
     });
-  }, [cases, q, sev, issue]);
+  }, [cases, q, sev, issue, evidence, directOnly]);
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -55,17 +59,25 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
         <div className="mb-6">
           <h1 className="text-2xl font-bold">Compliance Audit</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {summary.totalCases} entities with open IRS issues, swept from {scanned.toLocaleString()} on file. Turn any case
-            into a billable-hour resolution engagement with a custom payment link.
+            {summary.totalCases} entities with open IRS issues swept from {scanned.toLocaleString()} on file —{' '}
+            <strong className="text-gray-700">{summary.confirmed} with a confirmed balance</strong> ({usd(summary.confirmedExposure)}),{' '}
+            {summary.flagOnly} flag-only to triage. Turn any case into a billable-hour resolution engagement with a custom
+            payment link.
           </p>
         </div>
 
-        {/* Summary tiles */}
+        {/* Summary tiles — confirmed opportunity vs flag-only noise */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-          <Tile k="Open cases" v={String(summary.totalCases)} />
-          <Tile k="Critical" v={String(summary.bySeverity.CRITICAL)} tone="crit" />
-          <Tile k="Total exposure" v={usd(summary.totalExposure)} tone="crit" />
-          <Tile k="With $ exposure" v={String(summary.withExposure)} />
+          <button onClick={() => setEvidence(evidence === 'confirmed' ? 'ALL' : 'confirmed')} className="text-left">
+            <Tile k="Confirmed balance" v={String(summary.confirmed)} sub={usd(summary.confirmedExposure)} tone="crit" active={evidence === 'confirmed'} />
+          </button>
+          <button onClick={() => setEvidence(evidence === 'flag_only' ? 'ALL' : 'flag_only')} className="text-left">
+            <Tile k="Flag-only (triage)" v={String(summary.flagOnly)} sub="no parsed balance" active={evidence === 'flag_only'} />
+          </button>
+          <Tile k="Total cases" v={String(summary.totalCases)} sub={`of ${scanned.toLocaleString()} scanned`} />
+          <button onClick={() => setDirectOnly((v) => !v)} className="text-left">
+            <Tile k="Direct customers" v={String(summary.directCustomers)} sub="paying (Mercury/Stripe)" tone="green" active={directOnly} />
+          </button>
         </div>
 
         {/* Filters */}
@@ -76,6 +88,11 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
             placeholder="Search entity, client, or TIN…"
             className="flex-1 min-w-[220px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
           />
+          <select value={evidence} onChange={(e) => setEvidence(e.target.value as any)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            <option value="ALL">All evidence</option>
+            <option value="confirmed">Confirmed balance</option>
+            <option value="flag_only">Flag-only</option>
+          </select>
           <select value={sev} onChange={(e) => setSev(e.target.value as any)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
             <option value="ALL">All severities</option>
             <option value="CRITICAL">Critical</option>
@@ -88,6 +105,10 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
               <option key={i} value={i}>{i.replace(/_/g, ' ')}</option>
             ))}
           </select>
+          <label className="flex items-center gap-2 text-sm text-gray-600 px-2">
+            <input type="checkbox" checked={directOnly} onChange={(e) => setDirectOnly(e.target.checked)} />
+            Direct customers only
+          </label>
         </div>
 
         {/* Table */}
@@ -127,11 +148,14 @@ export default function ComplianceAuditBoard({ cases, summary, scanned, defaultR
   );
 }
 
-function Tile({ k, v, tone }: { k: string; v: string; tone?: 'crit' }) {
+function Tile({ k, v, sub, tone, active }: { k: string; v: string; sub?: string; tone?: 'crit' | 'green'; active?: boolean }) {
+  const base = tone === 'crit' ? 'border-red-200 bg-red-50' : tone === 'green' ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-white';
+  const valColor = tone === 'crit' ? 'text-red-700' : tone === 'green' ? 'text-emerald-700' : 'text-gray-900';
   return (
-    <div className={`rounded-xl border p-4 ${tone === 'crit' ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}>
+    <div className={`rounded-xl border p-4 ${base} ${active ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}>
       <p className="text-[11px] uppercase tracking-wide text-gray-500">{k}</p>
-      <p className={`text-2xl font-black mt-1 ${tone === 'crit' ? 'text-red-700' : 'text-gray-900'}`}>{v}</p>
+      <p className={`text-2xl font-black mt-1 ${valColor}`}>{v}</p>
+      {sub && <p className="text-[11px] text-gray-400 mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -144,7 +168,19 @@ function CaseRow({ c, open, onToggle, defaultRate }: { c: ComplianceCase; open: 
           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${SEV_STYLE[c.severity]}`}>{c.severity}</span>
         </td>
         <td className="px-4 py-3">
-          <div className="font-medium text-gray-900">{c.entityName}</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-gray-900">{c.entityName}</span>
+            {c.evidence === 'confirmed' ? (
+              <span className="text-[9px] font-bold uppercase text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5">Confirmed $</span>
+            ) : (
+              <span className="text-[9px] font-bold uppercase text-gray-500 bg-gray-100 rounded px-1.5 py-0.5">Flag-only</span>
+            )}
+            {c.directCustomer?.paying && (
+              <span className="text-[9px] font-bold uppercase text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                Direct customer
+              </span>
+            )}
+          </div>
           <div className="text-xs text-gray-400">{c.formType || '—'}{c.tid ? ` · ${c.tid}` : ''}</div>
           <div className="text-xs text-gray-500 mt-0.5 max-w-md">{c.summary}</div>
         </td>
