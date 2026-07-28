@@ -531,3 +531,168 @@ export function fmtUsdShort(n: number): string {
   if (n === Math.floor(n)) return `$${n.toLocaleString('en-US')}`;
   return fmtUsd(n);
 }
+
+// ---------------------------------------------------------------------------
+// ModernTax Direct — outcome service catalog
+// ---------------------------------------------------------------------------
+//
+// The Direct (direct-to-taxpayer) channel sells OUTCOMES, not transcript
+// pulls: recover a refund, file back taxes, resolve a liability. Each outcome
+// maps to one or more billable services below. These feed the Direct Purchase
+// Order (lib/direct-purchase-order.ts) — a taxpayer-approved, multi-line quote
+// that bills through one Stripe Checkout session.
+//
+// `billing`:
+//   - 'per_year'    → charged unitPrice × number of return-years
+//   - 'flat'        → charged unitPrice once
+//   - 'contingency' → NOT charged up front; billed only on success (a % of the
+//                     recovered amount). Shown on the PO for transparency but
+//                     excluded from the Stripe checkout total.
+//
+// Prices are intentionally centralized here so they're the single lever to
+// tune — no magic numbers in routes or components. Matt 2026-07-27.
+// ---------------------------------------------------------------------------
+
+/** Retainer to open + set up an IRS liability-resolution engagement (IA/OIC/CNC + TFRP defense). */
+export const PRICE_RESOLUTION_RETAINER = 2500;
+/** Reasonable-cause / first-time penalty-abatement request, per engagement. */
+export const PRICE_PENALTY_ABATEMENT = 750;
+/** State payment-plan / resolution setup, per state. */
+export const PRICE_STATE_RESOLUTION = 500;
+/** Contingency rate on funds we recover for the taxpayer (ERC / undelivered refunds). */
+export const RATE_RECOVERY_CONTINGENCY = 0.15;
+
+// Velocity-fee bands (USD) for the phased payroll trust-fund defense.
+// Declared before DIRECT_SERVICE_CATALOG because the catalog references their
+// `.min` as the band floor. Interpolated within each band by trust-fund
+// exposure via velocityPhaseFee(); the three phases sum to the ~$35k–$60k
+// premium range for a $2M-class case.
+export const PRICE_FTD_LOCKDOWN = { min: 5000, max: 10000 };
+export const PRICE_TRUST_FUND_IA = { min: 20000, max: 35000 };
+export const PRICE_EXEC_SHIELD = { min: 10000, max: 15000 };
+/** Trust-fund portion of a 941 balance (withheld income tax + employee FICA). */
+export const TRUST_FUND_RATIO = 0.67;
+/** At/above this 941 balance we quote the premium phased engagement, not the flat retainer. */
+export const PREMIUM_PAYROLL_THRESHOLD = 250_000;
+
+/**
+ * Interpolate a phase fee within its band by trust-fund exposure. Anchored so
+ * a ~$250k exposure sits at the band floor and ~$2M+ at the ceiling; rounded
+ * to the nearest $500 so quotes read cleanly.
+ */
+export function velocityPhaseFee(band: { min: number; max: number }, trustFundExposure: number): number {
+  const lo = 250_000, hi = 2_000_000;
+  const frac = Math.max(0, Math.min(1, (trustFundExposure - lo) / (hi - lo)));
+  const raw = band.min + frac * (band.max - band.min);
+  return Math.round(raw / 500) * 500;
+}
+
+export type DirectBilling = 'per_year' | 'flat' | 'contingency';
+
+export interface DirectService {
+  code: string;
+  /** Which taxpayer outcome this service delivers. */
+  outcome: 'recover_refunds' | 'file_back_taxes' | 'resolve_liabilities';
+  label: string;
+  /** Short, taxpayer-facing description (plain language, no IRS jargon). */
+  blurb: string;
+  unitPrice: number;
+  billing: DirectBilling;
+  /** Unit noun for per_year math / display ("return", "state", "engagement"). */
+  unit: string;
+}
+
+export const DIRECT_SERVICE_CATALOG: Record<string, DirectService> = {
+  erc_recovery: {
+    code: 'erc_recovery',
+    outcome: 'recover_refunds',
+    label: 'ERC Refund Recovery',
+    blurb: 'We track down Employee Retention Credit refunds the IRS issued but never delivered, and file the paperwork to get the checks reissued to you.',
+    unitPrice: RATE_RECOVERY_CONTINGENCY,
+    billing: 'contingency',
+    unit: 'recovered',
+  },
+  check_reissue: {
+    code: 'check_reissue',
+    outcome: 'recover_refunds',
+    label: 'Undelivered Check Reissue',
+    blurb: 'A refund check is sitting at the IRS marked undelivered. We file Form 3911/8822-B and call the IRS to get it reissued to your current address.',
+    unitPrice: PRICE_CHECK_REISSUE_STRIPE,
+    billing: 'flat',
+    unit: 'check',
+  },
+  backyear_filing: {
+    code: 'backyear_filing',
+    outcome: 'file_back_taxes',
+    label: 'Back-Year Return Filing',
+    blurb: 'We prepare and file your delinquent federal returns — getting you back into compliance so the IRS stops the penalty clock and any refunds still in the window get claimed.',
+    unitPrice: PRICE_BACKYEAR_FILING,
+    billing: 'per_year',
+    unit: 'return',
+  },
+  payroll_resolution: {
+    code: 'payroll_resolution',
+    outcome: 'resolve_liabilities',
+    label: 'Payroll-Tax Resolution & TFRP Defense',
+    blurb: 'We represent you before the IRS on unpaid payroll (trust-fund) taxes — negotiating an installment agreement or offer, and defending the owners against personal Trust Fund Recovery Penalty exposure.',
+    unitPrice: PRICE_RESOLUTION_RETAINER,
+    billing: 'flat',
+    unit: 'engagement',
+  },
+  penalty_abatement: {
+    code: 'penalty_abatement',
+    outcome: 'resolve_liabilities',
+    label: 'Penalty Abatement',
+    blurb: 'We request removal of failure-to-file, failure-to-pay, and deposit penalties under first-time-abatement or reasonable-cause — often the fastest way to cut the balance.',
+    unitPrice: PRICE_PENALTY_ABATEMENT,
+    billing: 'flat',
+    unit: 'engagement',
+  },
+  state_resolution: {
+    code: 'state_resolution',
+    outcome: 'resolve_liabilities',
+    label: 'State Payment Plan',
+    blurb: 'We set up a payment plan with your state tax agency so the federal and state resolutions move in step.',
+    unitPrice: PRICE_STATE_RESOLUTION,
+    billing: 'per_year',
+    unit: 'state',
+  },
+
+  // --- Premium payroll trust-fund defense (velocity engagement) ------------
+  // For a large, pre-enforcement 941 balance (no lien/levy/RO yet), a
+  // tax-controversy firm bills a phased "velocity fee" to intercept the
+  // automated enforcement stream before a Revenue Officer is assigned. The
+  // three phases below are priced dynamically off the trust-fund exposure
+  // (see velocityPhaseFee) — the catalog unitPrice is just the band floor.
+  ftd_lockdown: {
+    code: 'ftd_lockdown',
+    outcome: 'resolve_liabilities',
+    label: 'Current-Quarter FTD Compliance Lockdown',
+    blurb: 'The IRS will not negotiate a balance-due account while current deposits slip. We lock down and prove perfect current-quarter Federal Tax Deposits — the precondition for every step that follows.',
+    unitPrice: PRICE_FTD_LOCKDOWN.min,
+    billing: 'flat',
+    unit: 'phase',
+  },
+  trust_fund_ia: {
+    code: 'trust_fund_ia',
+    outcome: 'resolve_liabilities',
+    label: 'In-Business Trust-Fund Installment Agreement',
+    blurb: 'While the transcript is still clean — no lien, no levy notice, no Revenue Officer — we establish a complex in-business Installment Agreement through Centralized Case Management, negotiating a payment structure on your cash flow before the case reaches a field agent.',
+    unitPrice: PRICE_TRUST_FUND_IA.min,
+    billing: 'flat',
+    unit: 'phase',
+  },
+  exec_shielding: {
+    code: 'exec_shielding',
+    outcome: 'resolve_liabilities',
+    label: 'Executive Shielding — TFRP Pre-Emption (Form 433-B / 4180)',
+    blurb: 'We prepare Form 433-B and direct every dollar to the oldest trust-fund quarters first (designated payments), paying down the trust-fund portion to shield the owners from personal Trust Fund Recovery Penalty — without waiting for the IRS to issue Form 1153.',
+    unitPrice: PRICE_EXEC_SHIELD.min,
+    billing: 'flat',
+    unit: 'phase',
+  },
+};
+
+export function getDirectService(code: string): DirectService | undefined {
+  return DIRECT_SERVICE_CATALOG[code];
+}
