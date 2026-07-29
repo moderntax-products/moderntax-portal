@@ -13,6 +13,7 @@
  *   - expertId: expert's user ID (from auth token in bookmarklet)
  */
 
+import { createHash } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { triggerIncrementalWebhook } from '@/lib/webhook';
@@ -287,18 +288,23 @@ export async function POST(request: NextRequest) {
     // in the filename so the existing-URL substring check wouldn't match
     // anyway — this guard just makes it explicit + future-proof.
     const existingUrls: string[] = entity.transcript_urls || [];
-    let alreadyUploaded = false;
-    if (!metadata.isStub) {
-      const quarterSuffix = metadata.quarter ? `-${metadata.quarter.toLowerCase()}` : '';
-      const transcriptKey = `${(metadata.formType || '').trim()} ${(metadata.shortType || '').trim()} - ${(metadata.taxYear || '').trim()}${quarterSuffix}`.toLowerCase();
-      alreadyUploaded = existingUrls.some((url: string) => {
-        // Extract filename from storage path (after the timestamp prefix)
-        const filename = url.split('/').pop() || '';
-        // Remove timestamp prefix (digits followed by dash)
-        const cleanFilename = filename.replace(/^\d+-/, '').toLowerCase();
-        return cleanFilename.includes(transcriptKey.replace(/\s+/g, ' '));
-      });
-    }
+
+    // Read the file once + hash it for EXACT-content dedup.
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const fileHash = createHash('sha256').update(buffer).digest('hex');
+    const existingHashes: string[] = Array.isArray((entity as any).gross_receipts?.transcript_hashes)
+      ? (entity as any).gross_receipts.transcript_hashes
+      : [];
+
+    // Dedup on exact file content — NOT a year-derived key. The old
+    // formType+shortType+taxYear key collapsed DISTINCT documents that merely
+    // shared a calendar year: a fiscal-year filer with 1120 returns ending
+    // 06-30-2024 AND 12-31-2024 (after a year-end change), multiple 941
+    // quarters, or multi-part SOR exports all keyed to the same year and got
+    // silently dropped — the "auto-upload only transferred 4 of 10 files"
+    // report. A content hash only ever skips a byte-identical re-upload and can
+    // never drop a distinct transcript. Stubs still bypass dedup entirely.
+    const alreadyUploaded = !metadata.isStub && existingHashes.includes(fileHash);
 
     if (alreadyUploaded) {
       return corsJson({
@@ -329,8 +335,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Upload PDF file to Supabase storage
-    const buffer = Buffer.from(await file.arrayBuffer());
+    // Upload PDF file to Supabase storage (buffer already read + hashed above)
     const sanitizedFilename = metadata.filename
       .replace(/[^a-zA-Z0-9._\-\s]/g, '')
       .replace(/\s+/g, ' ')
@@ -394,6 +399,17 @@ export async function POST(request: NextRequest) {
         entityUpdate.transcript_html_urls = [...existingHtmlUrls, htmlStoragePath];
       }
     }
+
+    // Record this file's content hash so future uploads can dedup on exact
+    // content. Merge into gross_receipts and keep the in-memory copy in sync so
+    // the later compliance-screening update (which spreads entity.gross_receipts)
+    // doesn't clobber it.
+    const mergedGrossReceipts = {
+      ...((entity as any).gross_receipts || {}),
+      transcript_hashes: [...existingHashes, fileHash],
+    };
+    entityUpdate.gross_receipts = mergedGrossReceipts;
+    (entity as any).gross_receipts = mergedGrossReceipts;
 
     await supabase
       .from('request_entities')
