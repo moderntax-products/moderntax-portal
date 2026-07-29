@@ -37,7 +37,8 @@ import { PRICE_BACKYEAR_FILING, PRICE_FILING_EXPEDITE_FEE } from '@/lib/pricing'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   try {
     const entityId = verifyFilingIntakeToken(params.token);
     if (!entityId) return NextResponse.json({ error: 'This link isn’t valid.' }, { status: 401 });

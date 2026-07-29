@@ -26,7 +26,7 @@
 
 ## 2. System description (abridged)
 
-**Platform:** Next.js 14 + Supabase (Postgres, Auth, Storage) deployed on Vercel  
+**Platform:** Next.js 16 + Supabase (Postgres, Auth, Storage) deployed on Vercel  
 **Client data handled:**
 - Taxpayer identifiers (SSN, EIN, ITIN) — PII under GLBA and IRS Pub. 1075 standards
 - IRS transcripts (Return Transcripts, Records of Account, Wage & Income, Account Transcripts)
@@ -58,17 +58,17 @@
 
 | Control ID | Criterion | Control description | Evidence |
 |---|---|---|---|
-| **CC6.1** | Logical access | Supabase Auth with email+password + Supabase SSR session tokens. Middleware (`middleware.ts`) redirects unauthenticated users on every protected route. Cookie flags: `Secure` (production), `SameSite=Lax`. Rate-limiting on `/api/auth/login` (20/min per IP, 10/min per email), `/api/auth/signup` (5/hr per IP), `/api/auth/forgot-password` (10/min per IP, 5/15min per email). | `middleware.ts:62-123`, `lib/rate-limit.ts`, `app/api/auth/*/route.ts` |
+| **CC6.1** | Logical access | Supabase Auth with email+password + Supabase SSR session tokens. Proxy (`proxy.ts`, formerly `middleware.ts`) redirects unauthenticated users on every protected route. Cookie flags: `Secure` (production), `SameSite=Lax`. Rate-limiting on `/api/auth/login` (20/min per IP, 10/min per email), `/api/auth/signup` (5/hr per IP), `/api/auth/forgot-password` (10/min per IP, 5/15min per email). | `proxy.ts:62-123`, `lib/rate-limit.ts`, `app/api/auth/*/route.ts` |
 | **CC6.2** | Identity registration & authentication | Self-service signup requires email domain matching the declared company website (`app/api/auth/signup/route.ts:17+`). Email verification enforced via Supabase. Password policy: Supabase default (8+ chars, complexity). |
 | **CC6.3** | Role-based access — principle of least privilege | Four hard-coded roles: `admin`, `manager`, `processor`, `expert`. Every admin/expert route checks `profiles.role` before proceeding. Role changes require `admin` or `manager` role, enforced at `app/api/admin/update-role/route.ts` — cannot self-modify, cannot promote to `admin`. Cross-tenant isolation: non-admin queries filter by `profiles.client_id`. | `update-role/route.ts:57-77`, example auth pattern in `download-transcript/route.ts:24-82` |
-| **CC6.6** | Data in transit encryption | HTTPS enforced by HSTS header (`max-age=31536000; includeSubDomains; preload`). HTTP traffic redirected by Vercel edge. All outbound calls (Supabase, SendGrid, Dropbox Sign, Bland AI, IRS) are TLS 1.2+. | `middleware.ts:19-22` |
+| **CC6.6** | Data in transit encryption | HTTPS enforced by HSTS header (`max-age=31536000; includeSubDomains; preload`). HTTP traffic redirected by Vercel edge. All outbound calls (Supabase, SendGrid, Dropbox Sign, Bland AI, IRS) are TLS 1.2+. | `proxy.ts:19-22` |
 | **CC6.7** | Data at rest encryption | Supabase Postgres uses AES-256 disk encryption (AWS RDS managed). Supabase Storage uses AES-256 S3 encryption. File names are random UUIDs; no guessable paths. |
 | **CC6.8** | Data transmission — unauthorized recipients prevention | All PII downloads issue **time-limited signed URLs** (1-hour TTL) after server-side authorization. No direct public bucket URLs. Every download writes to `audit_log`. | `app/api/download-transcript/route.ts`, `app/api/expert/download-8821/route.ts`, `app/api/download-all-transcripts/route.ts` |
 | **CC7.1** | Monitoring & detection | All sensitive actions write to `audit_log` (401+ rows as of report date). Audit categories: `login`, `logout`, `login_failed`, `file_uploaded`, `transcript_downloaded`, `data_exported`, `settings_changed` (role changes), `webhook_failed`, `irs_call_*`, `8821_data_uploaded`, etc. Retention: indefinite. | `lib/audit.ts:20-54` — full `AuditAction` enum |
 | **CC7.2** | Anomaly response | Failed Dropbox Sign webhook deliveries are marked with `action='webhook_failed'` and `details.needs_reconcile=true`. `/api/admin/reconcile-signatures` endpoint sweeps and retries. Nightly crons for stuck entities, expert overdue reminders. | `app/api/admin/reconcile-signatures/route.ts`, `vercel.json:3-74` |
 | **CC7.3** | Incident response | Manual process. Admin dashboard shows stuck entities, failed webhooks, in-progress escalations. Incident runbook in `docs/` (to be codified during Type 1 audit fieldwork). |
 | **CC7.4** | Change management | All code in GitHub, every deployment via Vercel with build logs retained. Main-branch-only deploys; PR review required. |
-| **CC8.1** | Vulnerability management | `npm audit --omit=dev` run as part of release check. Current status: 2 high-severity advisories (Next.js 14.2.x — mitigated by middleware auth; xlsx@0.18.5 — no upstream fix, mitigated by admin-only usage). Both documented in risk register (§4). |
+| **CC8.1** | Vulnerability management | `npm audit --omit=dev` run as part of release check. Current status: 1 high-severity advisory (xlsx@0.18.5 — no upstream fix, mitigated by admin-only usage); the Next.js 14.x advisory batch was resolved by the 2026-07-27 upgrade to Next.js 16.2.12. Documented in risk register (§4). |
 | **CC9.1** | Risk mitigation — business disruption | Supabase daily backups (14-day PITR window). Vercel multi-region deployment. No single-region lock-in for critical paths. |
 | **CC9.2** | Vendor management | Vendor table in §2 tracks sub-service orgs; each has their own SOC 2. Quarterly review of vendor attestations. |
 
@@ -93,12 +93,12 @@
 
 | # | Finding | Severity | Control impact | Mitigation / Plan |
 |---|---|---|---|---|
-| 1 | **Next.js 14.2.35 advisory** — authorization header leak (HIGH) | Medium | CC8.1 | Production middleware auth in place ensures request-level authorization doesn't rely solely on Next internals. Migration to Next 15.x scheduled Q3 2026. |
+| 1 | **Next.js 14.2.35 advisory** — authorization header leak (HIGH) | ~~Medium~~ **RESOLVED 2026-07-27** | CC8.1 | Upgraded to Next.js 16.2.12, which ships the fix. Production proxy auth (formerly middleware) was also in place throughout, ensuring request-level authorization never relied solely on Next internals. |
 | 2 | **xlsx@0.18.5 ReDoS + prototype pollution** (HIGH) | Low | CC8.1 | Only used in admin-only CSV/XLSX upload endpoint (`app/api/upload/csv/route.ts`). Attacker must already be an authenticated `admin/processor/manager`. Upstream has no fix; alternative library (`exceljs`) on evaluation roadmap. |
 | 3 | **MFA not enforced** for admin users | Medium | CC6.1 | Supabase Auth supports TOTP; enabling for admin role Q2 2026. Documented in security policy draft. |
 | 4 | **Data retention policy** — transcripts and 8821s retained indefinitely | Medium | C1.2 | Policy draft in preparation: 7-year retention per IRS guidance for transcripts delivered; automatic purge cron for entities in `failed` or `cancelled` state > 90 days. |
 | 5 | **In-memory rate limiting** — per-instance, not global | Low | CC6.1 | Initial mitigation against credential stuffing is in place (§CC6.1). Upstash Redis + `@upstash/ratelimit` upgrade on roadmap for global consistency across Vercel lambdas. |
-| 6 | **CSP allows `unsafe-inline` and `unsafe-eval`** in `script-src` | Low | CC6.6 | Required for Next.js App Router runtime. Strict CSP with nonces planned with Next 15 migration. |
+| 6 | **CSP allows `unsafe-inline` and `unsafe-eval`** in `script-src` | Low | CC6.6 | Required for Next.js App Router runtime. Strict CSP with nonces still on the roadmap — independent of the Next.js version in use (now 16.2.12). |
 | 7 | **Vendor DPA / BAA posture** | Med | CC9.2 | DPAs in place with Supabase, Vercel, SendGrid. No PHI in scope (non-HIPAA), so BAAs not required. ClearFirm DPA signed. Centerstone DPA in active negotiation. |
 | 8 | **Formal security training** for employees | Low | CC1.4 | ModernTax currently operates with 1 engineer (founder). Annual security training curriculum drafted for adoption as team grows. |
 
@@ -112,8 +112,8 @@ An independent auditor will need the following artifacts during SOC 2 Type 1 fie
 |---|---|
 | System architecture diagram | `docs/architecture.md` (to be produced) |
 | Access control matrix (roles × resources) | `app/api/admin/update-role/route.ts` + role checks across all routes |
-| Middleware with security headers | `middleware.ts:8-60` |
-| Cookie configuration | `middleware.ts:75-95`, `app/api/auth/login/route.ts:20-32` |
+| Proxy with security headers (formerly Middleware) | `proxy.ts:8-60` |
+| Cookie configuration | `proxy.ts:75-95`, `app/api/auth/login/route.ts:20-32` |
 | Database schema with RLS | `supabase/schema.sql` + `supabase/migration-*.sql` (16 tables with RLS, 70 policies) |
 | Audit log implementation | `lib/audit.ts`, `audit_log` table (401+ rows at report date) |
 | Rate limiter implementation | `lib/rate-limit.ts` |

@@ -44,7 +44,8 @@ function Notice({ title, body }: { title: string; body: string }) {
   );
 }
 
-export default async function PublicIntakePage({ params }: { params: { token: string } }) {
+export default async function PublicIntakePage(props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) {
     return <Notice title="This link isn't valid" body="The link may be mistyped or expired. Please use the most recent link we emailed you." />;

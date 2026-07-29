@@ -16,7 +16,7 @@
  *    come back via webhook + /api/v1/transcripts/{id}/structured.
  *  - Direct portal ordering for teams that want the UI.
  *
- * Public by design (middleware PUBLIC_PREFIXES already includes this
+ * Public by design (proxy.ts PUBLIC_PREFIXES already includes this
  * path) — it doubles as sales collateral, and it contains no customer
  * data whatsoever.
  */

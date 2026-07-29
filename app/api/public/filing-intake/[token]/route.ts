@@ -15,7 +15,8 @@ import { verifyFilingIntakeToken } from '@/lib/intake-tokens';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const entityId = verifyFilingIntakeToken(params.token);
   if (!entityId) {
     // SOC 2 CC7.2 — log bad-token attempts (truncated) so enumeration is visible.

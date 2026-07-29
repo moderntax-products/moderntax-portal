@@ -32,9 +32,9 @@ const TIMELINE_STEPS: { status: string; label: string; description: string }[] =
   { status: 'completed', label: 'Completed', description: 'Transcripts received and ready' },
 ];
 
-export default async function RequestDetailPage({ params, searchParams }: Props) {
-  const { id } = await params;
-  const sp = searchParams ? await searchParams : {};
+export default async function RequestDetailPage(props: Props) {
+  const { id } = await props.params;
+  const sp = (await props.searchParams) ?? {};
   const supabase = await createServerComponentClient();
 
   const {
@@ -158,7 +158,7 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
               {isDirectUser ? (
                 // Direct taxpayer: no dashboard to go back to (they'd just be
                 // redirected here), and no cancel — just a way to sign out.
-                <LogoutButton />
+                (<LogoutButton />)
               ) : (
                 <>
                   <CancelRequestButton
@@ -182,7 +182,6 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
           </div>
         </div>
       </div>
-
       {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <PrePortalDeliveryBanner

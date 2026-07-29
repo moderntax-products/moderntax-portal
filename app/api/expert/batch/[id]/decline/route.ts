@@ -14,10 +14,8 @@ import { parseJsonBodyOrRespond } from '@/lib/request-body';
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } },
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const cookieStore = await cookies();
   const supabase = createServerRouteClient(cookieStore);
   const { data: { user } } = await supabase.auth.getUser();

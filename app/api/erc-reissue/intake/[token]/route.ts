@@ -8,10 +8,8 @@ import { ErcIntakeData } from '@/lib/erc-reissue';
  * advances all attached reissue rows to 'intake_complete', and appends
  * an entry to each reissue's status_history.
  */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { token: string } },
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   if (!params.token || params.token.length < 16) {
     return NextResponse.json({ error: 'Invalid token' }, { status: 400 });
   }

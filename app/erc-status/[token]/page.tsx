@@ -19,7 +19,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notFound } from 'next/navigation';
 
 interface PageProps {
-  params: { token: string };
+  params: Promise<{ token: string }>;
 }
 
 interface ErcEvent {
@@ -59,7 +59,8 @@ const STAGES: { key: string; label: string; merchantCopy: string }[] = [
 
 export const dynamic = 'force-dynamic';
 
-export default async function ErcStatusPage({ params }: PageProps) {
+export default async function ErcStatusPage(props: PageProps) {
+  const params = await props.params;
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
