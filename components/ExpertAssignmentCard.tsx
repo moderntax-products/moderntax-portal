@@ -36,6 +36,9 @@ interface AssignmentCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string, entityName: string, entityId: string) => void;
+  /** Assigned expert's IANA timezone — passed through to the SLA countdown so
+   *  the clock pauses at their real 7pm–7am (matches the deadline computation). */
+  expertTz?: string;
 }
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -45,7 +48,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   failed: { label: 'Failed', color: 'bg-red-100 text-red-800' },
 };
 
-export function ExpertAssignmentCard({ assignment, onRefresh, selectable, selected, onToggleSelect }: AssignmentCardProps) {
+export function ExpertAssignmentCard({ assignment, onRefresh, selectable, selected, onToggleSelect, expertTz }: AssignmentCardProps) {
   const [showUpload, setShowUpload] = useState(false);
   const [showFlag, setShowFlag] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
@@ -194,7 +197,7 @@ export function ExpertAssignmentCard({ assignment, onRefresh, selectable, select
             {statusInfo.label}
           </span>
         </div>
-        <SlaCountdown slaDeadline={assignment.sla_deadline} status={assignment.status} slaMet={assignment.sla_met} completedAt={assignment.completed_at} />
+        <SlaCountdown slaDeadline={assignment.sla_deadline} status={assignment.status} slaMet={assignment.sla_met} completedAt={assignment.completed_at} expertTz={expertTz} />
       </div>
 
       {/* Body */}
