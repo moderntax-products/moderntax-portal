@@ -40,7 +40,7 @@ export default function ExpertDashboard() {
   const [completedAll, setCompletedAll] = useState<AssignmentData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null } | null>(null);
+  const [profile, setProfile] = useState<{ full_name: string | null; role: string; caf_number: string | null; ptin: string | null; phone_number: string | null; address: string | null; iana_timezone: string | null; onboarding_completed_at: string | null; onboarding_dismissed_at: string | null } | null>(null);
   const [activeTab, setActiveTab] = useState<'assignments' | 'call-history'>('assignments');
   const [selectedForCall, setSelectedForCall] = useState<{ id: string; entityName: string; entityId: string }[]>([]);
   // Multi-call orchestration: experts run multiple AI calls concurrently
@@ -541,6 +541,7 @@ export default function ExpertDashboard() {
                 key={assignment.id}
                 assignment={assignment}
                 onRefresh={fetchData}
+                expertTz={profile?.iana_timezone || undefined}
                 // Selectable as long as we're under the concurrent-call cap —
                 // starting a 2nd or 3rd call should still be possible while
                 // earlier calls are running.
@@ -578,6 +579,7 @@ export default function ExpertDashboard() {
                       key={assignment.id}
                       assignment={assignment}
                       onRefresh={fetchData}
+                      expertTz={profile?.iana_timezone || undefined}
                     />
                   ))}
                 </div>

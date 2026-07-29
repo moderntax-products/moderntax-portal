@@ -1,15 +1,32 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { businessHoursElapsed, SLA_DEFAULTS } from '@/lib/expert-sla';
 
 interface SlaCountdownProps {
   slaDeadline: string;
   status?: string;
   slaMet?: boolean | null;
   completedAt?: string | null;
+  /**
+   * The assigned expert's IANA timezone — MUST match the tz the deadline was
+   * computed in (assignment-batch uses expertProfile.iana_timezone). Drives the
+   * business-hours window so the clock pauses at the expert's real 7pm–7am.
+   * Falls back to the SLA default when unknown.
+   */
+  expertTz?: string;
 }
 
-export function SlaCountdown({ slaDeadline, status, slaMet, completedAt }: SlaCountdownProps) {
+// Split fractional business hours into {hours, minutes}, guarding the 60→0 roll.
+function splitHours(totalHours: number): { hours: number; minutes: number } {
+  let hours = Math.floor(totalHours);
+  let minutes = Math.round((totalHours - hours) * 60);
+  if (minutes >= 60) { hours += 1; minutes = 0; }
+  return { hours, minutes };
+}
+
+export function SlaCountdown({ slaDeadline, status, slaMet, completedAt, expertTz }: SlaCountdownProps) {
+  const tz = expertTz || SLA_DEFAULTS.EXPERT_TZ;
   const [remaining, setRemaining] = useState<{ hours: number; minutes: number } | null>(null);
   const [overdue, setOverdue] = useState(false);
 
@@ -17,18 +34,17 @@ export function SlaCountdown({ slaDeadline, status, slaMet, completedAt }: SlaCo
     const update = () => {
       const deadline = new Date(slaDeadline).getTime();
       const now = Date.now();
-      const diff = deadline - now;
 
-      if (diff <= 0) {
-        const overdueMs = Math.abs(diff);
-        const hours = Math.floor(overdueMs / (1000 * 60 * 60));
-        const minutes = Math.floor((overdueMs % (1000 * 60 * 60)) / (1000 * 60));
-        setRemaining({ hours, minutes });
+      // Show BUSINESS hours remaining, not raw wall-clock. Because business
+      // hours don't accrue outside 7am–7pm local or on weekends, this value
+      // FREEZES overnight instead of bleeding down — fixing the "clock kept
+      // counting down overnight" report. Equivalent to slaBusinessHours minus
+      // elapsed, since the deadline was set where elapsed == slaBusinessHours.
+      if (now >= deadline) {
+        setRemaining(splitHours(businessHoursElapsed(deadline, now, tz)));
         setOverdue(true);
       } else {
-        const hours = Math.floor(diff / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        setRemaining({ hours, minutes });
+        setRemaining(splitHours(businessHoursElapsed(now, deadline, tz)));
         setOverdue(false);
       }
     };
@@ -36,7 +52,7 @@ export function SlaCountdown({ slaDeadline, status, slaMet, completedAt }: SlaCo
     update();
     const interval = setInterval(update, 60000); // Update every minute
     return () => clearInterval(interval);
-  }, [slaDeadline]);
+  }, [slaDeadline, tz]);
 
   // For completed assignments, show SLA Met/Missed instead of live countdown
   if (status === 'completed') {
