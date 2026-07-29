@@ -407,6 +407,39 @@ export async function GET(request: NextRequest) {
         }
         cashFlowAmount = Math.round(cashFlowAmount * 100) / 100;
 
+        // --- Payroll-Liability Report line: $22 prepay / $30 one-off per report ---
+        // Mirrors the cash-flow-pack line. The add-on lives on
+        // entity.gross_receipts.payroll_liability_order with billed=false until
+        // this cron picks it up; the price ($22 or $30) is captured on the
+        // entity at attach time so a later billing-model change never re-prices
+        // a delivered report. Only bill reports on COMPLETED entities — an
+        // add-on on an in-flight order isn't delivered yet.
+        const payrollLiabilityReports: Array<{ entityId: string; entityName: string; price: number; ordered_at: string }> = [];
+        let payrollLiabilityAmount = 0;
+        const { data: candidatesForPayroll } = await supabase
+          .from('request_entities')
+          .select('id, entity_name, status, completed_at, gross_receipts, requests!inner(client_id)')
+          .eq('requests.client_id', client.id)
+          .not('gross_receipts->payroll_liability_order', 'is', null) as { data: any[] | null };
+
+        for (const ent of (candidatesForPayroll || [])) {
+          const order = ent.gross_receipts?.payroll_liability_order;
+          if (!order || order.requested !== true || order.billed === true) continue;
+          // Only bill a delivered report: entity completed within/at this period.
+          if (ent.status !== 'completed' || !ent.completed_at) continue;
+          const doneAt = new Date(ent.completed_at);
+          if (doneAt > periodEndDate) continue;
+          const price = typeof order.price === 'number' ? order.price : 30;
+          payrollLiabilityReports.push({
+            entityId: ent.id,
+            entityName: ent.entity_name,
+            price,
+            ordered_at: order.ordered_at,
+          });
+          payrollLiabilityAmount += price;
+        }
+        payrollLiabilityAmount = Math.round(payrollLiabilityAmount * 100) / 100;
+
         // --- Check Reissue Service line: $1,000 per paid reissue request ---
         // ModernTax bills each IRS check-reissue order at PRICE_CHECK_REISSUE
         // ($1,000 via Mercury / $999.99 via Stripe — see lib/pricing.ts).
@@ -471,6 +504,7 @@ export async function GET(request: NextRequest) {
           totalEntities === 0 &&
           monitoringEntities === 0 &&
           cashFlowPacks.length === 0 &&
+          payrollLiabilityReports.length === 0 &&
           checkReissues.length === 0 &&
           consolidationLines.length === 0
         ) {
@@ -480,7 +514,7 @@ export async function GET(request: NextRequest) {
 
         const reorderEntities = ((client as any)._reorderEntities as number) || 0;
         const reorderAmount = ((client as any)._reorderAmount as number) || 0;
-        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount + checkReissueAmount + consolidationAmount + reorderAmount) * 100) / 100;
+        const grandTotal = Math.round((totalAmount + monitoringAmount + cashFlowAmount + payrollLiabilityAmount + checkReissueAmount + consolidationAmount + reorderAmount) * 100) / 100;
 
         // Generate invoice number: INV-{year}-{month}-{slug}
         const slugUpper = client.slug.toUpperCase().slice(0, 4);
@@ -556,6 +590,31 @@ export async function GET(request: NextRequest) {
             .from('request_entities')
             .update({ gross_receipts: updated })
             .eq('id', pack.entityId);
+        }
+
+        // Mark Payroll-Liability Reports billed (same idempotency + Mercury-
+        // failure-survival reasoning as the cash-flow packs above).
+        for (const rep of payrollLiabilityReports) {
+          const { data: ent } = await supabase
+            .from('request_entities')
+            .select('gross_receipts')
+            .eq('id', rep.entityId)
+            .single() as { data: { gross_receipts: any } | null };
+          if (!ent?.gross_receipts?.payroll_liability_order) continue;
+          const updated = {
+            ...ent.gross_receipts,
+            payroll_liability_order: {
+              ...ent.gross_receipts.payroll_liability_order,
+              billed: true,
+              billed_at: new Date().toISOString(),
+              invoice_id: insertedInvoice.id,
+              invoice_number: invoiceNumber,
+            },
+          };
+          await supabase
+            .from('request_entities')
+            .update({ gross_receipts: updated })
+            .eq('id', rep.entityId);
         }
 
         // Mark Loan-Package Consolidation Reports as billed against this
@@ -709,6 +768,19 @@ export async function GET(request: NextRequest) {
                 quantity: reorderEntities,
               });
             }
+          }
+
+          // Payroll-Liability Report — one line per report so the entity shows
+          // on the Mercury PDF (the lender maps it back to a specific borrower).
+          // Placed outside the subscription/per-TIN branch: it's an add-on that
+          // bills the same regardless of the base billing model, and the price
+          // ($22 prepay / $30 one-off) is captured per-entity at attach time.
+          for (const rep of payrollLiabilityReports) {
+            lineItems.push({
+              name: `Payroll-Liability Report (Form 941) — ${rep.entityName}`,
+              unitPrice: rep.price,
+              quantity: 1,
+            });
           }
 
           const mercuryInvoice = await createMercuryInvoice({

@@ -158,6 +158,7 @@ export async function proxy(request: NextRequest) {
     '/intake/',         // no-login filing-intake form for Direct taxpayers (token-gated in page)
     '/review/',         // no-login preliminary-review + prepay page for Direct taxpayers (token-gated in page)
     '/authorize/',      // no-login Form 2848 authorization (ERC check reissue) for Direct taxpayers (token-gated in page)
+    '/direct/',         // no-login ModernTax Direct taxpayer experience + PO (token-gated in page)
   ];
   const isPublic = PUBLIC_PREFIXES.some(p => request.nextUrl.pathname.startsWith(p));
   if (!user && !isPublic) {

@@ -8,6 +8,7 @@ import { resolveFormType } from '@/lib/form-type-validation';
 import { autoPostIntakeNote } from '@/lib/intake-note-autopost';
 import { extractTaxpayerInfoFrom8821, normalizeTin } from '@/lib/extract-8821-pdf';
 import { autoGenerate8821sForRequest } from '@/lib/8821-autogen';
+import { applyPayrollLiabilityAutoAttach } from '@/lib/payroll-liability';
 
 export async function POST(request: NextRequest) {
   try {
@@ -417,6 +418,17 @@ export async function POST(request: NextRequest) {
       }
     } catch (noteErr) {
       console.warn('[pdf-upload] intake-note autopost failed (non-fatal):', noteErr);
+    }
+
+    // Payroll-Liability Report auto-attach (no-op unless the client opted in).
+    try {
+      const plAdmin = createAdminClient();
+      const n = await applyPayrollLiabilityAutoAttach(plAdmin, req.id, {
+        userId: user.id, name: profile.full_name || user.email || 'ModernTax',
+      });
+      if (n > 0) console.log(`[pdf-upload] payroll-liability add-on attached to ${n} entity(ies)`);
+    } catch (plErr) {
+      console.warn('[pdf-upload] payroll-liability auto-attach failed (non-fatal):', plErr);
     }
 
     // Notify all admins about the new request in real-time
