@@ -72,11 +72,14 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
   // Their re-pulls go through a fresh full-price new request instead.
   const { data: clientCfg } = await supabase
     .from('clients')
-    .select('disable_monitoring, credit_balance')
+    .select('disable_monitoring, credit_balance, slug, name')
     .eq('id', request.client_id)
-    .single() as { data: { disable_monitoring: boolean | null; credit_balance: number | null } | null };
+    .single() as { data: { disable_monitoring: boolean | null; credit_balance: number | null; slug: string | null; name: string | null } | null };
   const hideMonitoringUi = !!clientCfg?.disable_monitoring;
   const accountCredit = Number(clientCfg?.credit_balance) || 0;
+  // Cal Statewide receives the Record of Account ONLY — hide Tax Return
+  // Transcript / Wage & Income / 940 from their processor download list.
+  const roaOnly = clientCfg?.slug === 'california-statewide-cdc' || /statewide/i.test(clientCfg?.name || '');
 
   // ModernTax Direct taxpayer: a limited, client-facing view. They see status,
   // the resolution roadmap, the filing intake, the filing-fee payment, and the
@@ -254,7 +257,7 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                       ...(e.transcript_html_urls || []),
                     ];
                     const filtered = filterRequestedTranscripts(
-                      allUrls, e.form_type, e.years,
+                      allUrls, e.form_type, e.years, roaOnly,
                     );
                     // De-duplicate (same URL may appear in both arrays)
                     const unique = new Set(filtered.requested);
@@ -501,6 +504,7 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                         allUrls,
                         entity.form_type as string | null,
                         entity.years as string[] | null,
+                        roaOnly,
                       );
                       const internalNote = formatInternalPullsNote(filtered.internalSummary);
                       if (filtered.requested.length === 0 && !internalNote) return null;

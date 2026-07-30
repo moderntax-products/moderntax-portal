@@ -117,6 +117,13 @@ export function filterRequestedTranscripts(
   urls: string[],
   requestedFormType: string | null,
   requestedYears: string[] | null,
+  /**
+   * Cal Statewide asked to receive the Record of Account ONLY (they never use
+   * the Tax Return Transcript, and the extra pages confused their processors).
+   * When true, the returned `requested` list drops Tax Return Transcript,
+   * Wage & Income, and Form 940 files — keeping ROA + the 941 payroll reports.
+   */
+  roaOnly = false,
 ): RequestedFilterResult {
   const requested: string[] = [];
   const internalOnly: string[] = [];
@@ -188,6 +195,29 @@ export function filterRequestedTranscripts(
   summary.bonusErcSweep = internalUniqueKeys.bonusErcSweep.size;
   summary.differentForm = internalUniqueKeys.differentForm.size;
   summary.yearOutOfScope = internalUniqueKeys.yearOutOfScope.size;
+
+  // ROA-only clients (Cal Statewide) get exactly two things: the income-form
+  // Record of Account (for the requested years) and the 941 payroll reports —
+  // the standing add-on they asked for. Everything else (Tax Return Transcript,
+  // Wage & Income, income Account Transcript, 940) is hidden. Because the 941s
+  // are a different form than the entity's income form, the matching loop above
+  // routed them to `internalOnly`; here we recompute from the full list so they
+  // are shown (Cal Statewide requested them) while the extra income types drop.
+  if (roaOnly) {
+    const keep = new Set<string>();
+    for (const url of urls) {
+      const p = parseTranscriptFilename(url);
+      const yearOk = !p.year || !requestedYears || requestedYears.includes(p.year);
+      const isIncomeRoa = p.type === 'ROA' && p.form !== '941' && p.form !== '940' && yearOk;
+      const is941 = p.form === '941';
+      if (isIncomeRoa || is941) keep.add(url);
+    }
+    return {
+      requested: urls.filter((u) => keep.has(u)),
+      internalOnly: urls.filter((u) => !keep.has(u)),
+      internalSummary: summary,
+    };
+  }
 
   return { requested, internalOnly, internalSummary: summary };
 }
