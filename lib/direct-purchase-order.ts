@@ -101,6 +101,9 @@ export interface DetectedSituation {
   undeliveredCount?: number;
   /** Delinquent federal return years not yet filed. */
   unfiledYears?: string[];
+  /** True for a business return (1120/1120S/1065/941/940) — back-filing a
+   *  business return is 2× the individual (1040) get-started fee. */
+  isBusiness?: boolean;
   /** States needing a resolution/payment plan. */
   states?: string[];
   /** Any assessed balance carrying penalties (drives penalty-abatement offer). */
@@ -154,6 +157,11 @@ export function detectSituation(grossReceipts: any, formType?: string): Detected
   const states: string[] = Array.isArray(gr.resolution?.states) ? gr.resolution.states.map(String) : [];
   if (states.length) s.states = states;
 
+  // Business return (1120/1120S/1065/941/940) vs individual (1040) — drives the
+  // 2× back-filing get-started fee. Unknown form defaults to individual (1×).
+  const ft = (formType || '').toUpperCase();
+  s.isBusiness = !!ft && !ft.includes('1040');
+
   return s;
 }
 
@@ -194,12 +202,20 @@ export function recommendLineItems(sit: DetectedSituation): POLineItem[] {
     });
   }
 
-  // File back taxes — per delinquent year.
+  // File back taxes — a GET-STARTED fee per delinquent year that opens the
+  // engagement. Business returns (1120/1120S/1065) are 2× the individual
+  // (1040) rate. The completed filings themselves are billed separately at the
+  // assigned expert's hourly rate, so this is a starting fee, not the total.
   if (sit.unfiledYears && sit.unfiledYears.length) {
-    push('backyear_filing', sit.unfiledYears.length, {
-      description: `We prepare and file your ${sit.unfiledYears.length} delinquent federal return${
-        sit.unfiledYears.length === 1 ? '' : 's'
-      } to stop the penalty clock and claim any refunds still in the window.`,
+    const n = sit.unfiledYears.length;
+    const base = getDirectService('backyear_filing')?.unitPrice || 50;
+    const perReturn = sit.isBusiness ? base * 2 : base;
+    push('backyear_filing', n, {
+      unitPrice: perReturn,
+      amount: Math.round(perReturn * n * 100) / 100,
+      description: `Get-started fee to begin your ${n} delinquent ${sit.isBusiness ? 'business' : 'individual'} federal return${
+        n === 1 ? '' : 's'
+      } — $${perReturn}/return to open the engagement (SBA-compliance filing). The completed returns are billed separately at the assigned expert's hourly rate.`,
     });
   }
 
