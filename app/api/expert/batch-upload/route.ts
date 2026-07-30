@@ -404,10 +404,25 @@ export async function POST(request: NextRequest) {
     // content. Merge into gross_receipts and keep the in-memory copy in sync so
     // the later compliance-screening update (which spreads entity.gross_receipts)
     // doesn't clobber it.
-    const mergedGrossReceipts = {
-      ...((entity as any).gross_receipts || {}),
+    const priorGr = (entity as any).gross_receipts || {};
+    const mergedGrossReceipts: Record<string, any> = {
+      ...priorGr,
       transcript_hashes: [...existingHashes, fileHash],
     };
+    // If this entity was already summarized/delivered, a NEW file changes the
+    // picture — flag it stale so the resummarize-notify cron rebuilds the
+    // plain-language summary and tells the processor what was added. Append the
+    // new file + keep the earliest `since` so a burst of files debounces to one
+    // regeneration + one notification.
+    if (priorGr.processor_summary) {
+      const stale = priorGr.summary_stale || {};
+      const newFiles = Array.isArray(stale.new_files) ? stale.new_files.slice() : [];
+      newFiles.push(sanitizedFilename);
+      mergedGrossReceipts.summary_stale = {
+        since: stale.since || new Date().toISOString(),
+        new_files: newFiles,
+      };
+    }
     entityUpdate.gross_receipts = mergedGrossReceipts;
     (entity as any).gross_receipts = mergedGrossReceipts;
 
