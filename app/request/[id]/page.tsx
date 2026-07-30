@@ -4,6 +4,7 @@ import type { RequestEntity } from '@/lib/types';
 import { maskTid } from '@/lib/mask';
 import Link from 'next/link';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
+import { ProcessorSummaryPanel } from '@/components/ProcessorSummaryPanel';
 import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
 import { MonitoringPanel } from '@/components/MonitoringPanel';
@@ -518,6 +519,14 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                               ({entity.form_type} for {(entity.years || []).join(', ')})
                             </span>
                           </h4>
+                          {entity.status === 'completed' && (
+                            <div className="mb-4">
+                              <ProcessorSummaryPanel
+                                entityId={entity.id}
+                                initialSummary={(entity.gross_receipts as any)?.processor_summary || null}
+                              />
+                            </div>
+                          )}
                           <div className="space-y-2">
                             {dedup.map((url: string, idx: number) => {
                               const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
