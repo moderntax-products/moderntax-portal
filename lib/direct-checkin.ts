@@ -47,7 +47,12 @@ export function buildCheckin(entity: any): CheckinRecipient | null {
 
   const sit = detectSituation(gr, entity.form_type);
   const engagements = Array.isArray(gr.engagements) ? gr.engagements : [];
-  const engaged = engagements.some((e: any) => e.status === 'paid') || gr.purchase_order?.status === 'paid';
+  // "Engaged" = we're actively working the case. A paid engagement/PO counts,
+  // and so does a confirmed paying Direct customer (Mercury/Stripe) — otherwise
+  // the check-in wrongly tells a paying client "we just need your go-ahead."
+  const engaged = engagements.some((e: any) => e.status === 'paid')
+    || gr.purchase_order?.status === 'paid'
+    || gr.direct_customer?.paying === true;
 
   let statusLine: string;
   let nextStep: string;
