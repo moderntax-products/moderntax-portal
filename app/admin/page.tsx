@@ -244,10 +244,24 @@ export default async function AdminPage({ searchParams }: PageProps) {
       const entityAgeHours = Math.round((now.getTime() - new Date(entity.updated_at || entity.created_at).getTime()) / (1000 * 60 * 60));
       const entityAgeDays = Math.floor(entityAgeHours / 24);
 
-      let category: Bottleneck['category'] = 'irs_queue';
-      if (entity.status === '8821_sent') category = 'awaiting_signature';
-      else if (['irs_queue', 'processing'].includes(entity.status) && !assignment) category = 'unassigned';
-      else if (entityAgeDays >= 5) category = 'stale';
+      // BUG FIX (2026-07-30): the category used to default to 'irs_queue', so a
+      // 'pending'/'submitted' entity — one with NO signed 8821 on file — fell
+      // through and showed up under "IRS Queue" as if it were ready for the
+      // expert, with the age reading like a running clock. Those belong in
+      // "Awaiting 8821 Signature": nothing can move until the borrower signs
+      // (or the processor sends/uploads the 8821). Only entities that actually
+      // reached the IRS-work stages land in the IRS Queue.
+      let category: Bottleneck['category'];
+      if (['pending', 'submitted', '8821_sent'].includes(entity.status)) {
+        // No signed 8821 yet — blocked on the signature, not on our IRS work.
+        category = 'awaiting_signature';
+      } else if (['irs_queue', 'processing'].includes(entity.status) && !assignment) {
+        category = 'unassigned';
+      } else if (entityAgeDays >= 5) {
+        category = 'stale';
+      } else {
+        category = 'irs_queue';
+      }
 
       bottlenecks.push({
         entityName: entity.entity_name,
