@@ -16,12 +16,11 @@ const MISS_REASON_CATEGORIES = [
       { value: 'wrong_ssn', label: 'Wrong SSN on 8821' },
       { value: 'illegible_tid', label: 'Handwritten / Illegible EIN or SSN — no supporting evidence' },
       { value: 'wrong_business_name', label: 'Wrong Business Name on 8821' },
-      { value: 'wrong_taxpayer_name', label: 'Wrong Taxpayer Name on 8821' },
+      { value: 'wrong_taxpayer_name', label: 'Wrong Taxpayer / Authorized Party Name on 8821' },
       { value: 'missing_tax_years', label: 'Missing or Wrong Tax Years on 8821' },
       { value: 'wrong_form_type', label: 'Wrong Form Type on 8821' },
       { value: 'irs_rejected', label: 'IRS Rejected Signature (wet ink required)' },
       { value: '8821_not_on_file', label: '8821 Not on File — Needs Refax' },
-      { value: 'caf_not_on_file', label: 'CAF Number Not on File' },
     ],
   },
   {
@@ -157,7 +156,7 @@ export function ExpertFlagIssue({ assignmentId, onComplete }: ExpertFlagIssuePro
         </div>
       )}
 
-      {['8821_not_on_file', 'caf_not_on_file'].includes(missReason) && (
+      {missReason === '8821_not_on_file' && (
         <div className="text-xs text-blue-700 bg-blue-50 border border-blue-200 p-2 rounded">
           <strong>Auto-action:</strong> The 8821 will be re-faxed to the IRS. Please note the fax number the IRS agent provided (if different from default).
         </div>
