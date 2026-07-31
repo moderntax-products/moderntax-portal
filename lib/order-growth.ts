@@ -237,35 +237,13 @@ import sgMail from '@sendgrid/mail';
 
 const sendGridApiKey = process.env.SENDGRID_API_KEY;
 if (sendGridApiKey) sgMail.setApiKey(sendGridApiKey);
-const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io';
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
-const SOCIAL_HTML = '<p style="font-size:12px;color:#6b7280;margin-top:14px;">More from ModernTax: <a href="https://moderntax.substack.com">Substack</a> &middot; <a href="https://www.linkedin.com/company/moderntax">LinkedIn</a></p>';
 const SOCIAL_TEXT = 'More from ModernTax: Substack https://moderntax.substack.com · LinkedIn https://www.linkedin.com/company/moderntax';
 
-const esc = (s: string) =>
-  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** Brand-matched shell (dark header + #00C48C accent), kept local + minimal. */
-function shell(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
-  return `
-<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;color:#13213e;">
-  <div style="background:linear-gradient(135deg,#0A1929,#102A43);padding:22px 24px;border-radius:10px 10px 0 0;">
-    <div style="color:#fff;font-size:17px;font-weight:700;">${esc(title)}</div>
-  </div>
-  <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;padding:24px;background:#fff;line-height:1.6;font-size:15px;">
-    ${body}
-    <div style="margin:26px 0 6px;">
-      <a href="${ctaUrl}" style="display:inline-block;background:#00C48C;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:8px;">${esc(ctaLabel)}</a>
-    </div>
-    <p style="font-size:12px;color:#8b93a7;margin-top:22px;">
-      You're getting this because you order transcripts through ModernTax.
-      Reply "pause" and I'll stop these.
-    </p>
-  </div>
-</div>`.trim();
-}
-
-async function send(to: string, subject: string, html: string, text: string): Promise<boolean> {
+// Plain text from Matt's address — founder voice. Branded HTML from
+// notifications@ read as bulk mail (Jeff Jaddoe, Cal Statewide, 2026-07-22),
+// so these now match the first-order / feature-digest engines: text only.
+async function send(to: string, subject: string, text: string): Promise<boolean> {
   if (!sendGridApiKey) {
     console.warn('[order-growth] SENDGRID_API_KEY not set — skipping send');
     return false;
@@ -273,10 +251,9 @@ async function send(to: string, subject: string, html: string, text: string): Pr
   try {
     await sgMail.send({
       to,
-      from: { email: fromEmail, name: 'Matt at ModernTax' },
+      from: { email: 'matt@moderntax.io', name: 'Matt Parker' },
       replyTo: 'matt@moderntax.io',
       subject,
-      html,
       text,
     });
     return true;
@@ -291,20 +268,25 @@ export async function sendWeeklyOrderNudge(t: ProcessorTarget): Promise<boolean>
   const name = firstName(t.full_name);
   const d = t.daysSinceLastOrder ?? LAPSED_DAYS;
   const subject = `Anything to pull this week, ${name}?`;
-  const body = `
-<p>Hi ${esc(name)},</p>
-<p>Nothing came through from ${t.client_name ? `<strong>${esc(t.client_name)}</strong>` : 'your team'}
-this week &mdash; last order was about ${d} days ago. No problem at all if the pipeline's quiet;
-I just wanted to make it easy if you've got files waiting.</p>
-<p>A couple of things that make it quicker than it used to be:</p>
-<ul style="margin:10px 0 0;padding-left:20px;">
-  <li style="margin-bottom:6px;">Enter the taxpayer once and a <strong>pre-filled 8821</strong> downloads and lands in your inbox &mdash; no blank templates.</li>
-  <li style="margin-bottom:6px;">Email the signed copy to <strong>intake@in.moderntax.io</strong> with the loan number in the subject and it files itself.</li>
-  <li>Entity verification is now <strong>included free</strong> on every order.</li>
-</ul>
-<p style="margin-top:14px;">Most orders come back within 24 hours.</p>${SOCIAL_HTML}`;
-  const text = `Hi ${name},\n\nNothing came through this week — last order was ~${d} days ago. No problem if it's quiet; just making it easy if you have files waiting.\n\nEnter the taxpayer once and a pre-filled 8821 lands in your inbox. Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it files itself. Entity verification is free on every order. Most orders return within 24 hours.\n\nPlace an order: ${appUrl}/new\n\n${SOCIAL_TEXT}\n\n— Matt`;
-  return send(t.email, subject, shell('Anything to pull this week?', body, 'Place an order', `${appUrl}/new`), text);
+  const text = `Hi ${name},
+
+Nothing came through${t.client_name ? ` from ${t.client_name}` : ''} this week — last order was ~${d} days ago. No problem if it's quiet; just making it easy if you have files waiting.
+
+A couple of things that make it quicker than it used to be:
+- Enter the taxpayer once and a pre-filled 8821 lands in your inbox — no blank templates.
+- Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it files itself.
+- Entity verification is now included free on every order.
+
+Most orders come back within 24 hours.
+
+Place an order: ${appUrl}/new
+
+${SOCIAL_TEXT}
+
+— Matt
+
+(Reply "pause" if you'd rather not get these.)`;
+  return send(t.email, subject, text);
 }
 
 /** NEXT-ORDER — fires right after an order completes. The compounding lever. */
@@ -318,19 +300,27 @@ export async function sendNextOrderNudge(t: CompletionTarget): Promise<boolean> 
   const raw = (t.loan_number || '').trim();
   const looksLikeLoanNo = raw.length > 0 && raw.length <= 20 && /\d/.test(raw) && !/\s/.test(raw);
   const label = raw ? (looksLikeLoanNo ? `loan #${raw}` : raw) : '';
-  const loan = label ? ` for ${esc(label)}` : '';
+  const loan = label ? ` for ${label}` : '';
   const subject = label
     ? `Transcripts are in for ${label} — what's next?`
     : `Your transcripts are in — what's next?`;
-  const body = `
-<p>Hi ${esc(name)},</p>
-<p>Your ${n > 0 ? `${n} ${n === 1 ? 'entity' : 'entities'}` : 'transcripts'}${loan}
-${n === 1 ? 'is' : 'are'} complete and posted in the portal.</p>
-<p>${t.orderCount <= 2
-    ? `That's order #${t.orderCount} done &mdash; nice. If you've got another file in underwriting, it takes about a minute to queue up.`
-    : `If you've got another file moving through underwriting, it takes about a minute to queue the next one.`}</p>
-<p style="font-size:14px;color:#4b5563;">Reminder: entity verification is free, you're never billed for a rejected pull,
-and the pre-filled 8821 comes straight back to your inbox.</p>${SOCIAL_HTML}`;
-  const text = `Hi ${name},\n\nYour transcripts${loan} are complete and posted in the portal.\n\nIf you've got another file in underwriting, it takes about a minute to queue the next one. Entity verification is free, you're never billed for a rejected pull, and the pre-filled 8821 comes back to your inbox.\n\nOrder the next one: ${appUrl}/new\n\n${SOCIAL_TEXT}\n\n— Matt`;
-  return send(t.email, subject, shell('Transcripts delivered', body, 'Order the next one', `${appUrl}/new`), text);
+  const milestone = t.orderCount <= 2
+    ? `That's order #${t.orderCount} done — nice. If you've got another file in underwriting, it takes about a minute to queue up.`
+    : `If you've got another file moving through underwriting, it takes about a minute to queue the next one.`;
+  const text = `Hi ${name},
+
+Your ${n > 0 ? `${n} ${n === 1 ? 'entity' : 'entities'}` : 'transcripts'}${loan} ${n === 1 ? 'is' : 'are'} complete and posted in the portal.
+
+${milestone}
+
+Reminder: entity verification is free, you're never billed for a rejected pull, and the pre-filled 8821 comes straight back to your inbox.
+
+Order the next one: ${appUrl}/new
+
+${SOCIAL_TEXT}
+
+— Matt
+
+(Reply "pause" if you'd rather not get these.)`;
+  return send(t.email, subject, text);
 }
