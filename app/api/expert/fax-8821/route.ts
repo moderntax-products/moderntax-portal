@@ -97,7 +97,8 @@ export async function POST(request: NextRequest) {
       to,
       contentUrl: signed.signedUrl,
       callbackUrl,
-      headerText: `ModernTax 8821 - ${entity.entity_name}`.slice(0, 60),
+      // Sinch caps the header line at 50 chars (sendSinchFax enforces it too).
+      headerText: `ModernTax 8821 - ${entity.entity_name}`.slice(0, 50),
       fromSeed: user.id, // pin this expert to a stable sender number in the pool
     });
 
