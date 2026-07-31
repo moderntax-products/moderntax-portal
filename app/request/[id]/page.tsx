@@ -429,24 +429,12 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                       </div>
                     )}
 
-                    {/* Financial Data — internal raw gross_receipts dump; never shown to the taxpayer */}
-                    {!isDirectUser && entity.gross_receipts && typeof entity.gross_receipts === 'object' && !(entity.gross_receipts as any)?.entity_transcript_order && (
-                      <div className="bg-gray-50 rounded-lg p-6 mb-4">
-                        <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Financial Data</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          {Object.entries(entity.gross_receipts as Record<string, unknown>)
-                            .filter(([key]) => !['entity_transcript_order', 'entity_transcript'].includes(key))
-                            .map(([key, value]) => (
-                            <div key={key}>
-                              <p className="text-xs text-gray-600 uppercase tracking-wide">{key}</p>
-                              <p className="text-lg font-semibold text-mt-dark">
-                                {typeof value === 'number' ? `$${value.toLocaleString()}` : String(value)}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {/* Financial Data raw gross_receipts dump removed 2026-07-30:
+                        it leaked internal keys (transcript_hashes, faxes,
+                        processor_summary, purchase_order…) and rendered nested
+                        objects as "[object Object]" to processors. The
+                        plain-English summary panel below is the processor-facing
+                        view; the admin request page keeps the internal detail. */}
 
                     {/* Compliance Score */}
                     {!isDirectUser && entity.compliance_score !== null && entity.compliance_score !== undefined && (
@@ -514,13 +502,29 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                       for (const u of filtered.requested) {
                         if (!seen.has(u)) { seen.add(u); dedup.push(u); }
                       }
+                      // SBA lenders want PDF, not both formats. Hide the HTML
+                      // copy whenever a PDF of the same transcript exists;
+                      // HTML-only transcripts still show so nothing is lost.
+                      const stemOf = (u: string) =>
+                        (u.split('/').pop() || '').replace(/^\d+-/, '').replace(/\.(pdf|html)$/i, '').toLowerCase();
+                      const pdfStems = new Set(dedup.filter((u) => u.toLowerCase().endsWith('.pdf')).map(stemOf));
+                      const display = dedup.filter((u) => !(u.toLowerCase().endsWith('.html') && pdfStems.has(stemOf(u))));
+                      // Human-readable label from the filename: "1040 Record of Account — 2023",
+                      // flagging IRS "no record on file" stubs plainly.
+                      const prettyLabel = (u: string) => {
+                        let n = (u.split('/').pop() || '').replace(/^\d+-/, '').replace(/\.(pdf|html)$/i, '');
+                        const noRecord = /no-record/i.test(n);
+                        n = n.replace(/-no-record-\d+$/i, '');
+                        const m = n.match(/\b(1040|1120S|1120|1065|941|940)\b.*$/i);
+                        const label = (m ? m[0] : n).replace(/\s*-\s*/g, ' — ').replace(/\s+/g, ' ').trim();
+                        return noRecord ? `${label} — no record on file` : label;
+                      };
                       return (
                         <div className="border-t border-gray-200 pt-6">
                           <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
                             Transcript Downloads
                             <span className="ml-2 text-xs font-normal text-gray-500 normal-case tracking-normal">
-                              {dedup.length} file{dedup.length === 1 ? '' : 's'} matching your request
-                              ({entity.form_type} for {(entity.years || []).join(', ')})
+                              {display.length} file{display.length === 1 ? '' : 's'} · {entity.form_type} for {(entity.years || []).join(', ')}
                             </span>
                           </h4>
                           {entity.status === 'completed' && (
@@ -532,17 +536,16 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                             </div>
                           )}
                           <div className="space-y-2">
-                            {dedup.map((url: string, idx: number) => {
-                              const ext = url.endsWith('.html') ? 'HTML' : 'PDF';
+                            {display.map((url: string, idx: number) => {
+                              const isHtml = url.toLowerCase().endsWith('.html');
                               return (
                                 <div key={idx} className="flex items-center gap-2">
-                                  <TranscriptDownloadLink
-                                    storagePath={url}
-                                    label={`Transcript ${idx + 1}`}
-                                  />
-                                  <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${ext === 'HTML' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                                    {ext}
-                                  </span>
+                                  <TranscriptDownloadLink storagePath={url} label={prettyLabel(url)} />
+                                  {isHtml && (
+                                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-100 text-blue-700">
+                                      HTML
+                                    </span>
+                                  )}
                                 </div>
                               );
                             })}

@@ -32,10 +32,12 @@ interface Props {
   entityName: string;
 }
 
-// The processor should see admin replies as "ModernTax Support", never an
-// individual admin's name (mirrors the email masking in the notes route).
+// The processor should never see an individual ModernTax person's name — just
+// the information + compliance insight. Mask BOTH admin and expert authors to
+// "ModernTax" (mirrors the email masking in the notes route). Only the client's
+// own people (processor / manager) keep their names.
 function displayName(n: SupportNote): string {
-  return n.author_role === 'admin' ? 'ModernTax Support' : n.author_name;
+  return n.author_role === 'admin' || n.author_role === 'expert' ? 'ModernTax' : n.author_name;
 }
 
 export function SupportTicketPanel({ entityId, entityName }: Props) {

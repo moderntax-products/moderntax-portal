@@ -7,7 +7,7 @@
  * raw IRS HTML files. Matt 2026-07-29.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 type Tone = 'ok' | 'warn' | 'crit';
 interface Section { title: string; body: string; tone: Tone }
@@ -44,13 +44,21 @@ export function ProcessorSummaryPanel({ entityId, initialSummary }: { entityId: 
     }
   }
 
+  // Auto-build the summary the first time a completed request is opened without
+  // one, so the processor sees the compliance picture without clicking anything.
+  // It's stored on first generation, so this fires at most once per entity.
+  useEffect(() => {
+    if (!summary && !loading) generate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!summary) {
     return (
       <div className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="flex items-center justify-between">
           <div>
             <p className="font-semibold text-gray-900 text-sm">Plain-English summary</p>
-            <p className="text-xs text-gray-500 mt-0.5">Skip the raw transcripts — get the compliance picture in a few lines.</p>
+            <p className="text-xs text-gray-500 mt-0.5">{loading ? 'Reading your transcripts…' : 'Skip the raw transcripts — get the compliance picture in a few lines.'}</p>
           </div>
           <button onClick={generate} disabled={loading}
             className="text-sm font-semibold text-white bg-mt-green hover:brightness-95 disabled:opacity-50 px-4 py-2 rounded-lg">
