@@ -8,7 +8,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import { sendAdminReadyFor8821Notification } from '@/lib/sendgrid';
 
-const EDITABLE_STATUSES = ['pending', 'submitted'];
+// 'failed' is editable so a processor can correct the detail the IRS rejected
+// (bad address, wrong name/TIN/form) and re-submit — see /api/entity/resubmit.
+const EDITABLE_STATUSES = ['pending', 'submitted', 'failed'];
 
 const ALLOWED_FIELDS = [
   'signer_email',
@@ -68,7 +70,7 @@ export async function PATCH(request: NextRequest) {
     if (!EDITABLE_STATUSES.includes(entity.status)) {
       return NextResponse.json({
         error: 'Entity cannot be edited',
-        details: `Entity is in "${entity.status}" status. Only pending or submitted entities can be edited.`,
+        details: `Entity is in "${entity.status}" status. Only pending, submitted, or failed entities can be edited.`,
       }, { status: 400 });
     }
 

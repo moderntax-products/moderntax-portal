@@ -34,8 +34,8 @@ export function EditEntityButton({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Only show edit button for pending/submitted entities
-  if (!['pending', 'submitted'].includes(status)) return null;
+  // pending/submitted (pre-pull) and failed (correct-and-retry) are editable.
+  if (!['pending', 'submitted', 'failed'].includes(status)) return null;
 
   const handleSave = async () => {
     setSaving(true);

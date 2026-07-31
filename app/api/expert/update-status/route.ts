@@ -3,16 +3,7 @@ import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
 import { logAuditFromRequest } from '@/lib/audit';
 import { sendExpertIssueNotification, send8821FaxRequest, sendProcessorActionNeededNudge } from '@/lib/sendgrid';
-
-// Flag reasons where the SUBMITTING PROCESSOR (not just admin) is notified
-// immediately to obtain a corrected, legible 8821 — the EIN/SSN is wrong or
-// handwritten/illegible with no supporting evidence. These remain billable
-// (taxpayer-data error). Every other reason notifies admin only, as before.
-const PROCESSOR_NOTIFY_REASONS: Record<string, string> = {
-  wrong_ein: 'The EIN on the 8821 is incorrect.',
-  wrong_ssn: 'The SSN on the 8821 is incorrect.',
-  illegible_tid: 'The EIN/SSN on the 8821 is handwritten or illegible, with no supporting evidence to verify it.',
-};
+import { describeFailure } from '@/lib/failure-reasons';
 
 export async function POST(request: Request) {
   try {
@@ -178,12 +169,16 @@ export async function POST(request: Request) {
           console.error('Failed to send expert issue notification:', emailError);
         }
 
-        // Notify the SUBMITTING PROCESSOR immediately — ONLY for wrong /
-        // handwritten-illegible EIN/SSN (no supporting evidence). They must get
-        // a corrected, legible 8821. The order stays billable (their data error);
-        // we deliberately do NOT credit it back. All other reasons stay admin-only.
-        if (entityData && PROCESSOR_NOTIFY_REASONS[missReason]) {
+        // Notify the SUBMITTING PROCESSOR whenever a pull is marked FAILED. The
+        // plain-language reason (no expert identity) goes IN-PORTAL as a support
+        // note behind their login; a PII-free "log in" nudge goes by email.
+        // Previously only the 3 EIN/SSN reasons notified and every other failure
+        // was silent — exactly the "blind rejection, no reason given" pain Elena
+        // (BFC) + Sonja (Cal Statewide) flagged. Taxpayer-data errors stay
+        // billable; traceability is the expert_issue_flagged audit above.
+        if (entityData && markFailed) {
           try {
+            const info = describeFailure(missReason);
             const { data: req } = await adminSupabase
               .from('requests')
               .select('loan_number, requested_by')
@@ -196,8 +191,8 @@ export async function POST(request: Request) {
                 .eq('id', req.requested_by)
                 .single() as { data: { email: string | null; full_name: string | null; role: string } | null };
               if (proc?.email && ['processor', 'manager'].includes(proc.role)) {
-                // 1. Put the actual detail IN-PORTAL (behind login) as a support
-                //    note the processor sees on the entity — never in email.
+                // 1. Put the reason IN-PORTAL (behind login) as a support note —
+                //    plain language, no expert named, never in email.
                 const { data: noteAuthor } = await adminSupabase
                   .from('profiles').select('id').eq('role', 'admin')
                   .order('created_at', { ascending: true }).limit(1).maybeSingle() as { data: { id: string } | null };
@@ -207,20 +202,18 @@ export async function POST(request: Request) {
                     author_id: noteAuthor.id,
                     author_role: 'admin',
                     author_name: 'ModernTax Support',
-                    body: `Correction needed before we can process this 8821: ${PROCESSOR_NOTIFY_REASONS[missReason]} The taxpayer's EIN/SSN must be typed and legible on the form (only the signature may be handwritten). Please obtain a corrected 8821 and re-upload it for this loan.`,
+                    body: info.processorMessage,
                     kind: 'support',
                   });
                 }
                 // 2. Email a PII-FREE nudge — no entity/loan/taxpayer detail; just
-                //    "log in." The detail above is gated behind their login (+ 2FA).
+                //    "log in." The reason above is gated behind their login (+ 2FA).
                 await sendProcessorActionNeededNudge(proc.email, proc.full_name || 'there');
-                // Intentionally billable (processor data error) — no credit-back.
-                // Traceability comes from the expert_issue_flagged audit above.
-                console.log(`[update-status] Processor ${proc.email} nudged (PII-free) for ${missReason} on entity ${assignment.entity_id?.slice(0, 8)} — billable, not credited`);
+                console.log(`[update-status] Processor ${proc.email} notified of failure (${info.code}) on entity ${assignment.entity_id?.slice(0, 8)} — in-portal note + PII-free nudge`);
               }
             }
           } catch (procNotifyErr) {
-            console.error('Failed to notify processor of TID correction:', procNotifyErr);
+            console.error('Failed to notify processor of pull failure:', procNotifyErr);
           }
         }
 
