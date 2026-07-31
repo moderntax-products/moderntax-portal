@@ -235,47 +235,6 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
           loanNumber={request.loan_number}
         />
         <div className="space-y-12">
-          {/* Timeline */}
-          <div className="bg-white rounded-lg shadow p-8">
-            <h2 className="text-xl font-bold text-mt-dark mb-8">Request Timeline</h2>
-            <div className="space-y-6">
-              {TIMELINE_STEPS.map((step, index) => {
-                const isCompleted = index <= currentStepIndex && request.status !== 'failed';
-                const isActive = index === currentStepIndex;
-                const isFailed = request.status === 'failed' && index === currentStepIndex;
-
-                return (
-                  <div key={step.status} className="flex gap-6">
-                    <div className="flex flex-col items-center">
-                      <div
-                        className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-semibold text-sm ${
-                          isFailed ? 'bg-red-500' : isCompleted ? 'bg-mt-green' : isActive ? 'bg-blue-500 animate-pulse' : 'bg-gray-300'
-                        }`}
-                      >
-                        {isCompleted && !isFailed ? (
-                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        ) : (
-                          index + 1
-                        )}
-                      </div>
-                      {index < TIMELINE_STEPS.length - 1 && (
-                        <div className={`w-1 h-12 ${isCompleted && !isFailed ? 'bg-mt-green' : 'bg-gray-300'}`} />
-                      )}
-                    </div>
-                    <div className="pb-6">
-                      <h3 className={`text-lg font-semibold ${isFailed ? 'text-red-600' : isCompleted ? 'text-mt-green' : isActive ? 'text-blue-600' : 'text-gray-400'}`}>
-                        {step.label}
-                      </h3>
-                      <p className="text-gray-600 text-sm mt-1">{step.description}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Entities */}
           <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -394,6 +353,19 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                         />
                       );
                     })()}
+
+                    {/* Plain-English compliance summary — surfaced FIRST for a
+                        completed entity (Matt 2026-07-31): the processor sees the
+                        verdict ("clean file / nothing holds up the loan") up top,
+                        before the raw transcript files further down. */}
+                    {!isDirectUser && entity.status === 'completed' && (
+                      <div className="mb-6">
+                        <ProcessorSummaryPanel
+                          entityId={entity.id}
+                          initialSummary={(entity.gross_receipts as any)?.processor_summary || null}
+                        />
+                      </div>
+                    )}
 
                     {/* ModernTax Direct — taxpayer filing intake + authorization */}
                     {(() => {
@@ -609,14 +581,6 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                               {rows.length} document{rows.length === 1 ? '' : 's'} · {entity.form_type} for {(entity.years || []).join(', ')}
                             </span>
                           </h4>
-                          {entity.status === 'completed' && (
-                            <div className="mb-4">
-                              <ProcessorSummaryPanel
-                                entityId={entity.id}
-                                initialSummary={(entity.gross_receipts as any)?.processor_summary || null}
-                              />
-                            </div>
-                          )}
                           <div className="space-y-2">
                             {rows.map((r, idx) => (
                               <ProcessorFileRow key={idx} label={r.label} formats={r.formats} />
@@ -684,6 +648,49 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
               </div>
             </div>
           )}
+
+          {/* Request Timeline — moved to the bottom (Matt 2026-07-31): the header
+              status badge is the at-a-glance state; the step-by-step timeline is
+              reference detail, so it sits below the results, not above them. */}
+          <div className="bg-white rounded-lg shadow p-8">
+            <h2 className="text-xl font-bold text-mt-dark mb-8">Request Timeline</h2>
+            <div className="space-y-6">
+              {TIMELINE_STEPS.map((step, index) => {
+                const isCompleted = index <= currentStepIndex && request.status !== 'failed';
+                const isActive = index === currentStepIndex;
+                const isFailed = request.status === 'failed' && index === currentStepIndex;
+
+                return (
+                  <div key={step.status} className="flex gap-6">
+                    <div className="flex flex-col items-center">
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-semibold text-sm ${
+                          isFailed ? 'bg-red-500' : isCompleted ? 'bg-mt-green' : isActive ? 'bg-blue-500 animate-pulse' : 'bg-gray-300'
+                        }`}
+                      >
+                        {isCompleted && !isFailed ? (
+                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          index + 1
+                        )}
+                      </div>
+                      {index < TIMELINE_STEPS.length - 1 && (
+                        <div className={`w-1 h-12 ${isCompleted && !isFailed ? 'bg-mt-green' : 'bg-gray-300'}`} />
+                      )}
+                    </div>
+                    <div className="pb-6">
+                      <h3 className={`text-lg font-semibold ${isFailed ? 'text-red-600' : isCompleted ? 'text-mt-green' : isActive ? 'text-blue-600' : 'text-gray-400'}`}>
+                        {step.label}
+                      </h3>
+                      <p className="text-gray-600 text-sm mt-1">{step.description}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Data Retention & Compliance Notice */}
           <div className="bg-gray-100 rounded-lg border border-gray-200 p-6">
