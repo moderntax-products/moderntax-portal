@@ -4,6 +4,8 @@ import type { RequestEntity } from '@/lib/types';
 import { maskTid } from '@/lib/mask';
 import Link from 'next/link';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
+import { ProcessorFileRow } from '@/components/ProcessorFileRow';
+import { ProcessorActionBar } from '@/components/ProcessorActionBar';
 import { ProcessorSummaryPanel } from '@/components/ProcessorSummaryPanel';
 import { DownloadAllTranscripts } from '@/components/DownloadAllTranscripts';
 import { EditEntityButton } from '@/components/EditEntityButton';
@@ -189,6 +191,16 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
 
       {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* Action hub — order more, reorder, add monitoring, share with the team.
+            Hidden from ModernTax Direct taxpayers (they don't self-serve orders). */}
+        {!isDirectUser && (
+          <ProcessorActionBar
+            requestId={request.id}
+            canInvite={!!request.client_id}
+            showMonitoring={!hideMonitoringUi}
+            inviteClient={request.client_id ? { id: request.client_id, name: clientCfg?.name || 'your team' } : null}
+          />
+        )}
         <PrePortalDeliveryBanner
           isPrePortal={!!request.loan_number?.startsWith('HIST-')}
           loanNumber={request.loan_number}
@@ -507,8 +519,21 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                       // HTML-only transcripts still show so nothing is lost.
                       const stemOf = (u: string) =>
                         (u.split('/').pop() || '').replace(/^\d+-/, '').replace(/\.(pdf|html)$/i, '').toLowerCase();
-                      const pdfStems = new Set(dedup.filter((u) => u.toLowerCase().endsWith('.pdf')).map(stemOf));
-                      const display = dedup.filter((u) => !(u.toLowerCase().endsWith('.html') && pdfStems.has(stemOf(u))));
+                      // Group each document's formats (PDF + HTML) under one row
+                      // so BOTH are individually downloadable — PDF stays the
+                      // primary action for SBA, but the HTML copy is one click
+                      // away instead of hidden entirely. (Sonja: "hard to
+                      // download files when the only option is download all".)
+                      const groups = new Map<string, { pdf?: string; html?: string; sample: string }>();
+                      for (const u of dedup) {
+                        const s = stemOf(u);
+                        const g = groups.get(s) || { sample: u };
+                        const lower = u.toLowerCase();
+                        if (lower.endsWith('.pdf')) g.pdf = u;
+                        else if (lower.endsWith('.html')) g.html = u;
+                        else g.pdf = g.pdf || u;
+                        groups.set(s, g);
+                      }
                       // Human-readable label from the filename: "1040 Record of Account — 2023",
                       // flagging IRS "no record on file" stubs plainly.
                       const prettyLabel = (u: string) => {
@@ -519,12 +544,18 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                         const label = (m ? m[0] : n).replace(/\s*-\s*/g, ' — ').replace(/\s+/g, ' ').trim();
                         return noRecord ? `${label} — no record on file` : label;
                       };
+                      const rows = [...groups.values()].map((g) => {
+                        const formats: { ext: 'PDF' | 'HTML'; path: string }[] = [];
+                        if (g.pdf) formats.push({ ext: 'PDF', path: g.pdf });
+                        if (g.html) formats.push({ ext: 'HTML', path: g.html });
+                        return { label: prettyLabel(g.pdf || g.html || g.sample), formats };
+                      });
                       return (
                         <div className="border-t border-gray-200 pt-6">
                           <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
                             Transcript Downloads
                             <span className="ml-2 text-xs font-normal text-gray-500 normal-case tracking-normal">
-                              {display.length} file{display.length === 1 ? '' : 's'} · {entity.form_type} for {(entity.years || []).join(', ')}
+                              {rows.length} document{rows.length === 1 ? '' : 's'} · {entity.form_type} for {(entity.years || []).join(', ')}
                             </span>
                           </h4>
                           {entity.status === 'completed' && (
@@ -536,19 +567,9 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                             </div>
                           )}
                           <div className="space-y-2">
-                            {display.map((url: string, idx: number) => {
-                              const isHtml = url.toLowerCase().endsWith('.html');
-                              return (
-                                <div key={idx} className="flex items-center gap-2">
-                                  <TranscriptDownloadLink storagePath={url} label={prettyLabel(url)} />
-                                  {isHtml && (
-                                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-100 text-blue-700">
-                                      HTML
-                                    </span>
-                                  )}
-                                </div>
-                              );
-                            })}
+                            {rows.map((r, idx) => (
+                              <ProcessorFileRow key={idx} label={r.label} formats={r.formats} />
+                            ))}
                           </div>
                           {!isDirectUser && internalNote && (
                             <p className="mt-4 text-xs text-gray-500 italic border-t border-gray-100 pt-3">
@@ -592,7 +613,7 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
           {/* Transcript Monitoring — hidden for clients with
               disable_monitoring=true (Centerstone-style flat-rate
               contracts where re-pulls go through full new requests). */}
-          {!hideMonitoringUi && !isDirectUser && <MonitoringPanel
+          {!hideMonitoringUi && !isDirectUser && <div id="monitoring"><MonitoringPanel
             requestId={request.id}
             entities={(request.request_entities || []).map((e: RequestEntity) => ({
               id: e.id,
@@ -601,7 +622,7 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
               form_type: e.form_type,
               signed_8821_url: e.signed_8821_url,
             }))}
-          />}
+          /></div>}
 
           {/* Notes — internal (carries master CAF + resolution strategy); never shown to the taxpayer */}
           {!isDirectUser && request.notes && (
