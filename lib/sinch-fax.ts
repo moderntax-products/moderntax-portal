@@ -100,7 +100,14 @@ export async function sendSinchFax(input: {
   if (input.callbackUrl) body.callbackUrl = input.callbackUrl;
   const fromNumber = pickFaxFrom(input.fromSeed);
   if (fromNumber) body.from = fromNumber;
-  if (input.headerText) body.headerText = input.headerText.slice(0, 60);
+  // Sinch caps the fax header line at 50 characters and 422s the whole request
+  // if it's longer (confirmed by Sinch support). Enforce it here — the single
+  // Sinch boundary — so no caller can trip it. trim() avoids sending a header
+  // that's all trailing whitespace after the cut.
+  if (input.headerText) {
+    const header = input.headerText.slice(0, 50).trim();
+    if (header) body.headerText = header;
+  }
 
   const res = await fetch(`${SINCH_BASE}/projects/${process.env.SINCH_PROJECT_ID}/faxes`, {
     method: 'POST',
