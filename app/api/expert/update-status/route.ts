@@ -81,11 +81,14 @@ export async function POST(request: Request) {
       case 'flag_issue': {
         const { missReason, notes, markFailed } = body;
 
-        // 8821 rejection reasons that require resubmission
+        // 8821 rejection reasons that require resubmission. (caf_not_on_file
+        // removed 2026-07-31: ModernTax uses its own house CAF, which is always
+        // on file — the real reorder errors are 8821 data errors: EIN, business
+        // name, address, authorized-party name, etc.)
         const RESUBMISSION_REASONS = [
           'bad_address', 'wrong_ein', 'wrong_ssn', 'illegible_tid', 'wrong_business_name',
           'wrong_taxpayer_name', 'missing_tax_years', 'wrong_form_type',
-          '8821_not_on_file', 'caf_not_on_file',
+          '8821_not_on_file',
         ];
         const needsResubmission = RESUBMISSION_REASONS.includes(missReason);
 

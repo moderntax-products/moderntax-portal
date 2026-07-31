@@ -83,11 +83,11 @@ const MAP: Record<string, Omit<FailureInfo, 'code'>> = {
       'The business name did not match the IRS records. Please update the entity name to match the IRS exactly and re-submit.',
   },
   wrong_taxpayer_name: {
-    title: "The signer's name did not match IRS records",
-    explanation: "The IRS rejected the request because the taxpayer/signer name did not match their records.",
+    title: "The taxpayer / authorized party name did not match IRS records",
+    explanation: "The IRS rejected the request because the taxpayer / authorized-party name on the 8821 did not match their records.",
     primaryFix: 'edit',
     processorMessage:
-      "The signer's name did not match the IRS records. Please correct the signer name to match the IRS exactly and re-submit.",
+      "The taxpayer / authorized-party name did not match the IRS records. Please correct the name to match the IRS exactly and re-submit.",
   },
   missing_tax_years: {
     title: 'The requested tax years were not covered',
@@ -112,14 +112,6 @@ const MAP: Record<string, Omit<FailureInfo, 'code'>> = {
     primaryFix: 'upload_8821',
     processorMessage:
       'The IRS did not have the signed 8821 on file. Please upload the signed 8821 here and re-submit.',
-  },
-  caf_not_on_file: {
-    title: 'The authorization has not posted to the IRS yet',
-    explanation:
-      'The signed 8821 has not yet posted to the IRS CAF (authorization) system. This usually clears on its own within a few business days — re-submit to try again.',
-    primaryFix: 'retry',
-    processorMessage:
-      'The authorization has not posted to the IRS CAF system yet — this typically clears within a few business days. Re-submit to try the pull again shortly.',
   },
   irs_rejected: {
     title: 'The IRS rejected the e-signature on the 8821',
