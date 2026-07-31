@@ -2284,7 +2284,7 @@ matt@moderntax.io · 650-741-1085 · ModernTax, Inc.
  * /api/auth/signup wraps the call in a try/catch so a failed email
  * doesn't break sign-up itself.
  */
-export async function sendSignupPendingApprovalNotification(
+export async function sendNewSignupNotification(
   toEmail: string,
   signup: {
     fullName: string;
@@ -2298,14 +2298,19 @@ export async function sendSignupPendingApprovalNotification(
     existingClientName: string | null;
   },
 ): Promise<void> {
-  const adminUrl = `${appUrl}/admin/pending-signups`;
+  // Self-serve signups are auto-approved (Matt directive 2026-07-21) — the
+  // credit card is the activation gate, not admin review. So this is an
+  // informational heads-up, NOT a review request: pointing it at
+  // /admin/pending-signups (always empty now) is exactly the "email says
+  // waiting for review, queue is empty" bug this replaces.
+  const adminUrl = `${appUrl}/admin`;
   const useCaseDisplay = signup.useCase === 'other'
     ? `Other — ${signup.useCaseOther || '(no description)'}`
     : signup.useCase.charAt(0).toUpperCase() + signup.useCase.slice(1);
 
-  const subject = `New signup awaiting approval — ${signup.fullName} @ ${signup.companyName}`;
+  const subject = `New signup — ${signup.fullName} @ ${signup.companyName}`;
   const content = `
-<p>A new sign-up is waiting for review on the ModernTax portal.</p>
+<p>A new self-serve account was just created on the ModernTax portal. It's <strong>auto-approved</strong> — ordering unlocks once they add a payment method — so there's nothing to review. Sharing the details in case you want to reach out.</p>
 
 <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:18px 0;font-size:13px;">
   <tbody>
@@ -2320,15 +2325,15 @@ export async function sendSignupPendingApprovalNotification(
   </tbody>
 </table>
 
-<p style="font-size:13px;color:#6b7280;">Review and approve (or reject) from the admin portal:</p>
+<p style="font-size:13px;color:#6b7280;">No action needed — the credit card is the activation gate.</p>
 `.trim();
 
-  const html = createEmailTemplate('Sign-up awaiting approval', content, {
-    text: 'Review pending signup →',
+  const html = createEmailTemplate('New self-serve signup', content, {
+    text: 'Open admin',
     url: adminUrl,
   });
 
-  const text = `New signup awaiting approval
+  const text = `New signup
 
 Name: ${signup.fullName}
 Email: ${signup.email}
@@ -2338,7 +2343,8 @@ Domain: ${signup.companyDomain}
 Use case: ${useCaseDisplay}
 Found us via: ${signup.referralSource}
 ${signup.existingClientName ? `Matches existing client: ${signup.existingClientName}\n` : ''}
-Review at: ${adminUrl}
+Auto-approved — no action needed; the credit card is the activation gate.
+Admin: ${adminUrl}
 `.trim();
 
   try {
@@ -2351,7 +2357,7 @@ Review at: ${adminUrl}
       replyTo: 'matt@moderntax.io',
     });
   } catch (error) {
-    console.error('Failed to send signup-pending notification:', error);
+    console.error('Failed to send new-signup notification:', error);
     throw error;
   }
 }
