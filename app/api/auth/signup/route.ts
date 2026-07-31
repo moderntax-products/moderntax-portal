@@ -333,10 +333,9 @@ export async function POST(request: NextRequest) {
     // don't until an admin approves and assigns a client_id. The
     // /api/admin/approve-signup endpoint fires the welcome flow.
 
-    // Notify admins so they can review + approve. Single batched email
-    // (skips queueing complexity for now). Stored in audit_log so we
-    // can render the pending queue from the admin UI even if the email
-    // fails or gets filtered.
+    // Record the signup in audit_log (durable trail of who signed up + their
+    // qualification info, independent of email delivery). Self-serve signups
+    // are auto-approved, so this is a record — not a review-queue item.
     try {
       await admin.from('audit_log' as any).insert({
         user_email: email.trim().toLowerCase(),
@@ -360,21 +359,23 @@ export async function POST(request: NextRequest) {
       console.error('[signup] Failed to write pending-approval audit row:', auditErr);
     }
 
-    // Notify admins via SendGrid — non-blocking so signup still succeeds
-    // if email delivery fails. Best-effort; admin queue UI is the primary
-    // surface, this is just a courtesy heads-up.
+    // Heads-up to admins via SendGrid — non-blocking so signup still succeeds
+    // if email delivery fails. Self-serve signups are auto-approved (the card is
+    // the activation gate), so this is informational, NOT a review request — it
+    // must NOT imply there's something to approve in the (now always-empty)
+    // pending-signups queue.
     try {
-      const { sendSignupPendingApprovalNotification } = await import('@/lib/sendgrid');
+      const { sendNewSignupNotification } = await import('@/lib/sendgrid');
       const { data: admins } = await admin
         .from('profiles')
         .select('email')
         .eq('role', 'admin')
         .not('email', 'is', null) as { data: { email: string }[] | null; error: any };
       const adminEmails = (admins || []).map(a => a.email).filter(Boolean);
-      if (adminEmails.length > 0 && typeof sendSignupPendingApprovalNotification === 'function') {
+      if (adminEmails.length > 0 && typeof sendNewSignupNotification === 'function') {
         await Promise.allSettled(
           adminEmails.map(adminEmail =>
-            sendSignupPendingApprovalNotification(adminEmail, {
+            sendNewSignupNotification(adminEmail, {
               fullName: fullName.trim(),
               email: email.trim().toLowerCase(),
               title: title.trim(),
