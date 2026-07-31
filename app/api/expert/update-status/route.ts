@@ -137,6 +137,34 @@ export async function POST(request: Request) {
               .from('request_entities')
               .update({ status: 'failed' })
               .eq('id', assignment.entity_id);
+
+            // Roll the failure up to the parent request when EVERY entity has
+            // failed, so the request header reflects it instead of a stale
+            // in-flight status (a single-entity request otherwise read "IRS
+            // Queue" over a failed entity). Mirrors auto-complete-requests'
+            // `.every` rule; mixed states (some completed/in-flight, some
+            // failed) are intentionally left alone. Non-fatal.
+            try {
+              const { data: ent } = await adminSupabase
+                .from('request_entities')
+                .select('request_id')
+                .eq('id', assignment.entity_id)
+                .single() as { data: { request_id: string } | null };
+              if (ent?.request_id) {
+                const { data: siblings } = await adminSupabase
+                  .from('request_entities')
+                  .select('status')
+                  .eq('request_id', ent.request_id) as { data: { status: string }[] | null };
+                if (siblings && siblings.length > 0 && siblings.every((e) => e.status === 'failed')) {
+                  await adminSupabase
+                    .from('requests')
+                    .update({ status: 'failed' })
+                    .eq('id', ent.request_id);
+                }
+              }
+            } catch (rollupErr) {
+              console.error('[update-status] request status rollup failed (non-fatal):', rollupErr);
+            }
           }
         }
 
