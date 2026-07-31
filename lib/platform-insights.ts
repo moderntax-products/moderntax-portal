@@ -259,10 +259,12 @@ export async function sendInsights(r: InsightsRecipient, ins: PlatformInsights):
     console.warn('[platform-insights] SENDGRID_API_KEY not set — skipping send');
     return false;
   }
+  // Punchier, live-data subjects (Matt 2026-07-31). Never-ordered leads with the
+  // speed promise; active users get a concrete, always-fresh network number.
   const subject =
     r.orderCount === 0
-      ? 'Your ModernTax account — and how to run your first file'
-      : `What the ModernTax network verified this month`;
+      ? 'Your first IRS transcripts are about a day away'
+      : `${ins.completedAllTime.toLocaleString()} files verified across the ModernTax network`;
   try {
     await sgMail.send({
       to: r.email,
