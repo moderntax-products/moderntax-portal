@@ -86,7 +86,11 @@ export function FailureRecoveryPanel({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-red-800">This pull couldn&apos;t be completed — {reason.title}</p>
+            {/* The red panel + title already say "failed"; don't also prepend a
+                fixed lead-in, which doubled up as "This pull couldn't be
+                completed — This pull could not be completed" on the generic
+                reason. The title alone reads clean for specific and generic. */}
+            <p className="text-sm font-semibold text-red-800">{reason.title}</p>
             <p className="text-sm text-red-700 mt-0.5">{reason.explanation}</p>
           </div>
         </div>
