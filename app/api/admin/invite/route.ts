@@ -25,11 +25,15 @@ export async function POST(request: Request) {
       .eq('id', user.id)
       .single();
 
-    if (!callerProfile || !['admin', 'manager'].includes(callerProfile.role)) {
+    if (!callerProfile || !['admin', 'manager', 'processor'].includes(callerProfile.role)) {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
     }
 
-    const isManager = callerProfile.role === 'manager';
+    // Managers AND processors are client-scoped inviters: they can grow their
+    // own team by adding a processor, but only a processor and only to their own
+    // organization. No role escalation (manager/expert/admin) via this path —
+    // that stays admin-only. (Elena/Sonja: teams need self-serve seat-adds.)
+    const isClientInviter = callerProfile.role === 'manager' || callerProfile.role === 'processor';
 
     const body = await request.json();
     const { email, fullName, role, clientId } = body;
@@ -51,17 +55,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Managers can only invite processors, and only to their own client
-    if (isManager) {
+    // Managers/processors can only invite processors, and only to their own client
+    if (isClientInviter) {
       if (role !== 'processor') {
         return NextResponse.json(
-          { error: 'Managers can only invite processors' },
+          { error: 'You can only invite processors to your team' },
           { status: 403 }
         );
       }
       if (clientId !== callerProfile.client_id) {
         return NextResponse.json(
-          { error: 'Managers can only invite users to their own organization' },
+          { error: 'You can only invite users to your own organization' },
           { status: 403 }
         );
       }
