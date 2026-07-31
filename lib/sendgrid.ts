@@ -2391,6 +2391,8 @@ export async function sendSignupApprovedEmail(
 
 <p>Questions? Reply to this email and it lands directly in my inbox.</p>
 
+<p style="font-size:13px;color:#6b7280;">While you get set up, here's our latest thinking on <a href="https://moderntax.substack.com" style="color:#00C48C;">Substack</a> and <a href="https://www.linkedin.com/company/moderntax" style="color:#00C48C;">LinkedIn</a>.</p>
+
 <p style="font-size:14px;color:#1f2937;margin-top:20px;">
   Best,<br>
   Matthew Parker<br>
@@ -2410,6 +2412,8 @@ Take the 5-minute tour: ${tourUrl}
 Your account starts with $239.94 in free transcript credits — enough for 3 free IRS pulls.
 
 Reply with any questions.
+
+More from ModernTax: Substack https://moderntax.substack.com · LinkedIn https://www.linkedin.com/company/moderntax
 
 Best,
 Matt

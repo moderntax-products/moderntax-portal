@@ -328,10 +328,17 @@ export async function POST(request: NextRequest) {
       companyDomain,
     });
 
-    // Welcome / trial drip emails are now DEFERRED to admin approval.
-    // Sending them at sign-up would imply the user has access — they
-    // don't until an admin approves and assigns a client_id. The
-    // /api/admin/approve-signup endpoint fires the welcome flow.
+    // Send the welcome email now. Self-serve signups are AUTO-APPROVED above
+    // (approval_status:'approved', attached to a client) and never pass through
+    // /api/admin/approve-signup, which used to be the only thing that fired the
+    // welcome flow — so without this a brand-new signup got no onboarding email
+    // at all. Non-blocking so a mail hiccup never fails the signup.
+    try {
+      const { sendSignupApprovedEmail } = await import('@/lib/sendgrid');
+      await sendSignupApprovedEmail(email.trim().toLowerCase(), fullName.trim(), companyName.trim());
+    } catch (welcomeErr) {
+      console.error('[signup] welcome email failed (non-fatal):', welcomeErr);
+    }
 
     // Record the signup in audit_log (durable trail of who signed up + their
     // qualification info, independent of email delivery). Self-serve signups
