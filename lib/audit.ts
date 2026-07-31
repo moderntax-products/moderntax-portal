@@ -65,7 +65,8 @@ export type AuditAction =
   | 'check_reissue_requested'
   | 'check_reissue_status_changed'
   | '8821_sent_for_signature_by_admin'
-  | '8821_replaced';
+  | '8821_replaced'
+  | 'entity_resubmitted';
 
 export interface AuditEvent {
   action: AuditAction;

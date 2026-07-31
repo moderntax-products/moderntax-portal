@@ -43,8 +43,10 @@ import sgMail from '@sendgrid/mail';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Statuses where swapping the 8821 no longer makes sense. */
-const LOCKED_STATUSES = ['completed', 'failed'];
+/** Statuses where swapping the 8821 no longer makes sense. (A FAILED entity is
+ * NOT locked — uploading a corrected 8821 is a primary recovery path, and it
+ * re-queues the entity below.) */
+const LOCKED_STATUSES = ['completed'];
 
 export async function POST(request: NextRequest) {
   try {
@@ -123,8 +125,9 @@ export async function POST(request: NextRequest) {
       signed_8821_url: storagePath,
       gross_receipts: { ...(entity.gross_receipts || {}), replaced_8821_history: history },
     };
-    // Pre-signature statuses advance; in-flight ones keep their queue position.
-    if (['pending', 'submitted', '8821_sent'].includes(entity.status)) {
+    // Pre-signature statuses advance; a FAILED entity is re-queued with the
+    // corrected 8821; in-flight ones keep their queue position.
+    if (['pending', 'submitted', '8821_sent', 'failed'].includes(entity.status)) {
       update.status = '8821_signed';
     }
     const { error: upErr } = await admin.from('request_entities').update(update).eq('id', entityId);

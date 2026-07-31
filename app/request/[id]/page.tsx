@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
-import { createServerComponentClient } from '@/lib/supabase-server';
+import { createServerComponentClient, createAdminClient } from '@/lib/supabase-server';
 import type { RequestEntity } from '@/lib/types';
+import { describeFailure } from '@/lib/failure-reasons';
 import { maskTid } from '@/lib/mask';
 import Link from 'next/link';
 import { TranscriptDownloadLink } from '@/components/TranscriptDownloadLink';
@@ -19,6 +20,7 @@ import { CancelRequestButton } from '@/components/CancelRequestButton';
 import { LogoutButton } from '@/components/LogoutButton';
 import { PrePortalDeliveryBanner } from '@/components/PrePortalDeliveryBanner';
 import { ReplaceSigned8821 } from '@/components/ReplaceSigned8821';
+import { FailureRecoveryPanel } from '@/components/FailureRecoveryPanel';
 import { filterRequestedTranscripts, formatInternalPullsNote } from '@/lib/transcript-filter';
 
 interface Props {
@@ -91,6 +93,33 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
   // master CAF + resolution strategy). They also can't reach the dashboard, so
   // the header gives them a Sign Out instead of a looping "Back to Dashboard".
   const isDirectUser = profile.role === 'direct_user';
+
+  // Why each FAILED entity failed — read from expert_assignments.miss_reason.
+  // We use the admin client and select ONLY the reason fields (never expert_id
+  // or any profiles join), so the processor sees the reason, never the expert.
+  const failureByEntity: Record<string, string> = {};
+  if (!isDirectUser) {
+    const failedIds = (request.request_entities || [])
+      .filter((e: RequestEntity) => e.status === 'failed')
+      .map((e: RequestEntity) => e.id);
+    if (failedIds.length > 0) {
+      const admin = createAdminClient();
+      const { data: fails } = await admin
+        .from('expert_assignments')
+        .select('entity_id, miss_reason, resubmission_reason, completed_at')
+        .in('entity_id', failedIds)
+        .eq('status', 'failed')
+        .order('completed_at', { ascending: false }) as {
+          data: { entity_id: string; miss_reason: string | null; resubmission_reason: string | null }[] | null;
+        };
+      for (const row of fails || []) {
+        // First row per entity is the most recent failed assignment.
+        if (!failureByEntity[row.entity_id]) {
+          failureByEntity[row.entity_id] = row.miss_reason || row.resubmission_reason || 'other';
+        }
+      }
+    }
+  }
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
@@ -326,7 +355,9 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                         )}
                       </div>
                       <div className="flex items-center gap-3">
-                        {!isDirectUser && (
+                        {/* Failed entities edit from inside the recovery panel
+                            below, so the Edit control isn't duplicated here. */}
+                        {!isDirectUser && entity.status !== 'failed' && (
                           <EditEntityButton
                             entityId={entity.id}
                             entityName={entity.entity_name}
@@ -343,6 +374,26 @@ export default async function RequestDetailPage({ params, searchParams }: Props)
                         </span>
                       </div>
                     </div>
+
+                    {/* Failed pull — surface the reason (no expert named) and the
+                        correct-and-retry recovery actions. */}
+                    {!isDirectUser && entity.status === 'failed' && (() => {
+                      const info = describeFailure(failureByEntity[entity.id]);
+                      return (
+                        <FailureRecoveryPanel
+                          entityId={entity.id}
+                          entityName={entity.entity_name}
+                          status={entity.status}
+                          hasSigned8821={!!entity.signed_8821_url}
+                          reason={{ title: info.title, explanation: info.explanation, primaryFix: info.primaryFix }}
+                          signerEmail={entity.signer_email}
+                          address={entity.address}
+                          city={entity.city}
+                          state={entity.state}
+                          zipCode={entity.zip_code}
+                        />
+                      );
+                    })()}
 
                     {/* ModernTax Direct — taxpayer filing intake + authorization */}
                     {(() => {
