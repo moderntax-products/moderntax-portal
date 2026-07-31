@@ -229,6 +229,8 @@ Start your first order: ${appUrl}/new
 
 If anything's holding you up, just reply — happy to walk you through it.
 
+More from ModernTax — latest on Substack (https://moderntax.substack.com) and LinkedIn (https://www.linkedin.com/company/moderntax).
+
 Matt Parker
 ModernTax
 matt@moderntax.io
@@ -246,6 +248,8 @@ ${stats}
 Nothing to do here — just sharing the pace. Whenever you've got a file to run, it's at ${appUrl}/new.
 
 Reply anytime with what would make this more useful.
+
+More from ModernTax — latest on Substack (https://moderntax.substack.com) and LinkedIn (https://www.linkedin.com/company/moderntax).
 
 Matt Parker
 ModernTax
