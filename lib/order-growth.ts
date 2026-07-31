@@ -239,6 +239,8 @@ const sendGridApiKey = process.env.SENDGRID_API_KEY;
 if (sendGridApiKey) sgMail.setApiKey(sendGridApiKey);
 const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'notifications@moderntax.io';
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://portal.moderntax.io';
+const SOCIAL_HTML = '<p style="font-size:12px;color:#6b7280;margin-top:14px;">More from ModernTax: <a href="https://moderntax.substack.com">Substack</a> &middot; <a href="https://www.linkedin.com/company/moderntax">LinkedIn</a></p>';
+const SOCIAL_TEXT = 'More from ModernTax: Substack https://moderntax.substack.com · LinkedIn https://www.linkedin.com/company/moderntax';
 
 const esc = (s: string) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -300,8 +302,8 @@ I just wanted to make it easy if you've got files waiting.</p>
   <li style="margin-bottom:6px;">Email the signed copy to <strong>intake@in.moderntax.io</strong> with the loan number in the subject and it files itself.</li>
   <li>Entity verification is now <strong>included free</strong> on every order.</li>
 </ul>
-<p style="margin-top:14px;">Most orders come back within 24 hours.</p>`;
-  const text = `Hi ${name},\n\nNothing came through this week — last order was ~${d} days ago. No problem if it's quiet; just making it easy if you have files waiting.\n\nEnter the taxpayer once and a pre-filled 8821 lands in your inbox. Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it files itself. Entity verification is free on every order. Most orders return within 24 hours.\n\nPlace an order: ${appUrl}/new\n\n— Matt`;
+<p style="margin-top:14px;">Most orders come back within 24 hours.</p>${SOCIAL_HTML}`;
+  const text = `Hi ${name},\n\nNothing came through this week — last order was ~${d} days ago. No problem if it's quiet; just making it easy if you have files waiting.\n\nEnter the taxpayer once and a pre-filled 8821 lands in your inbox. Email the signed copy to intake@in.moderntax.io with the loan number in the subject and it files itself. Entity verification is free on every order. Most orders return within 24 hours.\n\nPlace an order: ${appUrl}/new\n\n${SOCIAL_TEXT}\n\n— Matt`;
   return send(t.email, subject, shell('Anything to pull this week?', body, 'Place an order', `${appUrl}/new`), text);
 }
 
@@ -328,7 +330,7 @@ ${n === 1 ? 'is' : 'are'} complete and posted in the portal.</p>
     ? `That's order #${t.orderCount} done &mdash; nice. If you've got another file in underwriting, it takes about a minute to queue up.`
     : `If you've got another file moving through underwriting, it takes about a minute to queue the next one.`}</p>
 <p style="font-size:14px;color:#4b5563;">Reminder: entity verification is free, you're never billed for a rejected pull,
-and the pre-filled 8821 comes straight back to your inbox.</p>`;
-  const text = `Hi ${name},\n\nYour transcripts${loan} are complete and posted in the portal.\n\nIf you've got another file in underwriting, it takes about a minute to queue the next one. Entity verification is free, you're never billed for a rejected pull, and the pre-filled 8821 comes back to your inbox.\n\nOrder the next one: ${appUrl}/new\n\n— Matt`;
+and the pre-filled 8821 comes straight back to your inbox.</p>${SOCIAL_HTML}`;
+  const text = `Hi ${name},\n\nYour transcripts${loan} are complete and posted in the portal.\n\nIf you've got another file in underwriting, it takes about a minute to queue the next one. Entity verification is free, you're never billed for a rejected pull, and the pre-filled 8821 comes back to your inbox.\n\nOrder the next one: ${appUrl}/new\n\n${SOCIAL_TEXT}\n\n— Matt`;
   return send(t.email, subject, shell('Transcripts delivered', body, 'Order the next one', `${appUrl}/new`), text);
 }

@@ -374,6 +374,8 @@ You can start one here: ${appUrl}/new
 
 If something didn't work when you tried before, just tell me what happened. A few people hit real bugs on our end recently and I'd rather hear about it than assume you weren't interested.
 
+More from ModernTax: Substack https://moderntax.substack.com · LinkedIn https://www.linkedin.com/company/moderntax
+
 Matt Parker
 ModernTax
 matt@moderntax.io

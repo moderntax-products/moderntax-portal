@@ -48,7 +48,7 @@ export interface StepDef {
   body: (c: MergeContext) => string; // plain text; HTML derived from it
 }
 
-const sig = `\n\n— ${REP.name}, ModernTax`;
+const sig = `\n\nMore from ModernTax: Substack https://moderntax.substack.com · LinkedIn https://www.linkedin.com/company/moderntax\n\n— ${REP.name}, ModernTax`;
 
 // ─── Track A — Never Activated ──────────────────────────────────────────────
 const A1: StepDef = {
