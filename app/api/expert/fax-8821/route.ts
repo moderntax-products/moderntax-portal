@@ -53,9 +53,12 @@ async function authorize(entityId: string) {
 }
 
 export async function POST(request: NextRequest) {
+  // Hoisted so the catch can report which entity / destination failed.
+  let entityId: string | undefined;
+  let to: string | null = null;
   try {
     const body = (await request.json().catch(() => null)) as { entityId?: string; toNumber?: string } | null;
-    const entityId = body?.entityId?.trim();
+    entityId = body?.entityId?.trim();
     if (!entityId) return NextResponse.json({ error: 'entityId required' }, { status: 400 });
 
     const auth = await authorize(entityId);
@@ -69,7 +72,7 @@ export async function POST(request: NextRequest) {
       }, { status: 503 });
     }
 
-    const to = normalizeFaxNumber(body?.toNumber);
+    to = normalizeFaxNumber(body?.toNumber);
     if (!to) return NextResponse.json({ error: 'Enter a valid US fax number (10 digits, or E.164 like +18552147522).' }, { status: 400 });
 
     const { data: entity } = await admin.from('request_entities')
@@ -119,7 +122,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, faxId: fax.id, status: fax.status || 'QUEUED', to });
   } catch (err: any) {
-    console.error('[expert/fax-8821] error:', err?.message || err);
+    console.error('[expert/fax-8821] error:', { entityId, to, message: err?.message || String(err) });
     return NextResponse.json({ error: err?.message || 'Fax send failed' }, { status: 502 });
   }
 }

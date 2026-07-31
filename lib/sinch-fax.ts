@@ -32,12 +32,29 @@ export function sinchConfigured(): boolean {
   return !!(process.env.SINCH_PROJECT_ID && process.env.SINCH_ACCESS_KEY && process.env.SINCH_ACCESS_SECRET);
 }
 
+/**
+ * A US NANP number is +1 NXX NXX XXXX where N ∈ 2–9 (the area code and the
+ * exchange code may not start with 0 or 1). Sinch rejects anything that isn't a
+ * valid E.164 destination with a bare 422 "Unprocessable Entity", so we screen
+ * out the common typos here — a mistyped area/exchange code — and return null,
+ * which the route turns into a clear "enter a valid fax number" 400 instead of
+ * an opaque 502 the expert can't act on.
+ */
+function isValidUsNanp(tenDigits: string): boolean {
+  return /^[2-9]\d{2}[2-9]\d{6}$/.test(tenDigits);
+}
+
 /** Normalize a US fax number to E.164 (+1XXXXXXXXXX). Returns null if unusable. */
 export function normalizeFaxNumber(raw: string | null | undefined): string | null {
   const digits = (raw || '').replace(/\D/g, '');
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
-  if ((raw || '').trim().startsWith('+') && digits.length >= 8) return `+${digits}`;
+  if (digits.length === 10) return isValidUsNanp(digits) ? `+1${digits}` : null;
+  if (digits.length === 11 && digits.startsWith('1')) {
+    const local = digits.slice(1);
+    return isValidUsNanp(local) ? `+1${local}` : null;
+  }
+  // Escape hatch for a caller-supplied +E.164 (rare — IRS fax is always US):
+  // trust it only at a plausible international length.
+  if ((raw || '').trim().startsWith('+') && digits.length >= 11 && digits.length <= 15) return `+${digits}`;
   return null;
 }
 
@@ -96,7 +113,25 @@ export async function sendSinchFax(input: {
 
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const detail = json?.error?.message || json?.message || `HTTP ${res.status}`;
+    // Sinch nests the actionable reason under error.details / violations rather
+    // than the top-level message (which is often the bare status text like
+    // "Unprocessable Entity"). Pull the specific field violation so the expert
+    // and the logs see *why* — not just a 422.
+    const nested = json?.error?.details || json?.error?.violations || json?.violations || json?.fields || [];
+    const nestedMsg = (Array.isArray(nested) ? nested : [])
+      .map((d: any) => d?.message || d?.description || d?.reason || d?.field)
+      .filter(Boolean)
+      .join('; ');
+    const base = json?.error?.message || json?.message || `HTTP ${res.status}`;
+    const detail = nestedMsg ? `${base} — ${nestedMsg}` : base;
+    // Log the sanitized request so ops can trace an opaque provider rejection
+    // (never log auth or the signed document URL's query token).
+    console.error('[sinch-fax] send rejected', res.status, {
+      to: input.to,
+      from: body.from,
+      hasContentUrl: !!input.contentUrl,
+      detail,
+    });
     throw new Error(`Sinch fax send failed: ${detail}`);
   }
   return {
