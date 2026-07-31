@@ -1,19 +1,19 @@
 /**
  * Trial Welcome Drip — daily cron
  *
- * Re-sends the trial welcome email every 48 hours to trial-account managers
- * who:
- *   • are on a client with free_trial = true
+ * Follow-up reminders to trial processors/managers who signed up but haven't
+ * placed their first order. Signup now fires the transactional welcome email
+ * (sendSignupApprovedEmail) as touch #1, so this drip owns the reminders after
+ * it — starting ~2 days post-signup, then every 48h. Targets profiles that:
+ *   • are processor OR manager on a client with free_trial = true
  *   • have NOT submitted any requests yet (first-request = conversion)
- *   • have NOT unsubscribed (audit_log `action=trial_welcome_unsubscribed`)
- *   • last send was > 48h ago (audit_log `action=trial_welcome_sent`)
- *   • account is < 30 days old (stop nagging after a month — they're not activating)
+ *   • are not paused/unsubscribed, account < 30 days old, < 8 sends
  *
- * Auth: CRON_SECRET via Authorization: Bearer header.
- * Vercel cron entry: see vercel.json — runs once daily at 14:00 UTC.
+ * SHADOW by default behind TRIAL_DRIP_AUTOSEND (mirrors the other engines);
+ * until that env is set it reports "would send" and sends nothing.
  *
- * Idempotency: the 48h "last sent" window means calling this twice in one day
- * produces at most one email per eligible profile. Safe to run manually.
+ * Auth: CRON_SECRET via Authorization: Bearer header. Vercel cron: daily 14:00
+ * UTC. The 48h "last sent" window makes it safe to run twice in a day.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -34,19 +34,26 @@ async function handler(request: NextRequest) {
     const unauthorized = requireBearer(request, process.env.CRON_SECRET);
     if (unauthorized) return unauthorized;
 
+    // SHADOW by default (consistent with the other lifecycle engines). Until
+    // TRIAL_DRIP_AUTOSEND=true, this computes eligibility + logs "would send"
+    // and sends nothing.
+    const autoSend = process.env.TRIAL_DRIP_AUTOSEND === 'true';
+
     const admin = createAdminClient();
     const now = Date.now();
     const FORTY_EIGHT_HOURS_AGO = new Date(now - 48 * 60 * 60 * 1000).toISOString();
+    const TWO_DAYS_AGO          = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
     const THIRTY_DAYS_AGO       = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    // 1. Find trial-manager profiles created within the last 30 days.
-    const { data: trialManagers } = await admin
+    // 1. Find trial processors/managers created within the last 30 days. (Was
+    //    manager-only, which missed self-serve signups — they're processors.)
+    const { data: trialUsers } = await admin
       .from('profiles')
-      .select('id, email, full_name, client_id, created_at, clients(name, free_trial)')
-      .eq('role', 'manager')
+      .select('id, email, full_name, role, client_id, created_at, nudges_paused, clients(name, free_trial)')
+      .in('role', ['processor', 'manager'])
       .gte('created_at', THIRTY_DAYS_AGO) as { data: any[] | null; error: any };
 
-    const eligible = (trialManagers || []).filter(p => p.clients?.free_trial === true);
+    const eligible = (trialUsers || []).filter(p => p.email && !p.nudges_paused && p.clients?.free_trial === true);
 
     // 2. Batch-fetch recent audit_log entries for all candidate profile IDs
     //    so we can answer "last sent" and "has unsubscribed" in-memory.
@@ -94,16 +101,26 @@ async function handler(request: NextRequest) {
       if (s.unsubscribedAt)                     continue; // opted out
       if (converted.has(p.id))                  continue; // already activated
       if (s.sendCount >= 8)                     continue; // hard cap — 30 days × 48h ≈ 15 sends max, 8 is humane
-      if (!s.lastSentAt)                        continue; // first send happens at signup, not here
-      if (s.lastSentAt > FORTY_EIGHT_HOURS_AGO) continue; // inside the 48h cooldown
+      if (!s.lastSentAt) {
+        // No prior drip send. Signup now fires the transactional welcome email
+        // (sendSignupApprovedEmail), so the drip owns the FOLLOW-UP reminders —
+        // start once the welcome has had ~2 days to land, then every 48h.
+        if (p.created_at > TWO_DAYS_AGO) continue;
+      } else if (s.lastSentAt > FORTY_EIGHT_HOURS_AGO) {
+        continue; // inside the 48h cooldown
+      }
       sendsThisRun.push({ profile: p, sendNumber: s.sendCount + 1 });
     }
 
-    // 5. Fire emails + record audit rows.
-    const results: Array<{ email: string; sendNumber: number; status: 'sent' | 'failed'; error?: string }> = [];
+    // 5. Fire emails + record audit rows (unless shadow — then just report).
+    const results: Array<{ email: string; sendNumber: number; status: 'sent' | 'failed' | 'shadow'; error?: string }> = [];
     for (const { profile, sendNumber } of sendsThisRun) {
       const firstName = (profile.full_name || '').trim().split(/\s+/)[0] || 'there';
       const clientName = profile.clients?.name || 'your team';
+      if (!autoSend) {
+        results.push({ email: profile.email, sendNumber, status: 'shadow' });
+        continue;
+      }
       try {
         await sendTrialWelcomeEmail({
           toEmail: profile.email,
@@ -138,7 +155,9 @@ async function handler(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      mode: autoSend ? 'live' : 'shadow',
       considered: eligible.length,
+      would_send: results.filter(r => r.status === 'shadow').length,
       sent: results.filter(r => r.status === 'sent').length,
       failed: results.filter(r => r.status === 'failed').length,
       skipped_reasons: {

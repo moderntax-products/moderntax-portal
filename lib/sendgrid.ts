@@ -2026,9 +2026,9 @@ export interface TrialWelcomeEmailOptions {
  *
  * Key messages:
  *   1. 4-step flow (portal → auto-generated 8821 → borrower signs → same-day transcripts)
- *   2. We do NOT reuse old 8821s — every request gets a fresh, Matt-designated form
- *      (CAF 0316-30210R), which avoids the "wrong designee" rejection path we've
- *      seen with legacy HelloSign/Dropbox Sign flows at other providers.
+ *   2. We do NOT reuse old 8821s — every request gets a fresh form with our
+ *      current house designee's CAF, which avoids the "wrong designee" rejection
+ *      path we've seen with reused authorizations at other providers.
  *   3. 90-second Loom (URL swapped in via TRIAL_WELCOME_LOOM_URL env; TBD placeholder
  *      while the video is being produced).
  *   4. Cal Statewide social proof.
@@ -2089,8 +2089,8 @@ ${reminderBanner}
     </td>
     <td style="font-size:14px;line-height:1.6;color:#1f2937;">
       <strong>We auto-generate a fresh, pre-filled Form 8821</strong> using the ModernTax template
-      with <em>Matthew Parker / ModernTax Inc, CAF 0316-30210R</em> as the primary designee (backup
-      designee auto-included). No copy-pasting old 8821s — every request gets its own.
+      with our house IRS designee (and a backup designee auto-included). No copy-pasting old
+      8821s — every request gets its own.
     </td>
   </tr>
   <tr>
@@ -2120,8 +2120,8 @@ ${reminderBanner}
     <strong>Why we don't reuse old 8821s.</strong> A lot of providers keep an 8821 on file and reuse it across loans
     and borrowers — it's faster, but it also fails IRS PPS verification the moment the designee's CAF number
     doesn't match what the IRS has on file for that specific authorization. We generate every 8821 fresh with
-    <code style="background:#e0f2fe;padding:1px 5px;border-radius:3px;">CAF 0316-30210R</code> baked in and a
-    secondary designee always listed. Practitioner Priority Service accepts it first try.
+    our current house designee's CAF baked in and a secondary designee always listed. Practitioner Priority
+    Service accepts it first try.
   </p>
 </div>
 
