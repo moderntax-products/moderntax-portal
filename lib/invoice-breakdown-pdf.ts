@@ -47,6 +47,7 @@ export interface BreakdownInput {
     prorated: number;
   }>;
   catchupLine: { amount: number; memo: string; label?: string } | null;
+  payrollLine?: { count: number; unit: number; subtotal: number; entities: string[] } | null;
 }
 
 const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -249,6 +250,30 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
         { text: m.processor, x: colP, w: 116, size: 8, color: muted },
         { text: `${m.window_start} -> ${m.window_end} (${m.active_days}/31d)`, x: colW, w: 136, size: 8, color: muted },
         { text: fmt(m.prorated), x: colA, w: 50, size: 9, align: 'right' },
+      ]);
+    }
+    y -= 6;
+  }
+
+  // ----- 941 Payroll Liability Summary -----
+  if (input.payrollLine && input.payrollLine.count > 0) {
+    const pl = input.payrollLine;
+    ensureSpace(4);
+    drawText('941 Payroll Liability Summary', { size: 12, bold: true, color: accent });
+    y -= 2;
+    const tableW = PAGE_W - MARGIN * 2;
+    page.drawRectangle({ x: MARGIN, y: y - 12, width: tableW, height: 14, color: headerBg });
+    drawRowLine([
+      { text: 'ENTITY', x: MARGIN, w: 380, bold: true, color: muted, size: 8 },
+      { text: 'RATE', x: MARGIN + 400, w: 60, bold: true, color: muted, size: 8, align: 'right' },
+      { text: 'AMOUNT', x: PAGE_W - MARGIN - 50, w: 50, bold: true, color: muted, size: 8, align: 'right' },
+    ]);
+    for (const name of pl.entities) {
+      ensureSpace(1);
+      drawRowLine([
+        { text: name, x: MARGIN, w: 380, size: 9 },
+        { text: fmt(pl.unit), x: MARGIN + 400, w: 60, size: 8, color: muted, align: 'right' },
+        { text: fmt(pl.unit), x: PAGE_W - MARGIN - 50, w: 50, size: 9, align: 'right' },
       ]);
     }
     y -= 6;

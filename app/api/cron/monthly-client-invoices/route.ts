@@ -30,7 +30,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import sgMail from '@sendgrid/mail';
 import { createAdminClient } from '@/lib/supabase-server';
 import { requireBearer } from '@/lib/auth-util';
-import { PRICE_POST_CLOSE_MONITORING_MONTHLY, entityBillableRate } from '@/lib/pricing';
+import { PRICE_POST_CLOSE_MONITORING_MONTHLY, PRICE_941_PAYROLL_SUMMARY, entityBillableRate } from '@/lib/pricing';
 import {
   createMercuryInvoice,
   getDestinationAccountId,
@@ -215,6 +215,22 @@ export async function issueMonthlyInvoice(
   const processorGroups = Object.values(byProc).sort((a, b) => a.processor.localeCompare(b.processor));
   const verifyTotal = processorGroups.reduce((s, g) => s + g.subtotal, 0);
 
+  // ── 941 Payroll Liability Summary add-on ──────────────────────────────────
+  // Itemized separately from the 1120/1040 ROA series, one flat charge per
+  // entity that ordered it. Credit-pool clients have these drawn from prepay at
+  // completion (lib/credits), so their entities are already excluded above and
+  // payrollCount is 0 — no double-bill. Cash clients get billed here.
+  const payrollEntities = entities.filter(e => {
+    const gr: any = (e as any).gross_receipts;
+    return !!(gr?.payroll_liability_order || gr?.payroll_liability_report);
+  });
+  const payrollCount = payrollEntities.length;
+  const payrollAmount = Math.round(payrollCount * PRICE_941_PAYROLL_SUMMARY * 100) / 100;
+  const payrollLine = payrollCount > 0
+    ? { count: payrollCount, unit: PRICE_941_PAYROLL_SUMMARY, subtotal: payrollAmount, entities: payrollEntities.map(e => e.entity_name) }
+    : null;
+  if (payrollCount > 0) L(`  941 Payroll: ${payrollCount} × ${fmtUsd(PRICE_941_PAYROLL_SUMMARY)} = ${fmtUsd(payrollAmount)}`);
+
   // ── Monitoring ───────────────────────────────────────────────────────────
   let monitoringAmount = 0;
   let monitoringEntities = 0;
@@ -247,7 +263,7 @@ export async function issueMonthlyInvoice(
     L(`  Monitoring: ${monitoringEntities} enrollments = ${fmtUsd(monitoringAmount)}`);
   }
 
-  const grandTotal = Math.round((verifyTotal + monitoringAmount + catchupAmount) * 100) / 100;
+  const grandTotal = Math.round((verifyTotal + payrollAmount + monitoringAmount + catchupAmount) * 100) / 100;
   if (grandTotal < 0.01 && !catchupAmount) { L(`  Nothing to bill — skipping`); return null; }
   L(`  Grand total: ${fmtUsd(grandTotal)}`);
 
@@ -259,6 +275,7 @@ export async function issueMonthlyInvoice(
   if (stdCount > 0) lineItems.push({ name: `Tax Verification — ${client.name} (${periodStart.slice(0, 7)})`, unitPrice: ratePdf, quantity: stdCount });
   if (reoCount > 0) lineItems.push({ name: 'Tax Verification — Reorder', unitPrice: 29.99, quantity: reoCount });
   if (fcCount > 0) lineItems.push({ name: 'Filing-Compliance Report', unitPrice: 29.99, quantity: fcCount });
+  if (payrollCount > 0) lineItems.push({ name: '941 Payroll Liability Summary', unitPrice: PRICE_941_PAYROLL_SUMMARY, quantity: payrollCount });
   if (monitoringEntities > 0) lineItems.push({ name: `Account Monitoring (${periodStart} → ${periodEnd})`, unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100, quantity: monitoringEntities });
   if (catchupAmount > 0) lineItems.push({ name: catchupMemo, unitPrice: catchupAmount, quantity: 1 });
 
@@ -304,6 +321,7 @@ export async function issueMonthlyInvoice(
       processorGroups,
       monitoringDetails: monitorDetails,
       catchupLine,
+      payrollLine,
     });
     L(`  ✓ Breakdown PDF generated (${pdfBuffer.length} bytes)`);
   } catch (err: any) {
@@ -336,6 +354,8 @@ ${processorGroups.length > 0 ? `<h3 style="font-size:14px;color:#0a1929;margin:2
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Form</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Loan</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Completed</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Amount</th></tr></thead><tbody>${procRows}</tbody></table>` : ''}
 ${monitorDetails.length > 0 ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">Account Monitoring</h3>
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Loan Officer</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Window</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Prorated</th></tr></thead><tbody>${monRows}</tbody></table>` : ''}
+${payrollLine ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">941 Payroll Liability Summary</h3>
+<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Rate</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Amount</th></tr></thead><tbody>${payrollLine.entities.map(n => `<tr><td style="padding:5px 12px;font-size:12px;">${n}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;text-align:right;font-family:monospace;">${fmtUsd(payrollLine.unit)}</td><td style="padding:5px 12px;font-size:12px;text-align:right;font-family:monospace;">${fmtUsd(payrollLine.unit)}</td></tr>`).join('')}</tbody></table>` : ''}
 ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Catch-up Balance</h3><div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px 16px;display:flex;justify-content:space-between;"><span style="font-size:13px;color:#7f1d1d;">${catchupLine.memo}</span><strong style="font-family:monospace;color:#7f1d1d;">${fmtUsd(catchupLine.amount)}</strong></div>` : ''}
 <div style="margin:24px 0;padding:18px 24px;background:#f0fdf4;border:1px solid #00C48C;border-radius:8px;display:flex;justify-content:space-between;align-items:center;"><span style="font-weight:700;color:#0a1929;font-size:15px;">Total Due</span><span style="font-size:26px;font-weight:800;color:#0a1929;font-family:monospace;">${fmtUsd(grandTotal)}</span></div>
 <div style="text-align:center;margin:24px 0;"><a href="${payUrl}" style="display:inline-block;background:#0a1929;color:#fff;padding:14px 36px;border-radius:6px;text-decoration:none;font-weight:700;font-size:15px;">Pay Invoice via Mercury &rarr;</a><p style="font-size:11px;color:#6b7280;margin:8px 0 0;">ACH Debit only &middot; Net ${netDays} days &middot; ModernTax Inc.</p></div>
@@ -363,7 +383,7 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
   }
 
   // ── Write invoices row ────────────────────────────────────────────────────
-  const breakdown = { processor_groups: processorGroups, monitoring_details: monitorDetails, catchup_line: catchupLine };
+  const breakdown = { processor_groups: processorGroups, monitoring_details: monitorDetails, catchup_line: catchupLine, payroll_line: payrollLine };
   const insertPayload: Record<string, unknown> = {
     client_id: clientId,
     invoice_number: invoiceNumber,
