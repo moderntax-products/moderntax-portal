@@ -10,6 +10,16 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['@sendgrid/mail'],
   },
+  // The API reference has a single canonical home on the brand domain
+  // (moderntax.io/docs). The portal previously served its own copy at
+  // /docs and /docs/api, which drifted out of sync with the deployed API.
+  // Redirect both to the canonical doc so there is exactly one source.
+  async redirects() {
+    return [
+      { source: '/docs', destination: 'https://moderntax.io/docs', permanent: true },
+      { source: '/docs/:path*', destination: 'https://moderntax.io/docs', permanent: true },
+    ];
+  },
 };
 
 module.exports = nextConfig;
