@@ -76,19 +76,15 @@ type EntityRow = {
   requests: { loan_number: string | null; profiles: { full_name: string | null } | null } | null;
 };
 
-type MonitorRow = {
-  enrolled_at: string;
-  cancelled_at: string | null;
-  status: string;
-  request_entities: { entity_name: string; requests: { profiles: { full_name: string | null } | null } | null } | null;
-};
-
 type ProcessorGroup = {
   processor: string;
   entities: Array<{ entity_name: string; form_type: string | null; completed_at: string | null; loan_number: string | null; unit_price: number; is_reorder: boolean; is_filing_compliance: boolean }>;
   subtotal: number;
 };
 
+// Per-pull monitoring: window_start/end carry the pull date, active_days the
+// pull count for that entity, prorated the fee charged. Field names kept for
+// compatibility with the breakdown PDF / email renderers.
 type MonitorDetail = {
   entity_name: string; processor: string;
   window_start: string; window_end: string; active_days: number; prorated: number;
@@ -135,7 +131,6 @@ export async function issueMonthlyInvoice(
   const ratePdf = Number(client.billing_rate_pdf || 99.99);
   const monitoringRate = client.billing_rate_monitoring ?? PRICE_POST_CLOSE_MONITORING_MONTHLY;
   const periodStartMs = Date.parse(`${periodStart}T00:00:00Z`);
-  const periodEndMs = Date.parse(`${periodEnd}T23:59:59Z`) + 1;
 
   // ── Does a prior partial-payment invoice exist for the same period? ──────
   // If so, compute a catch-up line for the unpaid balance.
@@ -231,36 +226,39 @@ export async function issueMonthlyInvoice(
     : null;
   if (payrollCount > 0) L(`  941 Payroll: ${payrollCount} × ${fmtUsd(PRICE_941_PAYROLL_SUMMARY)} = ${fmtUsd(payrollAmount)}`);
 
-  // ── Monitoring ───────────────────────────────────────────────────────────
+  // ── Monitoring — PER PULL ─────────────────────────────────────────────────
+  // Bill only when a monitoring re-pull actually delivered fresh transcripts in
+  // the period, at the subscription's per_pull_fee. No flat monthly subscription
+  // fee — an idle watch (no re-pull due yet) bills nothing.
   let monitoringAmount = 0;
   let monitoringEntities = 0;
   const monitorDetails: MonitorDetail[] = [];
   if (!client.disable_monitoring) {
-    const monLower = Math.max(entityCutoff, periodStartMs);
-    const { data: monitors } = await admin.from('entity_monitoring')
-      .select('enrolled_at, cancelled_at, status, request_entities!inner(entity_name, requests!inner(profiles!requests_requested_by_fkey(full_name)))')
-      .eq('client_id', clientId)
-      .lte('enrolled_at', `${periodEnd}T23:59:59Z`)
-      .or(`cancelled_at.is.null,cancelled_at.gte.${periodStart}`) as { data: MonitorRow[] | null };
-    const daysInMonth = new Date(Number(y), Number(m), 0).getDate();
-    for (const mon of (monitors || [])) {
-      if (mon.status === 'pending') continue;
-      const enrolled = Date.parse(mon.enrolled_at);
-      const cancelled = mon.cancelled_at ? Date.parse(mon.cancelled_at) : Infinity;
-      if (enrolled >= monLower && cancelled <= periodEndMs) continue;
-      const ws = Math.max(enrolled, monLower);
-      const we = Math.min(cancelled, periodEndMs);
-      if (we <= ws) continue;
-      const days = Math.ceil((we - ws) / 86400000);
-      const prorated = Math.round((Math.min(days, daysInMonth) / daysInMonth) * monitoringRate * 100) / 100;
-      const re = mon.request_entities as any;
-      monitorDetails.push({ entity_name: re?.entity_name || '?', processor: re?.requests?.profiles?.full_name || 'Unattributed', window_start: new Date(ws).toISOString().slice(0, 10), window_end: new Date(we - 1).toISOString().slice(0, 10), active_days: days, prorated });
-      monitoringAmount += prorated;
+    // per_pull_fee by subscription id (fallback to the client/default rate)
+    const { data: subs } = await admin.from('entity_monitoring')
+      .select('id, per_pull_fee').eq('client_id', clientId) as { data: Array<{ id: string; per_pull_fee: number | null }> | null };
+    const feeById = new Map((subs || []).map(s => [s.id, Number(s.per_pull_fee) > 0 ? Number(s.per_pull_fee) : monitoringRate]));
+
+    // Monitoring re-pull entities completed in the period are the billable pulls.
+    const { data: repulls } = await admin.from('request_entities')
+      .select('entity_name, completed_at, gross_receipts, requests!inner(client_id, profiles!requests_requested_by_fkey(full_name))')
+      .eq('requests.client_id', clientId)
+      .eq('status', 'completed')
+      .gt('completed_at', new Date(entityCutoff).toISOString())
+      .lte('completed_at', `${periodEnd}T23:59:59Z`) as { data: any[] | null };
+
+    for (const rp of (repulls || [])) {
+      const gr = rp.gross_receipts || {};
+      if (!gr.monitoring_repull) continue; // only monitoring pulls, not fresh orders
+      const fee = feeById.get(gr.source_monitoring_id) ?? monitoringRate;
+      const proc = (rp.requests as any)?.profiles?.full_name || 'Unattributed';
+      const day = (rp.completed_at || '').slice(0, 10);
+      monitorDetails.push({ entity_name: rp.entity_name || '?', processor: proc, window_start: day, window_end: day, active_days: 1, prorated: fee });
+      monitoringAmount = Math.round((monitoringAmount + fee) * 100) / 100;
       monitoringEntities++;
     }
-    monitoringAmount = Math.round(monitoringAmount * 100) / 100;
     monitorDetails.sort((a, b) => a.processor.localeCompare(b.processor) || a.entity_name.localeCompare(b.entity_name));
-    L(`  Monitoring: ${monitoringEntities} enrollments = ${fmtUsd(monitoringAmount)}`);
+    L(`  Monitoring: ${monitoringEntities} pull(s) delivered = ${fmtUsd(monitoringAmount)}`);
   }
 
   const grandTotal = Math.round((verifyTotal + payrollAmount + monitoringAmount + catchupAmount) * 100) / 100;
@@ -276,7 +274,7 @@ export async function issueMonthlyInvoice(
   if (reoCount > 0) lineItems.push({ name: 'Tax Verification — Reorder', unitPrice: 29.99, quantity: reoCount });
   if (fcCount > 0) lineItems.push({ name: 'Filing-Compliance Report', unitPrice: 29.99, quantity: fcCount });
   if (payrollCount > 0) lineItems.push({ name: '941 Payroll Liability Summary', unitPrice: PRICE_941_PAYROLL_SUMMARY, quantity: payrollCount });
-  if (monitoringEntities > 0) lineItems.push({ name: `Account Monitoring (${periodStart} → ${periodEnd})`, unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100, quantity: monitoringEntities });
+  if (monitoringEntities > 0) lineItems.push({ name: `Account Monitoring — per pull (${periodStart.slice(0, 7)})`, unitPrice: Math.round((monitoringAmount / monitoringEntities) * 100) / 100, quantity: monitoringEntities });
   if (catchupAmount > 0) lineItems.push({ name: catchupMemo, unitPrice: catchupAmount, quantity: 1 });
 
   // ── Mercury invoice ───────────────────────────────────────────────────────
@@ -343,7 +341,7 @@ export async function issueMonthlyInvoice(
     ).join('');
 
     const monRows = monitorDetails.map(m =>
-      `<tr><td style="padding:5px 12px;font-size:12px;">${m.entity_name}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;">${m.processor}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;">${m.window_start} &rarr; ${m.window_end} (${m.active_days}/31 days)</td><td style="padding:5px 12px;font-size:12px;text-align:right;font-family:monospace;">${fmtUsd(m.prorated)}</td></tr>`
+      `<tr><td style="padding:5px 12px;font-size:12px;">${m.entity_name}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;">${m.processor}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;">${m.window_start}${m.active_days > 1 ? ` (${m.active_days} pulls)` : ''}</td><td style="padding:5px 12px;font-size:12px;text-align:right;font-family:monospace;">${fmtUsd(m.prorated)}</td></tr>`
     ).join('');
 
     const html = `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:800px;margin:0 auto;color:#1a2845;">
@@ -352,8 +350,8 @@ export async function issueMonthlyInvoice(
 <p style="font-size:14px;">Please find your itemized breakdown below and the PDF attached. Pay via Mercury using the button at the bottom &mdash; ACH only, net ${netDays} days.</p>
 ${processorGroups.length > 0 ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">Tax Verification &mdash; by loan officer</h3>
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Form</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Loan</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Completed</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Amount</th></tr></thead><tbody>${procRows}</tbody></table>` : ''}
-${monitorDetails.length > 0 ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">Account Monitoring</h3>
-<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Loan Officer</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Window</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Prorated</th></tr></thead><tbody>${monRows}</tbody></table>` : ''}
+${monitorDetails.length > 0 ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">Account Monitoring — per pull</h3>
+<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Loan Officer</th><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Pull date</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Amount</th></tr></thead><tbody>${monRows}</tbody></table>` : ''}
 ${payrollLine ? `<h3 style="font-size:14px;color:#0a1929;margin:20px 0 6px;">941 Payroll Liability Summary</h3>
 <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;"><thead><tr style="background:#f8fafc;"><th style="padding:7px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Entity</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Rate</th><th style="padding:7px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;">Amount</th></tr></thead><tbody>${payrollLine.entities.map(n => `<tr><td style="padding:5px 12px;font-size:12px;">${n}</td><td style="padding:5px 12px;font-size:11px;color:#6b7280;text-align:right;font-family:monospace;">${fmtUsd(payrollLine.unit)}</td><td style="padding:5px 12px;font-size:12px;text-align:right;font-family:monospace;">${fmtUsd(payrollLine.unit)}</td></tr>`).join('')}</tbody></table>` : ''}
 ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Catch-up Balance</h3><div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px 16px;display:flex;justify-content:space-between;"><span style="font-size:13px;color:#7f1d1d;">${catchupLine.memo}</span><strong style="font-family:monospace;color:#7f1d1d;">${fmtUsd(catchupLine.amount)}</strong></div>` : ''}

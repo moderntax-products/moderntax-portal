@@ -229,7 +229,7 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
   // ----- Monitoring -----
   if (input.monitoringDetails.length > 0) {
     ensureSpace(input.monitoringDetails.length + 3);
-    drawText('Account Monitoring - by enrollment', { size: 12, bold: true, color: accent });
+    drawText('Account Monitoring - per pull (billed only when a re-pull delivers)', { size: 12, bold: true, color: accent });
     y -= 2;
     const colE = MARGIN;
     const colP = MARGIN + 200;
@@ -240,15 +240,15 @@ export async function generateInvoiceBreakdownPdf(input: BreakdownInput): Promis
     drawRowLine([
       { text: 'ENTITY', x: colE, w: 196, bold: true, color: muted, size: 8 },
       { text: 'LOAN OFFICER', x: colP, w: 116, bold: true, color: muted, size: 8 },
-      { text: 'WINDOW', x: colW, w: 136, bold: true, color: muted, size: 8 },
-      { text: 'PRORATED', x: colA, w: 50, bold: true, color: muted, size: 8, align: 'right' },
+      { text: 'PULL DATE', x: colW, w: 136, bold: true, color: muted, size: 8 },
+      { text: 'AMOUNT', x: colA, w: 50, bold: true, color: muted, size: 8, align: 'right' },
     ]);
     for (const m of input.monitoringDetails) {
       ensureSpace(1);
       drawRowLine([
         { text: m.entity_name, x: colE, w: 196, size: 9 },
         { text: m.processor, x: colP, w: 116, size: 8, color: muted },
-        { text: `${m.window_start} -> ${m.window_end} (${m.active_days}/31d)`, x: colW, w: 136, size: 8, color: muted },
+        { text: `${m.window_start}${m.active_days > 1 ? ` (${m.active_days} pulls)` : ''}`, x: colW, w: 136, size: 8, color: muted },
         { text: fmt(m.prorated), x: colA, w: 50, size: 9, align: 'right' },
       ]);
     }
