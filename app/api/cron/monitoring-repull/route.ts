@@ -199,7 +199,11 @@ export async function GET(request: NextRequest) {
             client_id: owningRequest.client_id,
             requested_by: sub.enrolled_by,
             loan_number: monitoringLoanNumber,
-            intake_method: 'monitoring_repull',
+            // requests.intake_method is constrained to api|csv|manual|pdf, so a
+            // re-pull is recorded as 'manual'. The monitoring marker lives on the
+            // cloned entity's gross_receipts.monitoring_repull (set below), which
+            // is what billing + reporting key off of.
+            intake_method: 'manual',
             status: '8821_signed', // skip signature step — original 8821 covers
             notes: `Auto-created by monitoring re-pull cron on ${today}. Source enrollment: ${sub.id}. Source entity: ${entity.id} (${entity.entity_name}). 8821 reused from prior submission. Cadence: ${sub.frequency}.`,
           })
