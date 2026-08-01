@@ -88,6 +88,65 @@ export interface NoRecordAutoEnrollDecision {
 }
 
 /**
+ * Return the subset of an entity's originally-requested years that came back
+ * "no record of return filed" — the years a monitoring re-pull should target.
+ *
+ * A year qualifies when it shows a no-record signal (a stub filename via
+ * hasNoRecordStubForYear, OR an UNFILED/SFR compliance-screening flag in
+ * gross_receipts) AND is NOT otherwise shown as filed. "Filed" means a real
+ * Record-of-Account / Return-Transcript file for that year, or a screening
+ * entry that carries non-UNFILED content (e.g. a filed-but-audited or
+ * lien-flagged year). This deliberately excludes filed-but-flagged years —
+ * an audited 2024 with a Record-of-Account is NOT re-pulled.
+ *
+ * Scope is the initial order's years (entity.years), per the product rule:
+ * "if the client asked for 2023–2025 and opted into monitoring, re-pull every
+ * year that was no-record-found."
+ */
+export function noRecordYearsForEntity(entity: {
+  years?: (string | number)[] | null;
+  transcript_urls?: string[] | null;
+  transcript_html_urls?: string[] | null;
+  gross_receipts?: Record<string, any> | null;
+}): string[] {
+  const yrs = (entity.years || []).map((y) => String(y).trim()).filter(Boolean);
+  if (yrs.length === 0) return [];
+  const urls = [
+    ...((entity.transcript_urls as string[]) || []),
+    ...((entity.transcript_html_urls as string[]) || []),
+  ];
+  const gr = entity.gross_receipts || {};
+  const out: string[] = [];
+  for (const yr of yrs) {
+    // gross_receipts screening entries keyed `..._<year>`
+    let grUnfiled = false;
+    let grFiled = false;
+    for (const [k, v] of Object.entries(gr)) {
+      if (!k.endsWith(`_${yr}`)) continue;
+      const flags = ((v as any)?.flags as any[]) || [];
+      const unfiled = flags.some(
+        (f) => f?.type === 'UNFILED' || f?.type === 'SFR' || /no record of return filed/i.test(f?.message || ''),
+      );
+      if (unfiled) grUnfiled = true;
+      else grFiled = true; // a screened entry with no UNFILED flag = a real filed transcript
+    }
+    // A real (non-stub) Record-of-Account / Return-Transcript file for the year.
+    const realFile = urls.some((u) => {
+      const f = u.split('/').pop() || '';
+      if (!f.includes(yr)) return false;
+      const norm = f.replace(/[_-]/g, ' ');
+      if (/\bseries\b/i.test(norm)) return false; // family-form stub, not a filed return
+      if (/-no-record-/i.test(f)) return false;
+      return /record\s*of\s*account|return\s*transcript/i.test(norm);
+    });
+    const noRecordSignal = hasNoRecordStubForYear(urls, yr) || grUnfiled;
+    const filedSignal = grFiled || realFile;
+    if (noRecordSignal && !filedSignal) out.push(yr);
+  }
+  return out.sort();
+}
+
+/**
  * Decide whether an entity should be auto-enrolled under the "no-record-found
  * for the most-recent year, deadline passed" rule.
  *

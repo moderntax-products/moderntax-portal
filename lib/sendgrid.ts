@@ -266,6 +266,55 @@ export async function sendRequestConfirmation(
  * Send completion notification email
  * Triggered when transcripts are ready for download
  */
+/**
+ * Notify the initial processor that a monitoring re-pull for the unfiled
+ * (no-record) years has completed. Tells them the result (a previously-missing
+ * year is now filed, or is still no-record) and gives them the choice to keep
+ * monitoring for the next cycle or deactivate it. Billed either way.
+ */
+export async function sendMonitoringPullResult(params: {
+  to: string;
+  entityName: string;
+  years: string[];
+  nowFiledYears: string[];
+  stillNoRecordYears: string[];
+  billedAmount: number;
+  sourceRequestId: string | null;
+}): Promise<void> {
+  if (!sendGridApiKey) {
+    console.warn('SendGrid API key not configured - cannot send monitoring result');
+    return;
+  }
+  const { to, entityName, years, nowFiledYears, stillNoRecordYears, billedAmount, sourceRequestId } = params;
+  const manageUrl = sourceRequestId ? `${appUrl}/request/${sourceRequestId}` : `${appUrl}/dashboard`;
+  const filedLine = nowFiledYears.length
+    ? `<p style="color:#065f46"><strong>Newly filed:</strong> ${entityName} now has a return on file for ${nowFiledYears.join(', ')}. A record showed up since the last check.</p>`
+    : '';
+  const stillLine = stillNoRecordYears.length
+    ? `<p style="color:#7c4a03"><strong>Still no record:</strong> ${entityName} — ${stillNoRecordYears.join(', ')} is still unfiled with the IRS. We'll keep watching unless you deactivate.</p>`
+    : '';
+  const content = `
+<p>We ran the scheduled monitoring pull on the previously-unfiled year(s) for <strong>${entityName}</strong> (${years.join(', ')}).</p>
+${filedLine}${stillLine}
+<p style="font-size:13px;color:#64748b">This monitoring pull was billed at $${billedAmount.toFixed(2)}.</p>
+<p><strong>Your choice for the next cycle:</strong></p>
+<ul>
+  <li><strong>Keep monitoring</strong> — no action needed; we'll re-check on schedule and bill each pull.</li>
+  <li><strong>Deactivate</strong> — open <a href="${manageUrl}">the request</a> to turn monitoring off, or reply to this email and we'll stop it.</li>
+</ul>`;
+  try {
+    await sgMail.send({
+      to,
+      from: fromEmail,
+      subject: `Monitoring update — ${entityName} (${(nowFiledYears.length ? 'now filed' : 'still no record')})`,
+      html: `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#0f172a;max-width:600px">${content}</div>`,
+      replyTo: 'support@moderntax.io',
+    });
+  } catch (err: any) {
+    console.error('[sendMonitoringPullResult] failed:', err?.message);
+  }
+}
+
 export async function sendCompletionNotification(
   email: string,
   requestData: Request,

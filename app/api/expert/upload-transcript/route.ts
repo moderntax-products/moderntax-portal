@@ -226,6 +226,18 @@ export async function POST(request: NextRequest) {
         console.error('[income-monitoring] hook failed (non-blocking):', incomeErr);
       }
 
+      // Monitoring re-pull billing (only fires for entities the monitoring
+      // re-pull cron created — gross_receipts.monitoring_repull). Bills the pull
+      // on completion (from the prepaid pool for credit clients) even if the
+      // year is still no-record, advances the subscription history, and emails
+      // the initial processor a keep/deactivate choice. Best-effort.
+      try {
+        const { billMonitoringPullOnCompletion } = await import('@/lib/monitoring-billing');
+        await billMonitoringPullOnCompletion(adminSupabase, entityId);
+      } catch (repullErr) {
+        console.error('[monitoring-repull-billing] hook failed (non-blocking):', repullErr);
+      }
+
       // Auto-enroll completed entities in continuous monitoring (default-on at
       // funding). Lender opts out at the client level via
       // clients.monitoring_default_enabled = false. The whole point: every
