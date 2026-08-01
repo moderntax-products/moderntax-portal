@@ -65,7 +65,8 @@ export async function GET(request: NextRequest) {
     if (dry) { results.push({ client: t.name, dry: true, to, cc: CC }); continue; }
 
     try {
-      const r = await issueMonthlyInvoice(admin, t.id, PERIOD_START, PERIOD_END, log, { to, cc: CC });
+      // Explicit one-shot send flow (managers + AP) — keep auto-send on.
+      const r = await issueMonthlyInvoice(admin, t.id, PERIOD_START, PERIOD_END, log, { to, cc: CC }, true);
       results.push({ client: t.name, recipients: to, ...(r || { note: 'nothing to bill / already issued' }) });
     } catch (e: any) {
       results.push({ client: t.name, error: e?.message });
