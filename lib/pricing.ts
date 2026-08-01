@@ -298,6 +298,15 @@ export const PRICE_REORDER = 29.99;
 export const PRICE_POST_CLOSE_MONITORING_MONTHLY = 29.00;
 
 /**
+ * 941 Payroll Liability Summary — add-on that pulls 941 Account Transcripts
+ * and generates the payroll-liability summary for an entity. Billed per entity
+ * that ordered it (gross_receipts.payroll_liability_order / _report), itemized
+ * separately from the 1120/1040 Record-of-Account series. Flat rate; for
+ * prepaid-credit clients it draws from the credit pool at completion.
+ */
+export const PRICE_941_PAYROLL_SUMMARY = 30.00;
+
+/**
  * Loan-package consolidation report — single PDF + Excel that rolls up
  * findings across all entities on a multi-entity loan. Sold per-loan
  * (not per-entity), targets the underwriter / credit officer (not the
