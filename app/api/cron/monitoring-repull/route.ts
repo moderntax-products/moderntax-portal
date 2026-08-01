@@ -28,6 +28,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase-server';
 import { sendExpertAssignmentNotification } from '@/lib/sendgrid';
 import { requireBearer } from '@/lib/auth-util';
+import { noRecordYearsForEntity } from '@/lib/no-record-monitoring';
 
 export const maxDuration = 60;
 
@@ -49,6 +50,7 @@ export async function GET(request: NextRequest) {
         request_entities (
           id, entity_name, tid, tid_kind, form_type, years, address, city, state, zip_code,
           signed_8821_url, signer_email, signer_first_name, signer_last_name,
+          transcript_urls, transcript_html_urls, gross_receipts,
           request_id,
           requests ( id, client_id, loan_number, requested_by )
         )
@@ -101,6 +103,21 @@ export async function GET(request: NextRequest) {
           console.error(`Monitoring ${sub.id}: no signed 8821 for entity ${entity.entity_name}`);
           failed++;
           results.push({ entity: entity.entity_name, status: 'no_signed_8821' });
+          continue;
+        }
+
+        // Only re-pull the years that were "no record of return filed" on the
+        // original order — that's the whole point of the watch (catch the
+        // borrower filing a previously-missing year). Years already on file are
+        // static and not re-pulled. If nothing is unfiled, there's nothing to
+        // monitor — skip and advance the schedule so we re-check next cycle.
+        const nrfYears = noRecordYearsForEntity(entity);
+        if (nrfYears.length === 0) {
+          await supabase
+            .from('entity_monitoring' as any)
+            .update({ next_pull_date: computeNextPull(sub.frequency, sub.custom_interval_days), last_pull_date: today })
+            .eq('id', sub.id);
+          results.push({ entity: entity.entity_name, status: 'no_unfiled_years_skipped' });
           continue;
         }
 
@@ -206,7 +223,7 @@ export async function GET(request: NextRequest) {
             tid: entity.tid,
             tid_kind: entity.tid_kind,
             form_type: entity.form_type,
-            years: entity.years,
+            years: nrfYears, // only the previously-unfiled (no-record) years
             address: entity.address,
             city: entity.city,
             state: entity.state,
@@ -218,6 +235,8 @@ export async function GET(request: NextRequest) {
             status: 'irs_queue',
             signature_created_at: new Date().toISOString(),
             gross_receipts: {
+              monitoring_repull: true,
+              monitored_years: nrfYears,
               source_monitoring_id: sub.id,
               source_entity_id: entity.id,
               monitoring_pull_number: (sub.total_pulls_completed || 0) + 1,
@@ -259,13 +278,11 @@ export async function GET(request: NextRequest) {
         // Compute next pull date
         const nextPull = computeNextPull(sub.frequency, sub.custom_interval_days);
 
-        // Update monitoring subscription audit history. Note: 'queued' status
-        // means we attempted; not yet known whether IRS will return new data.
-        // The completion webhook will flip the entry to 'completed' or
-        // 'no_record_found' and toggle billable accordingly. Robert/Enterprise
-        // Bank Apr 27 ask: every pull stays in history for audit defense
-        // even if no data is returned.
-        const PER_PULL_FEE = 59.98;
+        // Advance the schedule + record that a pull was QUEUED. Billing and the
+        // pulls-completed / total-billed counters are now handled on COMPLETION
+        // (lib/monitoring-billing.ts billMonitoringPullOnCompletion) so we bill
+        // for the work actually delivered and don't double-count. We only stamp
+        // a 'queued' audit marker here.
         const pullHistory = Array.isArray(sub.pull_history) ? sub.pull_history : [];
         pullHistory.push({
           date: today,
@@ -273,18 +290,13 @@ export async function GET(request: NextRequest) {
           new_request_id: newRequest.id,
           new_entity_id: clonedEntity.id,
           assigned_to: selectedExpert.full_name || selectedExpert.email,
-          transcript_count: 0,
-          billable: true,           // assume billable; flip to false on no_record_found
-          billed_amount: PER_PULL_FEE,
+          monitored_years: nrfYears,
         });
 
         await supabase
           .from('entity_monitoring' as any)
           .update({
             next_pull_date: nextPull,
-            last_pull_date: today,
-            total_pulls_completed: (sub.total_pulls_completed || 0) + 1,
-            total_billed: parseFloat(sub.total_billed || '0') + PER_PULL_FEE,
             pull_history: pullHistory,
           })
           .eq('id', sub.id);
