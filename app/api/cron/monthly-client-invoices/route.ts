@@ -106,7 +106,11 @@ export async function issueMonthlyInvoice(
   // When provided, the breakdown email goes to `to` (cc `cc`); otherwise it
   // falls back to the client's billing_ap_email / billing_ap_email_cc.
   recipients?: { to: string[]; cc?: string[] },
-): Promise<{ invoiceNumber: string; total: number; payUrl: string } | null> {
+  // Review gate: when false (the default — MONTHLY_INVOICE_AUTOSEND!=='true'),
+  // the invoice is prepared as a DRAFT and the client email is NOT sent. Matt
+  // reviews + sends from the portal. "We only get one shot at invoicing."
+  autoSend = false,
+): Promise<{ invoiceNumber: string; total: number; payUrl: string; sent: boolean } | null> {
   const L = (s: string) => { log.push(s); console.log(`[monthly-invoice] ${s}`); };
 
   // Pull client config
@@ -125,7 +129,7 @@ export async function issueMonthlyInvoice(
     .eq('invoice_number', invoiceNumber).maybeSingle();
   if (existing) {
     L(`  ↩ already issued: ${invoiceNumber} ($${existing.total_amount}) — skipping`);
-    return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '' };
+    return { invoiceNumber: existing.invoice_number, total: Number(existing.total_amount), payUrl: existing.mercury_pay_url || '', sent: existing.status === 'sent' };
   }
 
   const ratePdf = Number(client.billing_rate_pdf || 99.99);
@@ -312,7 +316,7 @@ export async function issueMonthlyInvoice(
   const emailCc = recipients?.to?.length
     ? (recipients.cc || [])
     : (client.billing_ap_email_cc?.length ? client.billing_ap_email_cc : []);
-  if (process.env.SENDGRID_API_KEY && emailTo.length) {
+  if (autoSend && process.env.SENDGRID_API_KEY && emailTo.length) {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
     const fmtDate = (s: string | null) => s ? s.slice(0, 10) : '';
     const procRows = processorGroups.map(g =>
@@ -354,6 +358,8 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
     } catch (err: any) {
       L(`  ! SendGrid failed: ${err?.message}`);
     }
+  } else if (!autoSend) {
+    L(`  ⏸ REVIEW MODE — invoice prepared as DRAFT, client email NOT sent (set MONTHLY_INVOICE_AUTOSEND=true to auto-send).`);
   }
 
   // ── Write invoices row ────────────────────────────────────────────────────
@@ -367,7 +373,7 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
     total_amount: grandTotal,
     monitoring_entities: monitoringEntities,
     monitoring_amount: monitoringAmount,
-    status: 'sent',
+    status: autoSend ? 'sent' : 'draft',
     payment_method: 'ach',
     due_date: dueDate,
     mercury_invoice_id: mercuryInvoice.id,
@@ -380,9 +386,9 @@ ${catchupLine ? `<h3 style="font-size:14px;color:#b91c1c;margin:20px 0 6px;">Cat
     ({ error: insErr } = await (admin.from('invoices') as any).insert(insertPayload));
   }
   if (insErr) L(`  ! invoices insert failed: ${insErr.message}`);
-  else L(`  ✓ invoices row written`);
+  else L(`  ✓ invoices row written (${autoSend ? 'sent' : 'draft'})`);
 
-  return { invoiceNumber, total: grandTotal, payUrl };
+  return { invoiceNumber, total: grandTotal, payUrl, sent: autoSend };
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -407,9 +413,15 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  // Review gate (default OFF): prepare invoices as DRAFTS and notify Matt to
+  // review + send from the portal, instead of auto-emailing clients. Matt:
+  // "we only get one shot at invoicing — do not send without my review."
+  // Set MONTHLY_INVOICE_AUTOSEND=true to restore full automation.
+  const autoSend = process.env.MONTHLY_INVOICE_AUTOSEND === 'true';
+
   const admin = createAdminClient();
   const log: string[] = [];
-  const results: Array<{ client: string; invoiceNumber?: string; total?: number; payUrl?: string; error?: string }> = [];
+  const results: Array<{ client: string; invoiceNumber?: string; total?: number; payUrl?: string; error?: string; sent?: boolean }> = [];
 
   // Period = current month
   const periodStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
@@ -425,7 +437,7 @@ export async function GET(request: NextRequest) {
 
   for (const client of ACTIVE_CLIENTS) {
     try {
-      const result = await issueMonthlyInvoice(admin, client.id, periodStart, periodEnd, log);
+      const result = await issueMonthlyInvoice(admin, client.id, periodStart, periodEnd, log, undefined, autoSend);
       if (result) results.push({ client: client.name, ...result });
       else results.push({ client: client.name, error: 'Nothing to bill or already issued' });
     } catch (err: any) {
@@ -434,5 +446,27 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ success: true, period: { start: periodStart, end: periodEnd }, results, log });
+  // Review mode: notify Matt that drafts are ready to review + send, and DON'T
+  // touch the clients. Best-effort; never fails the run.
+  const drafted = results.filter((r) => r.invoiceNumber && !r.error);
+  if (!autoSend && drafted.length && process.env.SENDGRID_API_KEY) {
+    try {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+      const month = periodStart.slice(0, 7);
+      const total = drafted.reduce((s, r) => s + (r.total || 0), 0);
+      const lines = drafted.map((r) => `• ${r.client}: $${(r.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} (${r.invoiceNumber})`).join('\n');
+      await sgMail.send({
+        to: 'matt@moderntax.io',
+        from: { email: 'no-reply@moderntax.io', name: 'ModernTax Invoicing' },
+        replyTo: 'matt@moderntax.io',
+        subject: `[Review] ${month} invoices drafted — ${drafted.length} client${drafted.length === 1 ? '' : 's'}, $${total.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        text: `Heads-up — the ${month} monthly invoices were prepared as DRAFTS and NOT sent to clients (review mode).\n\n${lines}\n\nTotal: $${total.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n\nReview and send each from https://portal.moderntax.io/invoicing.\n(To restore auto-send, set MONTHLY_INVOICE_AUTOSEND=true in Vercel.)`,
+      });
+      log.push(`✓ Review heads-up emailed to matt@moderntax.io (${drafted.length} drafts, $${total.toFixed(2)})`);
+    } catch (err: any) {
+      log.push(`! Review heads-up email failed: ${err?.message}`);
+    }
+  }
+
+  return NextResponse.json({ success: true, mode: autoSend ? 'auto-send' : 'review (drafts + notify)', period: { start: periodStart, end: periodEnd }, results, log });
 }
