@@ -384,19 +384,46 @@ export async function POST(request: NextRequest) {
     // Determine primary/secondary storage based on client transcript format preference
     // transcript_urls = primary format (what processors download)
     // transcript_html_urls = secondary format (fallback)
-    const existingHtmlUrls: string[] = (entity as any).transcript_html_urls || [];
+    // Re-read the arrays FRESH right before appending. `entity`/`existingUrls`
+    // above are a request-start snapshot; a rapid or concurrent uploader (e.g.
+    // the SOR bookmarklet re-sending the same transcript) would pass the dedup
+    // check against stale data and pile up duplicate references — observed as 18
+    // identical files on one entity. Fresh-read + dedupe-on-write below make the
+    // stored arrays duplicate-proof no matter what the client sends.
+    const { data: freshEntity } = await supabase
+      .from('request_entities')
+      .select('transcript_urls, transcript_html_urls')
+      .eq('id', entityId)
+      .single() as { data: { transcript_urls: string[] | null; transcript_html_urls: string[] | null } | null };
+    const curUrls: string[] = freshEntity?.transcript_urls || existingUrls;
+    const curHtml: string[] = freshEntity?.transcript_html_urls || (entity as any).transcript_html_urls || [];
+
+    // Collapse exact duplicates by filename (timestamp prefix stripped). Distinct
+    // "no record" stubs keep a per-stub discriminator in the filename (v6.10+), so
+    // legitimately-different files survive; only byte-identical re-uploads collapse.
+    const dedupeByKey = (arr: string[]): string[] => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const u of arr) {
+        const k = (u.split('/').pop() || '').replace(/^\d+-/, '').toLowerCase();
+        if (k && seen.has(k)) continue;
+        if (k) seen.add(k);
+        out.push(u);
+      }
+      return out;
+    };
 
     const entityUpdate: Record<string, unknown> = {};
 
     if (transcriptFormat === 'html' && htmlStoragePath) {
       // HTML-preferring client: HTML is primary, PDF is secondary
-      entityUpdate.transcript_urls = [...existingUrls, htmlStoragePath];
-      entityUpdate.transcript_html_urls = [...existingHtmlUrls, storagePath];
+      entityUpdate.transcript_urls = dedupeByKey([...curUrls, htmlStoragePath]);
+      entityUpdate.transcript_html_urls = dedupeByKey([...curHtml, storagePath]);
     } else {
       // PDF-preferring client (default): PDF is primary, HTML is secondary
-      entityUpdate.transcript_urls = [...existingUrls, storagePath];
+      entityUpdate.transcript_urls = dedupeByKey([...curUrls, storagePath]);
       if (htmlStoragePath) {
-        entityUpdate.transcript_html_urls = [...existingHtmlUrls, htmlStoragePath];
+        entityUpdate.transcript_html_urls = dedupeByKey([...curHtml, htmlStoragePath]);
       }
     }
 
