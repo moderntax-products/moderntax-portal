@@ -15,7 +15,7 @@ echo "→ check-untracked-imports..."
 node scripts/check-untracked-imports.mjs
 
 echo "→ next lint..."
-npx next lint --quiet
+npx next lint
 
 echo "→ tsc --noEmit..."
 npx tsc --noEmit -p tsconfig.json
