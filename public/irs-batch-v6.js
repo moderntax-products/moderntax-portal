@@ -1,5 +1,16 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.10 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.11 — DIRECT-TO-PORTAL
+// v6.11 changes (on top of v6.10):
+//   - FIX: per-message subject is now anchored to that message's own link
+//     instead of row.querySelector() (which returned the FIRST subject anchor
+//     in the <tr>). When the SOR list isn't one message per <tr>, every
+//     message was inheriting the first message's subject/TIN, collapsing
+//     distinct messages onto one entity — flooding one borrower's file while
+//     the others got nothing.
+//   - Messages are also deduped by IRS Transaction ID (not just mail id), so a
+//     genuinely duplicated inbox listing is processed once.
+//   - Progress log widened 60→120 chars so the Tax Period is visible.
+//
 // v6.10 changes (on top of v6.9):
 //   - "No record of return filed" + "Requested data not found" stubs are
 //     recognized as legitimate order information (IRS confirming the
@@ -142,6 +153,7 @@
     });
 
     const seen = new Set();
+    const seenTx = new Set(); // v6.11: dedupe by IRS Transaction ID so genuine duplicate inbox messages process once
     const messages = [];
 
     // Strategy A: Find links with read_content, itemId, or mailId in href
@@ -152,12 +164,39 @@
         const match = link.href.match(/(?:itemId|mailId)=(\d+)/);
         if (match && !seen.has(match[1])) {
             seen.add(match[1]);
-            // Walk the DOM to find the subject text (might be in a sibling cell)
-            const row = link.closest('tr');
-            const subjectCell = row?.querySelector('td a[href*="read_content"], td a[href*="itemId"]');
-            const subject = subjectCell?.textContent?.trim() || link.textContent.trim();
-            messages.push({ id: match[1], subject, href: link.href });
-            console.log(`[IRS-DEBUG]   Found message: id=${match[1]} subject="${subject.substring(0,60)}" href="${link.href}"`);
+            // v6.11 FIX: anchor the subject to THIS message's own link, not a
+            // row-wide first-match. The old code used row.querySelector(...),
+            // which returns the FIRST subject anchor in the <tr>; when the SOR
+            // list is not one message per <tr>, every message inherited the
+            // first message's subject — and thus its TIN — collapsing distinct
+            // messages onto one entity (one borrower's file got flooded while
+            // its siblings got nothing).
+            //   1. Prefer the clicked link's own text if it looks like a subject.
+            //   2. Else, within the row, pick the anchor whose href matches THIS
+            //      link (not just the first), preferring subject-length text.
+            const ownText = (link.textContent || '').trim();
+            const looksLikeSubject = /transaction id|\btin\b/i.test(ownText) || ownText.length > 25;
+            let subject = looksLikeSubject ? ownText : '';
+            if (!subject) {
+                const row = link.closest('tr');
+                const anchors = row ? Array.from(row.querySelectorAll('td a[href*="read_content"], td a[href*="itemId"], td a[href*="mailId"]')) : [];
+                const mine = anchors.find(a => a.href === link.href)
+                    || anchors.find(a => (a.textContent || '').trim().length > 25)
+                    || anchors[0];
+                subject = ((mine && mine.textContent) || '').trim() || ownText;
+            }
+            // v6.11: also dedupe by the IRS Transaction ID inside the subject, so
+            // if the SOR genuinely lists the same transaction twice we process it
+            // once (the mailId dedup above only catches identical message ids).
+            const txMatch = subject.match(/Transaction ID\s*[-–]?\s*(\d+)/i);
+            const txId = txMatch ? txMatch[1] : null;
+            if (txId && seenTx.has(txId)) {
+                console.log(`[IRS-DEBUG]   Skipping duplicate transaction ${txId} (id=${match[1]})`);
+            } else {
+                if (txId) seenTx.add(txId);
+                messages.push({ id: match[1], subject, href: link.href });
+                console.log(`[IRS-DEBUG]   Found message: id=${match[1]} tx=${txId || '?'} subject="${subject.substring(0,80)}" href="${link.href}"`);
+            }
         }
     });
 
@@ -261,7 +300,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.10</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.11</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -459,7 +498,7 @@
         document.getElementById('irs-pbar').textContent = pct + '%';
         document.getElementById('irs-status').textContent = '⏳ working...';
 
-        addLog(`\n[${i+1}/${messages.length}] ${msg.subject.substring(0,60)}`);
+        addLog(`\n[${i+1}/${messages.length}] ${msg.subject.substring(0,120)}`); // v6.11: 60→120 so the Tax Period (which sat right at char 60) is visible
 
         try {
             // ---- Transcript Detection Helper ----
