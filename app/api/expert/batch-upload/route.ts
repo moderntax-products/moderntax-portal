@@ -405,7 +405,10 @@ export async function POST(request: NextRequest) {
       const seen = new Set<string>();
       const out: string[] = [];
       for (const u of arr) {
-        const k = (u.split('/').pop() || '').replace(/^\d+-/, '').toLowerCase();
+        const k = (u.split('/').pop() || '')
+          .replace(/^\d+-/, '')                     // strip timestamp prefix
+          .replace(/-no-record-\d+/i, '-no-record') // collapse redundant no-record stub copies for the same period (a malfunctioning uploader mints -0,-1,-2… for one period)
+          .toLowerCase();
         if (k && seen.has(k)) continue;
         if (k) seen.add(k);
         out.push(u);
