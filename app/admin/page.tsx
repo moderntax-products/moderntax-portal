@@ -382,8 +382,14 @@ export default async function AdminPage({ searchParams }: PageProps) {
     });
   }
 
+  // Cancelled requests are terminal — exclude them from the active admin stats,
+  // the request table, and the global entity counts so voided/cleared batches
+  // (e.g. an inadvertent bulk send that was cleared) don't clog the view. The
+  // bottleneck query above already excludes cancelled; the rows stay in the DB.
+  const activeRequests = (allRequests || []).filter((r: any) => r.status !== 'cancelled');
+
   if (!requestsError && allRequests) {
-    allRequests.forEach((request: any) => {
+    activeRequests.forEach((request: any) => {
       if (clientStats[request.client_id]) {
         const entities = request.request_entities || [];
         // Count each entity (EIN/SSN) individually
@@ -407,7 +413,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
 
   // Filter requests by product type, search, status, time window, and legacy flag.
   // Order: start from `allRequests` (already sorted by updated_at DESC), layer on filters.
-  let filteredRequests = allRequests || [];
+  let filteredRequests = activeRequests;
   if (productTypeFilter && productTypeFilter !== 'all') {
     filteredRequests = filteredRequests.filter((r: any) => r.product_type === productTypeFilter);
   }
@@ -492,7 +498,7 @@ export default async function AdminPage({ searchParams }: PageProps) {
   };
 
   // Count total stats at entity level
-  const allEntities = allRequests?.flatMap((r: any) => r.request_entities || []) || [];
+  const allEntities = activeRequests.flatMap((r: any) => r.request_entities || []);
   const totalStats = {
     total: allEntities.length,
     completed: allEntities.filter((e: any) => e.status === 'completed').length,
