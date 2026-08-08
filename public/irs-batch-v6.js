@@ -8,6 +8,10 @@
 //   - SAFETY: a cached login token no longer silently auto-starts a pull — the
 //     expert must confirm before it scrapes/uploads (fixes "it started pulling
 //     before I logged in").
+//   - PERFORMANCE: ALL transcripts now upload as native HTML — no client-side
+//     html2canvas/jsPDF. Generating a PDF in the browser for every income
+//     transcript blocked the main thread and froze the tab and the computer.
+//     HTML is fast + lossless; PDF rendering (if needed) moves server-side.
 //   - Progress log widened 60→120 chars so the Tax Period is visible.
 //   NOTE: subjects/TINs already resolve correctly per-message (the SOR list is
 //   one message per row here); no subject-scoping change was needed.
@@ -926,14 +930,14 @@
                     primaryBlob = new Blob([transcriptHtml], { type: 'text/html' });
                     primaryExt = '.html';
                 } else {
-                    addLog(`  🔄 Converting...`, 'info');
-                    primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
-                    if (primaryBlob.size > 3.5 * 1024 * 1024) {
-                        addLog(`  🗜️ Compressing (${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB)...`, 'warn');
-                        primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf', 0.45);
-                        addLog(`  📦 Compressed to ${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB`, 'info');
-                    }
-                    primaryExt = '.pdf';
+                    // v6.11: income transcripts (1120/1040) now upload as native
+                    // HTML too — NO client-side html2canvas/jsPDF. Rendering a PDF
+                    // in the browser for every transcript blocked the main thread
+                    // and froze the tab and the whole computer. HTML is fast and
+                    // lossless; any PDF rendering moves off the expert's machine.
+                    addLog(`  📄 Using native HTML (no client-side PDF)`, 'info');
+                    primaryBlob = new Blob([transcriptHtml], { type: 'text/html' });
+                    primaryExt = '.html';
                 }
                 // Alias for legacy error-path code that references pdfBlob
                 const pdfBlob = primaryBlob;
