@@ -58,31 +58,67 @@ export async function GET(request: NextRequest) {
     // so we don't re-parse on every download.
     const { data: entity } = await (adminSupabase
       .from('request_entities') as any)
-      .select('admin_uploaded_8821_url, signed_8821_url, entity_name')
+      .select('admin_uploaded_8821_url, expert_regenerated_8821_url, signed_8821_url, entity_name')
       .eq('id', entityId)
-      .single() as { data: { admin_uploaded_8821_url: string | null; signed_8821_url: string | null; entity_name: string } | null };
+      .single() as { data: { admin_uploaded_8821_url: string | null; expert_regenerated_8821_url: string | null; signed_8821_url: string | null; entity_name: string } | null };
 
     if (!entity) {
       return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
     }
 
     let downloadPath = entity.admin_uploaded_8821_url;
+    // Which copy we ultimately serve — recorded in the SOC 2 audit log below.
+    let fileKind: 'admin_uploaded_8821' | 'expert_regenerated_8821' | 'signed_8821' = 'admin_uploaded_8821';
     // True when we serve a form whose designee we could NOT positively confirm
     // (the form is unreadable) — recorded in the audit log for traceability.
     let designeeUnverified = false;
 
-    if (!downloadPath && entity.signed_8821_url) {
+    // Lazily load THIS expert's CAF once — needed to verify any copy that
+    // wasn't explicitly admin-posted actually names them as the designee
+    // (guards the Joel wrong-designee failure, 2026-06-03).
+    let myCaf: string | null | undefined;
+    const loadMyCaf = async (): Promise<string | null | undefined> => {
+      if (myCaf !== undefined) return myCaf;
       const { data: me } = await adminSupabase
         .from('profiles').select('caf_number').eq('id', user.id).maybeSingle() as { data: { caf_number: string | null } | null };
+      myCaf = me?.caf_number ?? null;
+      return myCaf;
+    };
+
+    const { verify8821Designee } = await import('@/lib/verify-8821-designee');
+
+    // PREFER the designee-correct regenerated copy that acceptBatch / the
+    // "Regenerate 8821 w/ expert creds" flow already produced at
+    // expert_regenerated_8821_url. Until now this file was written but never
+    // served here, so an admin had to download it and re-upload it into
+    // admin_uploaded_8821_url by hand (the "reuploading 8821s" step). Gate it
+    // through verify8821Designee so a STALE regen — e.g. the entity was later
+    // reassigned to a different expert — is rejected here and we fall through.
+    if (!downloadPath && entity.expert_regenerated_8821_url) {
+      try {
+        const dl = await adminSupabase.storage.from('uploads').download(entity.expert_regenerated_8821_url);
+        if (dl.data) {
+          const check = await verify8821Designee(Buffer.from(await dl.data.arrayBuffer()), await loadMyCaf());
+          if (check.ok) {
+            downloadPath = entity.expert_regenerated_8821_url;
+            fileKind = 'expert_regenerated_8821';
+          }
+          // else: names a different expert (stale after reassignment) → fall
+          // through to the signed-form auto-recognize path below.
+        }
+      } catch (e) { console.error('[download-8821] regenerated-copy check failed:', e); }
+    }
+
+    if (!downloadPath && entity.signed_8821_url) {
       try {
         const dl = await adminSupabase.storage.from('uploads').download(entity.signed_8821_url);
         if (dl.data) {
-          const { verify8821Designee } = await import('@/lib/verify-8821-designee');
-          const check = await verify8821Designee(Buffer.from(await dl.data.arrayBuffer()), me?.caf_number);
+          const check = await verify8821Designee(Buffer.from(await dl.data.arrayBuffer()), await loadMyCaf());
           if (check.ok) {
             // Designee CAF matches the expert (or the expert has no CAF on file
             // and we don't block) — cache as the confirmed expert copy.
             downloadPath = entity.signed_8821_url;
+            fileKind = 'signed_8821';
             await (adminSupabase.from('request_entities') as any)
               .update({ admin_uploaded_8821_url: entity.signed_8821_url }).eq('id', entityId);
           } else if (check.designeeCafs.length === 0) {
@@ -94,6 +130,7 @@ export async function GET(request: NextRequest) {
             // from forms that genuinely name them — e.g. LaTonya / Naman Patel).
             // We do NOT cache, since the match was never positively confirmed.
             downloadPath = entity.signed_8821_url;
+            fileKind = 'signed_8821';
             designeeUnverified = true;
             console.warn(`[download-8821] serving UNREADABLE 8821 (no CAF extractable) for ${entityId} to expert ${user.id} — failing open`);
           }
@@ -136,7 +173,7 @@ export async function GET(request: NextRequest) {
         resourceType: 'request_entity',
         resourceId: entityId,
         details: {
-          file_kind: 'admin_uploaded_8821',
+          file_kind: fileKind,
           file_path: downloadPath,
           designee_unverified: designeeUnverified, // served an unreadable form (failed open)
           entity_name: entity.entity_name,

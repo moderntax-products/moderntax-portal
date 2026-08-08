@@ -421,3 +421,82 @@ export async function expireOverdueBatches(admin: SupabaseClient): Promise<{ exp
   }
   return { expired: count };
 }
+
+/**
+ * Reclaim STALLED ACCEPTED batches (cron).
+ *
+ * When an expert accepts a batch and then goes quiet, a `completion_deadline`
+ * (accepted_at + 24h) is stamped but nothing ever consumed it — a single
+ * non-responsive expert silently locked up to BATCH_MAX_ENTITIES entities AND
+ * removed themselves from the assignment pool (auto-assign drops experts with
+ * an 'accepted' batch) until an admin manually intervened. This is the biggest
+ * silent capacity leak in the pipeline.
+ *
+ * For each accepted batch past its completion_deadline:
+ *   1. Compare-and-swap the batch → 'expired' (only if still 'accepted', so we
+ *      never race a legitimate completion).
+ *   2. Release its still-OPEN per-entity assignments (assigned/in_progress) →
+ *      'expired'. Already-completed assignments/entities are left untouched, so
+ *      a partially-finished batch keeps its completed work + payroll credit.
+ *   3. Revert those released entities from 'irs_queue' back to '8821_signed' so
+ *      the auto-assign-experts cron re-offers them to the next verifier on its
+ *      next run. (The released assignment row is no longer 'active', so it no
+ *      longer blocks re-assignment; the freed expert also re-enters the pool.)
+ *
+ * Idempotent + safe to run frequently (recommend every 15 min).
+ */
+export async function expireStalledAcceptedBatches(
+  admin: SupabaseClient,
+): Promise<{ reclaimed: number; entitiesReleased: number }> {
+  const now = new Date().toISOString();
+  const { data: stalled } = await admin
+    .from('assignment_batches')
+    .select('id, expert_id, notes')
+    .eq('status', 'accepted')
+    .lt('completion_deadline', now) as { data: any[] | null };
+
+  let reclaimed = 0;
+  let entitiesReleased = 0;
+
+  for (const b of stalled || []) {
+    // 1. Atomic claim — only reclaim if the batch is STILL 'accepted'. If the
+    //    expert (or completion webhook) advanced it to 'completed' between our
+    //    read and now, the guarded update matches 0 rows and we skip it.
+    const auditNote = `[auto-reclaimed ${now}: completion_deadline lapsed — expert non-responsive]`;
+    const { data: claimed } = await admin
+      .from('assignment_batches')
+      .update({
+        status: 'expired',
+        expired_at: now,
+        notes: b.notes ? `${auditNote} | ${b.notes}` : auditNote,
+      } as any)
+      .eq('id', b.id)
+      .eq('status', 'accepted')
+      .select('id')
+      .maybeSingle() as { data: any };
+    if (!claimed) continue;
+
+    // 2. Release only the still-open assignments (leave completed ones intact).
+    const { data: released } = await admin
+      .from('expert_assignments')
+      .update({ status: 'expired' } as any)
+      .eq('batch_id', b.id)
+      .in('status', ['assigned', 'in_progress'])
+      .select('entity_id') as { data: any[] | null };
+
+    const entityIds = (released || []).map(r => r.entity_id).filter(Boolean);
+    if (entityIds.length > 0) {
+      // 3. Send the un-finished entities back to the awaiting-assignment state.
+      //    Guarded on 'irs_queue' so we never regress a completed/failed entity.
+      await admin
+        .from('request_entities')
+        .update({ status: '8821_signed' })
+        .in('id', entityIds)
+        .eq('status', 'irs_queue');
+      entitiesReleased += entityIds.length;
+    }
+    reclaimed += 1;
+  }
+
+  return { reclaimed, entitiesReleased };
+}
