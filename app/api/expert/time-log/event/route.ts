@@ -31,6 +31,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerRouteClient, createAdminClient } from '@/lib/supabase-server';
+import { slaDeadlineMs, SLA_DEFAULTS } from '@/lib/expert-sla';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -137,6 +138,35 @@ export async function POST(request: NextRequest) {
       notes: insertedNotes || null,
     } as any).select('id').single() as { data: any; error: any };
     if (insErr) return NextResponse.json({ error: 'Insert failed', detail: insErr.message }, { status: 500 });
+
+    // SLA-clock fairness: start the assignment's clock at ENGAGEMENT (this first
+    // clock-in), not when the 8821 was signed — so the expert is never already
+    // "behind" the first time they open the work. Recompute the deadline from
+    // now in the expert's tz. Only fires when the clock isn't already running.
+    if (entity_id) {
+      try {
+        const { data: asg } = await (admin.from('expert_assignments') as any)
+          .select('id, sla_business_hours')
+          .eq('entity_id', entity_id)
+          .eq('expert_id', expertId)
+          .in('status', ['assigned', 'in_progress', 'pending_acceptance'])
+          .is('expert_clock_started_at', null)
+          .limit(1)
+          .maybeSingle();
+        if (asg) {
+          const { data: prof } = await (admin.from('profiles') as any)
+            .select('iana_timezone').eq('id', expertId).maybeSingle();
+          const tz = prof?.iana_timezone || SLA_DEFAULTS.EXPERT_TZ;
+          const startMs = new Date(now).getTime();
+          const deadlineMs = slaDeadlineMs(startMs, asg.sla_business_hours ?? SLA_DEFAULTS.DEFAULT_SLA_BUSINESS_HOURS, tz);
+          await (admin.from('expert_assignments') as any).update({
+            expert_clock_started_at: now,
+            ...(deadlineMs ? { sla_deadline: new Date(deadlineMs).toISOString() } : {}),
+          }).eq('id', asg.id);
+        }
+      } catch { /* non-blocking — a clock-start hiccup must not fail the clock-in */ }
+    }
+
     return NextResponse.json({ session_id: created.id, action: 'started' });
   }
 
