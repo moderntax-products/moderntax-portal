@@ -26,11 +26,60 @@ import { validateExpertDesigneeCreds } from '@/lib/8821-pdf';
 export const maxDuration = 60;
 export const runtime = 'nodejs';
 
+/** Normalize a TID to digits only, so "87-3050359" and "873050359" match. */
+const normalizeTid = (t: string | null | undefined): string => (t || '').replace(/\D/g, '');
+
 interface PoolEntity {
   id: string;
   request_id: string;
   client_id: string;
   entity_name: string;
+}
+
+/**
+ * Assign a single entity to a specific expert, reaching them even if busy.
+ * If the expert already has an active batch we add the entity straight into
+ * it (status mirrors the batch — 'assigned' on an accepted batch, otherwise
+ * part of the still-pending offer); if they're free we open a fresh one-entity
+ * batch. Used by the prior-completer-by-TIN path, which deliberately routes a
+ * re-pull back to the expert who already holds IRS authorization for that EIN.
+ */
+async function assignEntityToExpert(
+  admin: ReturnType<typeof createAdminClient>,
+  expertId: string,
+  entityId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: batch } = await admin
+    .from('assignment_batches')
+    .select('id, status')
+    .eq('expert_id', expertId)
+    .in('status', ['pending_acceptance', 'accepted'])
+    .order('offered_at', { ascending: false })
+    .limit(1)
+    .maybeSingle() as { data: { id: string; status: string } | null };
+
+  if (!batch) {
+    const res = await createBatch(admin, {
+      expertId,
+      entityIds: [entityId],
+      offeredBy: expertId,
+      notes: 'Auto-assigned to prior completer of this TIN (TDS-first)',
+    });
+    return res.ok ? { ok: true } : { ok: false, error: res.error };
+  }
+
+  const now = new Date();
+  const { error } = await (admin.from('expert_assignments') as any).insert({
+    entity_id: entityId,
+    expert_id: expertId,
+    assigned_by: expertId,
+    batch_id: batch.id,
+    assigned_at: now.toISOString(),
+    sla_deadline: new Date(now.getTime() + 24 * 3600 * 1000).toISOString(),
+    sla_business_hours: 24,
+    status: batch.status === 'accepted' ? 'assigned' : 'pending_acceptance',
+  });
+  return error ? { ok: false, error: error.message } : { ok: true };
 }
 
 export async function GET(request: NextRequest) {
@@ -73,7 +122,7 @@ export async function GET(request: NextRequest) {
     .in('entity_id', ready.map(e => e.id))
     .in('status', ['pending_acceptance', 'assigned', 'in_progress']);
   const blockedIds = new Set((activeAssns || []).map((a: any) => a.entity_id));
-  const pool: PoolEntity[] = ready
+  let pool: PoolEntity[] = ready
     .filter(e => !blockedIds.has(e.id))
     .map(e => ({
       id: e.id,
@@ -103,6 +152,124 @@ export async function GET(request: NextRequest) {
       batches_created: 0,
       entities_offered: 0,
       skipped: { ...skipped, no_credentialed_experts: 1 },
+    });
+  }
+
+  // ─── Prior-completer-by-TIN path (highest priority — Matt 2026-06-23) ─────
+  // If an expert previously COMPLETED an order for this entity's TIN, route the
+  // re-pull straight back to them: their CAF is already on record with the IRS
+  // for that EIN, so they retrieve via TDS (Transcript Delivery System) INSTANTLY
+  // — no new PPS call / SOR mailbox. We reach them even if they're busy (add to
+  // their active batch). New / first-time TINs (no prior completer) fall through
+  // to the round-robin below untouched, so the API + new-order pipeline is
+  // unaffected. Runs BEFORE the busy/available computation so any batch we open
+  // here is reflected when the round-robin picks experts.
+  const expertById = new Map((experts || []).map(e => [e.id, e]));
+  const credsCompleteIds = new Set(credsComplete.map(e => e.id));
+
+  // TIDs (normalized EINs/SSNs) for the current pool.
+  const { data: poolTidRows } = await admin
+    .from('request_entities')
+    .select('id, tid')
+    .in('id', pool.map(e => e.id)) as { data: { id: string; tid: string | null }[] | null };
+  const tidByEntity = new Map<string, string>();
+  for (const r of poolTidRows || []) {
+    const t = normalizeTid(r.tid);
+    if (t) tidByEntity.set(r.id, t);
+  }
+  const poolTids = [...new Set([...tidByEntity.values()])];
+
+  // For each pool TID, find who most-recently COMPLETED an order on that TID.
+  const priorCompleterByTid = new Map<string, { expertId: string; when: number }>();
+  if (poolTids.length > 0) {
+    const { data: sameTidEnts } = await admin
+      .from('request_entities')
+      .select('id, tid')
+      .in('tid', poolTids) as { data: { id: string; tid: string | null }[] | null };
+    const tidOfEntity = new Map<string, string>();
+    for (const r of sameTidEnts || []) {
+      const t = normalizeTid(r.tid);
+      if (t) tidOfEntity.set(r.id, t);
+    }
+    const sameTidEntityIds = [...tidOfEntity.keys()];
+    if (sameTidEntityIds.length > 0) {
+      const { data: completedAssns } = await admin
+        .from('expert_assignments')
+        .select('entity_id, expert_id, completed_at, updated_at')
+        .eq('status', 'completed')
+        .in('entity_id', sameTidEntityIds) as { data: any[] | null };
+      for (const a of completedAssns || []) {
+        const t = tidOfEntity.get(a.entity_id);
+        if (!t) continue;
+        const when = Date.parse(a.completed_at || a.updated_at || '') || 0;
+        const cur = priorCompleterByTid.get(t);
+        if (!cur || when > cur.when) priorCompleterByTid.set(t, { expertId: a.expert_id, when });
+      }
+    }
+  }
+
+  // One admin profile authors the auto-posted TDS-first instruction note
+  // (entity_notes only permits 'admin'/'expert' authors).
+  const { data: noteAuthor } = await admin
+    .from('profiles')
+    .select('id')
+    .eq('role', 'admin')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle() as { data: { id: string } | null };
+
+  const TDS_FIRST_BODY =
+    'RETRIEVAL METHOD — TDS FIRST: you previously completed an order for this taxpayer’s TIN, so ' +
+    'ModernTax’s authorization (your CAF) is already on record with the IRS for this EIN. Check your IRS ' +
+    'e-Services TDS (Transcript Delivery System) for INSTANT retrieval first. Only fall back to an IRS PPS ' +
+    'call + SOR mailbox if TDS does not return the transcripts.';
+
+  const priorAssignedIds = new Set<string>();
+  const priorAssigned: { expertEmail: string; entityName: string }[] = [];
+  for (const e of pool) {
+    const t = tidByEntity.get(e.id);
+    if (!t) continue;
+    const match = priorCompleterByTid.get(t);
+    if (!match) continue;
+    const expert = expertById.get(match.expertId);
+    if (!expert || !credsCompleteIds.has(expert.id)) continue; // completer gone/uncredentialed → round-robin
+    const res = await assignEntityToExpert(admin, expert.id, e.id);
+    if (!res.ok) {
+      console.error('[auto-assign] prior-completer assign failed for', e.id, res.error);
+      continue;
+    }
+    priorAssignedIds.add(e.id);
+    priorAssigned.push({ expertEmail: expert.email, entityName: e.entity_name });
+    if (noteAuthor) {
+      const { error: noteErr } = await (admin.from('entity_notes') as any).insert({
+        entity_id: e.id,
+        author_id: noteAuthor.id,
+        author_role: 'admin',
+        author_name: 'ModernTax Auto-Assign',
+        body: TDS_FIRST_BODY,
+        kind: 'instruction',
+      });
+      if (noteErr) console.warn('[auto-assign] TDS-first note failed:', noteErr.message);
+    }
+    try {
+      const { sendExpertAssignmentNotification } = await import('@/lib/sendgrid');
+      await sendExpertAssignmentNotification(expert.email, [e.entity_name], 1);
+    } catch (notifyErr) {
+      console.warn('[auto-assign] prior-completer notification failed (non-fatal):', notifyErr);
+    }
+  }
+  pool = pool.filter(e => !priorAssignedIds.has(e.id));
+  skipped.prior_completer_assigned = priorAssigned.length;
+
+  if (pool.length === 0) {
+    return NextResponse.json({
+      success: true,
+      batches_created: priorAssigned.length,
+      entities_offered: priorAssigned.length,
+      prior_completer_assigned: priorAssigned,
+      skipped,
+      note: 'all eligible entities routed to prior completers',
+      processed_at: new Date().toISOString(),
     });
   }
 
@@ -189,10 +356,11 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
-    batches_created: created.length,
-    entities_offered: created.reduce((s, c) => s + c.entityCount, 0),
+    batches_created: created.length + priorAssigned.length,
+    entities_offered: created.reduce((s, c) => s + c.entityCount, 0) + priorAssigned.length,
     available_experts: available.length,
     pending_pool_size: pool.length,
+    prior_completer_assigned: priorAssigned,
     skipped,
     created,
     errors,
