@@ -76,14 +76,19 @@ export function hasCreditsToOrder(
   return balance >= creditRequestRate(client) * count;
 }
 
-/** Per-entity pay-as-you-go transcript pull. Up to 3 years standard. */
-export const PRICE_PAYG = 79.98;
+/** Per-entity pay-as-you-go transcript pull. Up to 3 years standard.
+ *  Rate card 2026-08: raised 79.98 → 83.98 to hold margin above the new
+ *  piece-rate expert cost ($28/TIN − 10% take = $25.20). */
+export const PRICE_PAYG = 83.98;
 
-/** Per-entity deposit-model transcript pull (volume discount tier). */
-export const PRICE_DEPOSIT = 59.98;
+/** Per-entity deposit-model transcript pull (volume discount tier).
+ *  Rate card 2026-08: 59.98 → 62.97 (~25% off PAYG). */
+export const PRICE_DEPOSIT = 62.97;
 
-/** Per-entity API platform-tier price (highest-volume customers). */
-export const PRICE_PLATFORM = 39.99;
+/** Per-entity API platform-tier price (highest-volume customers).
+ *  Rate card 2026-08: 39.99 → 49.99 — the old floor sat below expert cost;
+ *  49.99 restores a healthy 50% margin. The subscription is the profit center. */
+export const PRICE_PLATFORM = 49.99;
 
 /** Monthly platform fee for API-tier customers. */
 export const PRICE_PLATFORM_MONTHLY = 2500;
@@ -295,7 +300,12 @@ export const PRICE_REORDER = 29.99;
  * constants stay exported for backwards-compat with auto-invoice cron
  * paths that haven't been migrated yet.
  */
-export const PRICE_POST_CLOSE_MONITORING_MONTHLY = 29.00;
+// Rate card 2026-08: monitoring is reconciled to a single number — $39.99 per
+// UPDATE (billed only when a fresh re-pull actually lands, per PR #131), not a
+// flat monthly. This replaces the three conflicting figures ($29/mo here,
+// $25/TIN in the MSA, $39.99/pull in code). The name is kept for import
+// compatibility; it is now the per-update rate.
+export const PRICE_POST_CLOSE_MONITORING_MONTHLY = 39.99;
 
 /**
  * 941 Payroll Liability Summary — add-on that pulls 941 Account Transcripts
@@ -399,7 +409,7 @@ export const INVOICE_SKU_CATALOG: Record<string, InvoiceSku> = {
     sku: 'verification-managed',
     name: 'Tax Verification (Managed)',
     description: 'Per-entity IRS tax verification on Managed tier. ModernTax handles 8821 acquisition + signing. Includes Record of Account + Tax Return Transcripts for up to 3 years.',
-    unitPrice: PRICE_DEPOSIT, // 59.98
+    unitPrice: PRICE_DEPOSIT, // 62.97 (rate card 2026-08)
     cadence: 'one_time',
     unit: 'entity',
     stripeMetadata: { tier: 'managed', category: 'verification' },
@@ -408,7 +418,7 @@ export const INVOICE_SKU_CATALOG: Record<string, InvoiceSku> = {
     sku: 'verification-enterprise',
     name: 'Tax Verification (Enterprise)',
     description: 'Per-entity IRS tax verification on Enterprise tier. Includes Record of Account + Tax Return Transcripts for up to 3 years, plus same-day SLA + dedicated expert routing + portfolio reporting eligibility.',
-    unitPrice: PRICE_PAYG, // 79.98
+    unitPrice: PRICE_PAYG, // 83.98 (rate card 2026-08)
     cadence: 'one_time',
     unit: 'entity',
     stripeMetadata: { tier: 'enterprise', category: 'verification' },
