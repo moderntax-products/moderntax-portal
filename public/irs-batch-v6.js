@@ -1,5 +1,21 @@
 // =====================================================
-// IRS BATCH TRANSCRIPT UPLOADER v6.10 — DIRECT-TO-PORTAL
+// IRS BATCH TRANSCRIPT UPLOADER v6.11 — DIRECT-TO-PORTAL
+// v6.11 changes (on top of v6.10):
+//   - SAFETY: re-entrancy guard (window.__MT_RUNNING). Re-injecting the tool
+//     while a run is active used to spawn a SECOND concurrent full run; several
+//     heavy PDF-generating runs at once froze the browser and the computer.
+//     A second start now aborts with a message until the first run finishes.
+//   - SAFETY: a cached login token no longer silently auto-starts a pull — the
+//     expert must confirm before it scrapes/uploads (fixes "it started pulling
+//     before I logged in").
+//   - PERFORMANCE: ALL transcripts now upload as native HTML — no client-side
+//     html2canvas/jsPDF. Generating a PDF in the browser for every income
+//     transcript blocked the main thread and froze the tab and the computer.
+//     HTML is fast + lossless; PDF rendering (if needed) moves server-side.
+//   - Progress log widened 60→120 chars so the Tax Period is visible.
+//   NOTE: subjects/TINs already resolve correctly per-message (the SOR list is
+//   one message per row here); no subject-scoping change was needed.
+//
 // v6.10 changes (on top of v6.9):
 //   - "No record of return filed" + "Requested data not found" stubs are
 //     recognized as legitimate order information (IRS confirming the
@@ -26,6 +42,17 @@
 // =====================================================
 
 (async function() {
+    // ---- v6.11 RE-ENTRANCY GUARD ----
+    // Re-injecting/re-running the tool while a run is active starts a SECOND
+    // concurrent full run (every message does heavy PDF generation); a few of
+    // these at once exhaust memory and freeze the browser / the whole computer.
+    // Refuse to start when a run is already in flight in this tab.
+    if (window.__MT_RUNNING) {
+        alert('⚠️ The ModernTax uploader is already running in this tab.\n\nLet it finish (watch the panel), or close and reopen the tab, before starting it again.');
+        return;
+    }
+    window.__MT_RUNNING = true;
+    try {
     // ---- CONFIGURATION ----
     const PORTAL_URL = 'https://portal.moderntax.io';
     const SUPABASE_URL = 'https://nixzwnfjglojemozlvmf.supabase.co';
@@ -65,7 +92,13 @@
             return;
         }
     } else {
+        // v6.11: a cached token from a previous run must NOT silently kick off a
+        // pull — that let the tool start scraping/uploading before the expert had
+        // actually logged in this session. Require an explicit confirm.
         console.log('%c✅ Using cached session ', 'background:#38a169;color:white;padding:3px');
+        if (!confirm('ModernTax uploader\n\nUsing your cached login from a previous run in this tab.\n\nContinue and pull transcripts for your assigned entities now?\n\n(Cancel if you have not logged into the IRS SOR this session.)')) {
+            return;
+        }
     }
 
     if (!location.href.includes('list_mail')) {
@@ -261,7 +294,7 @@
             #irs-batch .stat-label { font-size:10px; color:#a0aec0; text-transform:uppercase; }
             #irs-batch .stat-num.red { color:#fc8181; }
         </style>
-        <h3>📥 ModernTax Transcript Uploader v6.10</h3>
+        <h3>📥 ModernTax Transcript Uploader v6.11</h3>
         <div class="expert-info">👤 ${expertInfo.expert.name} • ${expertInfo.assignments.length} assignments • ${messages.length} messages in inbox</div>
         <div style="background:#2d3748;border-radius:5px;padding:8px 12px;margin-bottom:8px;font-size:11px;">
             <div style="color:#a0aec0;margin-bottom:4px;">Looking for these entities:</div>
@@ -459,7 +492,7 @@
         document.getElementById('irs-pbar').textContent = pct + '%';
         document.getElementById('irs-status').textContent = '⏳ working...';
 
-        addLog(`\n[${i+1}/${messages.length}] ${msg.subject.substring(0,60)}`);
+        addLog(`\n[${i+1}/${messages.length}] ${msg.subject.substring(0,120)}`); // v6.11: 60→120 so the Tax Period (which sat right at char 60) is visible
 
         try {
             // ---- Transcript Detection Helper ----
@@ -897,14 +930,14 @@
                     primaryBlob = new Blob([transcriptHtml], { type: 'text/html' });
                     primaryExt = '.html';
                 } else {
-                    addLog(`  🔄 Converting...`, 'info');
-                    primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf');
-                    if (primaryBlob.size > 3.5 * 1024 * 1024) {
-                        addLog(`  🗜️ Compressing (${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB)...`, 'warn');
-                        primaryBlob = await htmlToPdfBlob(transcriptHtml, baseFilename + '.pdf', 0.45);
-                        addLog(`  📦 Compressed to ${(primaryBlob.size / 1024 / 1024).toFixed(1)}MB`, 'info');
-                    }
-                    primaryExt = '.pdf';
+                    // v6.11: income transcripts (1120/1040) now upload as native
+                    // HTML too — NO client-side html2canvas/jsPDF. Rendering a PDF
+                    // in the browser for every transcript blocked the main thread
+                    // and froze the tab and the whole computer. HTML is fast and
+                    // lossless; any PDF rendering moves off the expert's machine.
+                    addLog(`  📄 Using native HTML (no client-side PDF)`, 'info');
+                    primaryBlob = new Blob([transcriptHtml], { type: 'text/html' });
+                    primaryExt = '.html';
                 }
                 // Alias for legacy error-path code that references pdfBlob
                 const pdfBlob = primaryBlob;
@@ -1072,4 +1105,9 @@
     alert(summary);
 
     return { results, findings: allFindings, uploaded: uploadedCount, failed: failedCount, skipped: skippedCount };
+    } finally {
+        // v6.11: always release the re-entrancy guard so the expert can start a
+        // fresh run after this one finishes or errors out.
+        window.__MT_RUNNING = false;
+    }
 })();
