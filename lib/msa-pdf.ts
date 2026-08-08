@@ -321,9 +321,9 @@ function drawTierMatrix(ctx: Ctx, selected: 'A' | 'B' | 'C') {
   });
 
   const rows: { tier: 'A' | 'B' | 'C'; cells: string[] }[] = [
-    { tier: 'A', cells: ['', 'A. Pay-As-You-Go', '$79.98 / TIN', 'None', 'None', 'None'] },
-    { tier: 'B', cells: ['', 'B. Deposit / Onboarding', '$59.98 / TIN', '$2,500 deposit', 'None', 'None'] },
-    { tier: 'C', cells: ['', 'C. Platform / API', '$39.99 / TIN', 'None', '$2,500 / mo', '20% off other fees'] },
+    { tier: 'A', cells: ['', 'A. Pay-As-You-Go', '$83.98 / TIN', 'None', 'None', 'None'] },
+    { tier: 'B', cells: ['', 'B. Deposit / Onboarding', '$62.97 / TIN', '$2,500 deposit', 'None', 'None'] },
+    { tier: 'C', cells: ['', 'C. Platform / API', '$49.99 / TIN', 'None', '$2,500/mo or $24,000/yr', '20% off other fees'] },
   ];
   for (const row of rows) {
     const isSel = row.tier === selected;
@@ -370,23 +370,23 @@ function drawTierDetails(ctx: Ctx, tier: 'A' | 'B' | 'C', isSelected: boolean) {
 
   // Fee table for this tier
   const fees = tier === 'A' ? [
-    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$79.98'],
-    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$79.98'],
+    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$83.98'],
+    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$29.99'],
     ['Entity Transcript Add-On', 'per pull', '$19.99'],
     ['ModernTax-Prepared 8821 Generation', 'per entity', '$10.00'],
-    ['Account Monitoring', 'per TIN per month', '$25.00'],
+    ['Account Monitoring', 'per update (billed on delivery)', '$39.99'],
   ] : tier === 'B' ? [
-    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$59.98'],
-    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$59.98'],
+    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$62.97'],
+    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$29.99'],
     ['Entity Transcript Add-On', 'per pull', '$19.99'],
     ['ModernTax-Prepared 8821 Generation', 'per entity', '$10.00'],
-    ['Account Monitoring', 'per TIN per month', '$25.00'],
+    ['Account Monitoring', 'per update (billed on delivery)', '$39.99'],
   ] : [
-    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$39.99'],
-    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$39.99'],
+    ['IRS Transcript Verification (TRT + ROA, 4 yrs)', 'per TIN', '$49.99'],
+    ['Re-Orders (repeat pulls on the same TIN)', 'per pull', '$29.99'],
     ['Entity Transcript Add-On (20% off list)', 'per pull', '$15.99'],
     ['ModernTax-Prepared 8821 Generation (20% off list)', 'per entity', '$8.00'],
-    ['Account Monitoring (20% off list)', 'per TIN per month', '$20.00'],
+    ['Account Monitoring', 'per update (billed on delivery)', '$39.99'],
     ['Platform / API Access (monthly subscription)', 'per month', '$2,500.00'],
   ];
 

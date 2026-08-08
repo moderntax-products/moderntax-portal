@@ -257,7 +257,7 @@ export async function computeDailyCogs(
         .from('profiles')
         .select('id, hourly_rate')
         .in('id', expertIds);
-      for (const e of (experts || []) as any[]) rates[e.id] = Number(e.hourly_rate || 40);
+      for (const e of (experts || []) as any[]) rates[e.id] = Number(e.hourly_rate || 45); // reconciled to the $45 payroll default (was $40)
     }
     let payouts = 0;
     let totalHours = 0;

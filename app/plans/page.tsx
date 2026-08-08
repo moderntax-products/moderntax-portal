@@ -227,12 +227,13 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
             <div className="mt-4 mb-4">
               <span className="text-4xl font-bold">${PRICE_PLATFORM}</span>
               <span className="text-gray-300 text-sm"> / verified entity</span>
-              <p className="text-xs text-gray-400 mt-1">+ ${PRICE_PLATFORM_MONTHLY.toLocaleString()}/mo subscription · 50% off PAYG</p>
+              <p className="text-xs text-gray-400 mt-1">+ ${PRICE_PLATFORM_MONTHLY.toLocaleString()}/mo (or $24,000/yr) · 40% off PAYG</p>
             </div>
             <p className="text-sm text-gray-300 mb-4">Lowest per-pull rate, dedicated API, white-label borrower doc hub, and SLAs.</p>
             <ul className="space-y-2 text-sm text-gray-200 flex-1">
               <Feature dark>Everything in Deposit</Feature>
-              <Feature dark>50% lower per-pull rate</Feature>
+              <Feature dark>40% lower per-pull rate</Feature>
+              <Feature dark>24/7 support + monthly platform credits</Feature>
               <Feature dark>REST API + webhook delivery</Feature>
               <Feature dark>White-label borrower doc hub</Feature>
               <Feature dark>Dedicated CSM + 24h SLA</Feature>
@@ -276,9 +277,9 @@ export default async function PlansPage({ searchParams }: PlansPageProps) {
                 </svg>
               }
               title="Post-Close Monitoring"
-              priceLine={`$${PRICE_POST_CLOSE_MONITORING_MONTHLY}/entity/mo · auto-cancel`}
-              tagline="One flat fee until the transcript lands"
-              body="When a borrower owes a tax return as a closing condition, enroll the entity in monitoring at intake. We re-poll the IRS monthly until the conditioned transcript arrives, then auto-cancel — no manual unenroll, no per-pull surprise. One predictable line item per entity per month."
+              priceLine={`$${PRICE_POST_CLOSE_MONITORING_MONTHLY} / update · auto-cancel`}
+              tagline="Pay only when a fresh transcript actually lands"
+              body="When a borrower owes a tax return as a closing condition, enroll the entity in monitoring at intake. We re-poll the IRS on a set cadence and you're billed $39.99 only on an update that delivers a new transcript — never for an empty check. The enrollment auto-cancels the first time the conditioned transcript arrives. No manual unenroll, no flat monthly charge for nothing."
               steps={[
                 { title: 'Opt in at intake', body: 'Per-entity checkbox on every intake flow. Manager can also flip on team-wide auto-enroll from the dashboard.' },
                 { title: 'Monthly IRS sweep', body: 'Cron re-pulls Records of Account on a 30-day cadence using the same expert pipeline as your initial verification. Cadence configurable per client.' },
