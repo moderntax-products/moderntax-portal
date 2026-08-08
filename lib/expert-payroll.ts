@@ -41,67 +41,75 @@ export interface SessionTotals {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Margin-guard payout engine (Matt 2026-06-26 PRD).
-//
-// Protects platform gross margin: pay the hourly baseline UNLESS the expert was
-// too slow, in which case a per-TIN piece-rate cap kicks in. Zero verified units
-// in a period blocks the payout entirely. Efficiency (TINs/hr) is recorded for
-// work-routing tiers. The hourly side honors each expert's configured rate; the
-// cap is a fixed margin floor.
-//   MAX_COST_PER_TIN = $32.99  ($59.98 min client bill − 45% target margin)
+// Piece-rate payout engine (Matt 2026-08-07). Replaces the earlier
+// min(hourly, $32.99/TIN cap) margin-guard with a straight per-TIN piece rate
+// plus a platform take. Pay aligns to output, not clocked hours:
+//   • PIECE_RATE_PER_TIN $28 — paid per completed TIN, but only for TINs earned
+//     on the two productive channels: time on the phone with an IRS agent
+//     ('manual' + 'irs_direct_dial') and running the SOR-inbox script
+//     ('sor_upload'). Setup/idle sources (e.g. 'bookmarklet_session') don't pay.
+//   • PLATFORM_TAKE_PCT 10% — retained by the platform from gross; expert nets 90%.
+//   • Zero billable TINs ⇒ no payout.
+// Hours are still recorded for the efficiency read-out, but no longer drive pay,
+// so a slow or idle session can't cost more than the work it produced.
 // ───────────────────────────────────────────────────────────────────────────
-export const MARGIN_GUARD = {
-  MAX_COST_PER_TIN: 32.99,
+export const PIECE_RATE = {
+  PER_TIN: 28.0,
+  PLATFORM_TAKE_PCT: 0.10,
   MIN_EFFICIENCY_TARGET: 5.0, // TINs/hr — routing-tier target, NOT a pay gate
+  /** Log sources that count toward pay: IRS-agent phone time + SOR-inbox script. */
+  BILLABLE_SOURCES: ['manual', 'irs_direct_dial', 'sor_upload'] as const,
 };
+
+/** Is a time-log source a paying channel (IRS phone / SOR script)? */
+export function isBillableSource(source: string | null | undefined): boolean {
+  return !!source && (PIECE_RATE.BILLABLE_SOURCES as readonly string[]).includes(source);
+}
 
 export type PayoutStatus =
   | 'APPROVED_FOR_PAYMENT'
   | 'BLOCKED_ZERO_PRODUCTION'
-  | 'CAP_OVERRIDE_TRIGGERED';
+  | 'PARTIALLY_PAID';
 
 export interface PayoutCalc {
   hours: number;
-  tinsCompleted: number;
-  efficiencyRate: number; // TINs/hr
-  hourlyGross: number;    // hours × hourly rate (uncapped)
-  pieceRateCap: number;   // tins × MAX_COST_PER_TIN
-  payoutAmount: number;   // final, cap-protected & zero-blocked
+  billableTins: number;   // TINs earned on paying channels only
+  efficiencyRate: number; // TINs/hr (all hours, for display)
+  grossPay: number;       // billableTins × PER_TIN
+  platformTake: number;   // grossPay × PLATFORM_TAKE_PCT
+  payoutAmount: number;   // net owed = grossPay − platformTake
   status: PayoutStatus;
   notes: string;
 }
 
 /**
- * Cap-protected, zero-blocked payout for a pay period. Single source of truth —
- * used by the live payroll view, the close-period (approval) step, and any
- * downstream Mercury draft. Mirrors the PRD pseudocode exactly.
+ * Piece-rate payout for a pay period. Single source of truth — used by the live
+ * payroll view, the close-period (approval) step, and any downstream Mercury
+ * draft. `billableTins` must already be filtered to paying channels by the
+ * caller (see isBillableSource); `hours` is display-only.
  */
 export function calculateExpertPayout(
   hours: number,
-  tinsCompleted: number,
-  hourlyRate: number = PAYROLL_DEFAULTS.HOURLY_RATE,
-  maxCostPerTin: number = MARGIN_GUARD.MAX_COST_PER_TIN,
+  billableTins: number,
+  _hourlyRate: number = PAYROLL_DEFAULTS.HOURLY_RATE, // kept for signature compat; unused
+  perTin: number = PIECE_RATE.PER_TIN,
+  takePct: number = PIECE_RATE.PLATFORM_TAKE_PCT,
 ): PayoutCalc {
   const h = Math.max(0, Number(hours) || 0);
-  const tins = Math.max(0, Math.trunc(Number(tinsCompleted) || 0));
+  const tins = Math.max(0, Math.trunc(Number(billableTins) || 0));
   const efficiencyRate = h > 0 ? round2(tins / h) : 0;
-  const hourlyGross = round2(h * hourlyRate);
-  const pieceRateCap = round2(tins * maxCostPerTin);
-  const base = { hours: round2(h), tinsCompleted: tins, efficiencyRate, hourlyGross, pieceRateCap };
+  const grossPay = round2(tins * perTin);
+  const platformTake = round2(grossPay * takePct);
+  const payoutAmount = round2(grossPay - platformTake);
+  const base = { hours: round2(h), billableTins: tins, efficiencyRate, grossPay, platformTake, payoutAmount };
 
-  // Rule 1 — zero-production block (no verified units ⇒ no payout).
   if (tins === 0) {
-    return { ...base, payoutAmount: 0, status: 'BLOCKED_ZERO_PRODUCTION',
-      notes: 'No payout authorized. Zero units completed.' };
+    return { ...base, grossPay: 0, platformTake: 0, payoutAmount: 0, status: 'BLOCKED_ZERO_PRODUCTION',
+      notes: 'No payout authorized. Zero billable TINs (IRS-phone + SOR-script channels) in period.' };
   }
-  // Rule 2 — cap-protected hourly engine.
-  if (hourlyGross <= pieceRateCap) {
-    return { ...base, payoutAmount: hourlyGross, status: 'APPROVED_FOR_PAYMENT',
-      notes: `Completed ${tins} TINs in ${round2(h)} hrs (${efficiencyRate} TINs/hr).` };
-  }
-  return { ...base, payoutAmount: pieceRateCap, status: 'CAP_OVERRIDE_TRIGGERED',
-    notes: `Capped to protect margin — ${tins} TINs in ${round2(h)} hrs (${efficiencyRate} TINs/hr): `
-      + `$${hourlyGross.toFixed(2)} hourly exceeds the $${pieceRateCap.toFixed(2)} per-TIN cap.` };
+  return { ...base, status: 'APPROVED_FOR_PAYMENT',
+    notes: `${tins} TINs × $${perTin.toFixed(2)} = $${grossPay.toFixed(2)} gross − ${Math.round(takePct * 100)}% take `
+      + `($${platformTake.toFixed(2)}) = $${payoutAmount.toFixed(2)} net.` };
 }
 
 /**
