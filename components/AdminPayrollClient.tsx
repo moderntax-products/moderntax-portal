@@ -34,10 +34,11 @@ interface ExpertSummary {
   };
   payout: {
     efficiency_rate: number; // TINs/hr
-    hourly_gross: number;
-    piece_rate_cap: number;
-    payout_amount: number;   // cap-protected, zero-blocked
-    status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'CAP_OVERRIDE_TRIGGERED';
+    billable_tins: number;   // TINs on paying channels (IRS phone + SOR script)
+    gross_pay: number;       // billable_tins × $28
+    platform_take: number;   // 10% retained
+    payout_amount: number;   // net owed = gross − take, zero-blocked
+    status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'PARTIALLY_PAID';
     notes: string;
   };
   sla_met_pct: number | null;
@@ -282,12 +283,12 @@ export function AdminPayrollClient() {
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm mb-3">
-                  <Stat label="Hours" value={ex.live_totals.hours.toFixed(2)} />
-                  <Stat label="TINs" value={ex.live_totals.tinsCompleted} />
+                  <Stat label="Billable TINs" value={ex.payout.billable_tins} />
                   <Stat label="Efficiency" value={`${ex.payout.efficiency_rate.toFixed(2)}/hr`} accent={ex.payout.efficiency_rate >= 4 ? 'emerald' : ex.payout.efficiency_rate >= 2 ? 'amber' : 'red'} />
                   <Stat label="SLA met" value={fmtPct(ex.sla_met_pct)} accent={(ex.sla_met_pct ?? 100) >= 90 ? 'emerald' : 'amber'} />
-                  <Stat label="Hourly gross" value={fmt$(ex.payout.hourly_gross)} />
-                  <Stat label="Payout" value={fmt$(ex.payout.payout_amount)} accent={ex.payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'red' : 'emerald'} />
+                  <Stat label="Gross ($28/TIN)" value={fmt$(ex.payout.gross_pay)} />
+                  <Stat label="Platform take" value={fmt$(ex.payout.platform_take)} />
+                  <Stat label="Net payout" value={fmt$(ex.payout.payout_amount)} accent={ex.payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'red' : 'emerald'} />
                 </div>
 
                 {/* Margin-guard status — what the admin will actually approve. */}
@@ -421,10 +422,10 @@ function Stat({ label, value, accent }: { label: string; value: number | string;
   );
 }
 
-function PayoutStatusBadge({ status }: { status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'CAP_OVERRIDE_TRIGGERED' }) {
+function PayoutStatusBadge({ status }: { status: 'APPROVED_FOR_PAYMENT' | 'BLOCKED_ZERO_PRODUCTION' | 'PARTIALLY_PAID' }) {
   const map = {
     APPROVED_FOR_PAYMENT: { cls: 'bg-emerald-100 text-emerald-800', label: 'Approved for payment' },
-    CAP_OVERRIDE_TRIGGERED: { cls: 'bg-amber-100 text-amber-800', label: 'Cap override (margin-protected)' },
+    PARTIALLY_PAID: { cls: 'bg-amber-100 text-amber-800', label: 'Partially paid' },
     BLOCKED_ZERO_PRODUCTION: { cls: 'bg-red-100 text-red-800', label: 'Blocked — zero production' },
   }[status];
   return <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold uppercase ${map.cls}`}>{map.label}</span>;

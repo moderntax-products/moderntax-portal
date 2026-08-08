@@ -24,6 +24,7 @@ import {
   computeSessionTotals,
   computeSlaMetPct,
   calculateExpertPayout,
+  isBillableSource,
   payPeriodFor,
   PAYROLL_DEFAULTS,
 } from '@/lib/expert-payroll';
@@ -90,7 +91,7 @@ export async function GET(request: NextRequest) {
   // All time logs in the window (one shot, then group in JS)
   const { data: logs } = await (admin
     .from('expert_time_logs' as any) as any)
-    .select('id, expert_id, start_at, end_at, hours_worked, tins_completed, break_minutes, notes')
+    .select('id, expert_id, start_at, end_at, hours_worked, tins_completed, break_minutes, notes, source')
     .in('expert_id', expertIds)
     .gte('start_at', startIso)
     .lt('start_at', endExclusiveIso);
@@ -136,7 +137,8 @@ export async function GET(request: NextRequest) {
     const targetRate = Number(ex.target_tins_per_hour) || PAYROLL_DEFAULTS.TARGET_TINS_PER_HOUR;
 
     let totalHours = 0;
-    let totalTins = 0;
+    let totalTins = 0;      // all completed TINs (display)
+    let billableTins = 0;   // TINs on paying channels (IRS phone + SOR script) — pay basis
     let openSessionCount = 0;
     let openSessionOldestStart: string | null = null;
     for (const l of expertLogs) {
@@ -150,13 +152,15 @@ export async function GET(request: NextRequest) {
         continue;
       }
       totalHours += Number(l.hours_worked) || 0;
-      totalTins += Number(l.tins_completed) || 0;
+      const tins = Number(l.tins_completed) || 0;
+      totalTins += tins;
+      if (isBillableSource(l.source)) billableTins += tins;
     }
     const totals = computeSessionTotals(totalHours, totalTins, hourlyRate, targetRate);
-    // Margin-guard engine: efficiency, cap-protected amount, zero-production block.
-    const payout = calculateExpertPayout(totalHours, totalTins, hourlyRate);
+    // Piece-rate engine: pay per billable TIN, 10% platform take, zero-block.
+    const payout = calculateExpertPayout(totalHours, billableTins, hourlyRate);
     const slaMetPct = computeSlaMetPct(expertCompleted, tz);
-    // Period total reflects the ACTUAL (capped, zero-blocked) payout, not raw gross.
+    // Period total reflects the ACTUAL (piece-rate, net-of-take, zero-blocked) payout.
     totalGross += payout.payoutAmount;
 
     const existingPeriod = periodByExpert.get(ex.id) || null;
@@ -169,11 +173,12 @@ export async function GET(request: NextRequest) {
       payment_method: ex.payment_method || 'stripe_connect',
       log_count: expertLogs.length,
       live_totals: totals,
-      // Cap-protected payout the admin will actually approve (PRD engine).
+      // Piece-rate payout the admin will actually approve.
       payout: {
         efficiency_rate: payout.efficiencyRate,
-        hourly_gross: payout.hourlyGross,
-        piece_rate_cap: payout.pieceRateCap,
+        billable_tins: payout.billableTins,
+        gross_pay: payout.grossPay,
+        platform_take: payout.platformTake,
         payout_amount: payout.payoutAmount,
         status: payout.status,
         notes: payout.notes,
@@ -243,22 +248,25 @@ export async function POST(request: NextRequest) {
 
     const { data: logs } = await (admin
       .from('expert_time_logs' as any) as any)
-      .select('id, hours_worked, tins_completed, end_at')
+      .select('id, hours_worked, tins_completed, end_at, source')
       .eq('expert_id', expert_id)
       .gte('start_at', startIso)
       .lt('start_at', endExclusiveIso);
 
     let totalHours = 0;
     let totalTins = 0;
+    let billableTins = 0;
     for (const l of (logs || []) as any[]) {
       if (!l.end_at) continue; // skip open sessions
       totalHours += Number(l.hours_worked) || 0;
-      totalTins += Number(l.tins_completed) || 0;
+      const tins = Number(l.tins_completed) || 0;
+      totalTins += tins;
+      if (isBillableSource(l.source)) billableTins += tins;
     }
     const totals = computeSessionTotals(totalHours, totalTins, hourlyRate, targetRate);
-    // Margin-guard engine decides the amount + approvability. Zero-production
+    // Piece-rate engine decides the amount + approvability. Zero billable TINs
     // closes as 'blocked' (never 'approved'), so it can never be drafted/paid.
-    const payout = calculateExpertPayout(totalHours, totalTins, hourlyRate);
+    const payout = calculateExpertPayout(totalHours, billableTins, hourlyRate);
     const lifecycleStatus = payout.status === 'BLOCKED_ZERO_PRODUCTION' ? 'blocked' : 'approved';
 
     const { data: completed } = await (admin
@@ -280,15 +288,16 @@ export async function POST(request: NextRequest) {
       hourly_rate: hourlyRate,
       target_tins_per_hour: targetRate,
       total_hours: totals.hours,
-      total_tins: totals.tinsCompleted,
+      total_tins: payout.billableTins, // paying TINs (IRS phone + SOR script)
       expected_tins: totals.expectedTins,
       efficiency_pct: totals.efficiencyPct,
       efficiency_rate: payout.efficiencyRate,
-      hourly_gross: payout.hourlyGross,
-      piece_rate_cap: payout.pieceRateCap,
+      // Existing numeric columns repurposed for the piece-rate model:
+      hourly_gross: payout.grossPay,     // = billableTins × $28 (gross before take)
+      piece_rate_cap: payout.platformTake, // = 10% platform take retained
       payout_status: payout.status,
       sla_met_pct: slaMetPct,
-      // The cap-protected, zero-blocked amount — what actually gets paid.
+      // Net amount owed (gross − take), zero-blocked — what actually gets paid.
       gross_pay: payout.payoutAmount,
       status: lifecycleStatus,
       notes: (notes || '').trim() || payout.notes,
@@ -343,6 +352,50 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ success: true, action: 'mark_paid', period_id });
+  }
+
+  // Partial payment — record a partial disbursement against an approved period
+  // (e.g. balance too low to pay in full). `amount_paid` is the CUMULATIVE total
+  // paid to date. Period flips to 'paid' once that reaches the net owed,
+  // otherwise 'partial' with the remaining balance shown in payment_reference.
+  if (action === 'mark_partial') {
+    const { period_id, amount_paid, payment_reference, notes } = body;
+    if (!period_id || typeof amount_paid !== 'number') {
+      return NextResponse.json({ error: 'period_id and amount_paid (number) required' }, { status: 400 });
+    }
+    const { data: period } = await (admin
+      .from('expert_pay_periods' as any) as any)
+      .select('gross_pay').eq('id', period_id).single();
+    const owed = Math.round((Number(period?.gross_pay) || 0) * 100) / 100;
+    const paid = Math.round(Math.max(0, Math.min(amount_paid, owed)) * 100) / 100;
+    const remaining = Math.round((owed - paid) * 100) / 100;
+    const fullyPaid = remaining <= 0.01;
+    const ref = `Paid $${paid.toFixed(2)} of $${owed.toFixed(2)} net owed`
+      + (fullyPaid ? ' · paid in full' : ` · $${remaining.toFixed(2)} remaining`)
+      + (payment_reference ? ` · ${String(payment_reference).trim()}` : '');
+
+    const { error } = await (admin
+      .from('expert_pay_periods' as any) as any)
+      .update({
+        status: fullyPaid ? 'paid' : 'partial',
+        paid_at: new Date().toISOString(),
+        paid_by: user.id,
+        payment_reference: ref,
+        notes: notes ? String(notes).trim() : undefined,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', period_id);
+    if (error) return NextResponse.json({ error: 'Failed to record partial', detail: error.message }, { status: 500 });
+
+    await (admin.from('audit_log' as any) as any).insert({
+      user_email: profile.email,
+      action: 'settings_changed',
+      entity_type: 'expert_pay_period',
+      entity_id: period_id,
+      details: { action: 'pay_period_partial_paid', paid, remaining, owed },
+    });
+
+    return NextResponse.json({ success: true, action: 'mark_partial', period_id, paid, remaining, status: fullyPaid ? 'paid' : 'partial' });
   }
 
   if (action === 'edit_log') {
