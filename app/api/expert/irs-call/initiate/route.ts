@@ -420,6 +420,19 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Mark the entities as actively being worked. 'processing' was a valid
+      // status in the schema but nothing ever wrote it, so the stuck-entity and
+      // processor-delay crons that key on it never fired — an in-flight call
+      // looked identical to an untouched queue item. Firing the call is the
+      // authoritative "work started" signal. Guarded on 'irs_queue' so a
+      // completed/failed entity is never regressed; completion (upload-transcript)
+      // keys on assignment status, so it still advances from 'processing'.
+      await adminSupabase
+        .from('request_entities')
+        .update({ status: 'processing' })
+        .in('id', entityIds)
+        .eq('status', 'irs_queue');
+
       await logAuditFromRequest(adminSupabase, request, {
         action: 'irs_call_initiated',
         userId: user.id,

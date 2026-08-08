@@ -305,12 +305,48 @@ export async function acceptBatch(
     .eq('batch_id', batchId) as { data: any[] | null };
 
   // Regenerate the 8821 for each entity with the ACCEPTING expert's designee
-  // creds (best-effort — the admin can also upload an override).
+  // creds (best-effort — the admin can also upload an override). Shared with
+  // the direct admin-assign path so no assignment leaves a stale designee.
+  const { regenerated, errors } = await regenerateEntities8821(
+    admin,
+    expertProfile,
+    (assignments || []).map(a => a.request_entities).filter(Boolean),
+    { pathPrefix: `batch-${batchId.slice(0, 8)}-expert-${expertId.slice(0, 8)}` },
+  );
+
+  // Move entities into irs_queue if they aren't already.
+  await admin
+    .from('request_entities')
+    .update({ status: 'irs_queue' })
+    .in('id', (assignments || []).map(a => a.entity_id))
+    .in('status', ['8821_signed']);
+
+  return { ok: true, batch: claimedBatch, regenerated, errors };
+}
+
+/**
+ * Regenerate the 8821 for a set of entities under a given expert's designee
+ * credentials, writing each new PDF to expert_regenerated_8821_url.
+ *
+ * Shared by batch-accept (acceptBatch) and direct admin assignment so NO
+ * assignment path leaves a stale/generic designee on the form the expert will
+ * fax to the IRS. Best-effort per entity — a single failure is collected in
+ * `errors` (so the caller can surface it) rather than throwing, matching the
+ * "partial success beats forcing a re-do" philosophy of acceptBatch.
+ *
+ * Entities must carry: id, entity_name, tid, address, city, state, zip_code,
+ * form_type, years, signer_first_name, signer_last_name, gross_receipts.
+ */
+export async function regenerateEntities8821(
+  admin: SupabaseClient,
+  expertProfile: any,
+  entities: any[],
+  opts?: { pathPrefix?: string },
+): Promise<{ regenerated: { entityId: string; storagePath: string }[]; errors: { entityId: string; error: string }[] }> {
   const regenerated: { entityId: string; storagePath: string }[] = [];
   const errors: { entityId: string; error: string }[] = [];
   const designee = buildDesigneeFromProfile(expertProfile);
-  for (const a of assignments || []) {
-    const e = a.request_entities;
+  for (const e of entities) {
     if (!e) continue;
     try {
       const cityStateZip = [[e.city, e.state].filter(Boolean).join(', '), e.zip_code].filter(Boolean).join(' ').trim();
@@ -328,7 +364,8 @@ export async function acceptBatch(
         formType: (e.form_type || '1040') as '1040' | '1065' | '1120' | '1120S' | '941',
         years: Array.isArray(e.years) ? e.years.join(', ') : '2022-2026',
       });
-      const storagePath = `8821/${e.id}/${Date.now()}-batch-${batchId.slice(0, 8)}-expert-${expertId.slice(0, 8)}-regen.pdf`;
+      const tag = opts?.pathPrefix || `expert-${String(expertProfile.id).slice(0, 8)}`;
+      const storagePath = `8821/${e.id}/${Date.now()}-${tag}-regen.pdf`;
       const { error: upErr } = await admin.storage.from('uploads').upload(storagePath, pdfBuffer, {
         contentType: 'application/pdf',
         upsert: false,
@@ -341,18 +378,10 @@ export async function acceptBatch(
       regenerated.push({ entityId: e.id, storagePath });
     } catch (err) {
       errors.push({ entityId: e.id, error: err instanceof Error ? err.message : String(err) });
-      console.error(`[batch ${batchId.slice(0, 8)}] regen failed for entity ${e.id}:`, err);
+      console.error(`[regen-8821] failed for entity ${e.id}:`, err);
     }
   }
-
-  // Move entities into irs_queue if they aren't already.
-  await admin
-    .from('request_entities')
-    .update({ status: 'irs_queue' })
-    .in('id', (assignments || []).map(a => a.entity_id))
-    .in('status', ['8821_signed']);
-
-  return { ok: true, batch: claimedBatch, regenerated, errors };
+  return { regenerated, errors };
 }
 
 // ---------------------------------------------------------------------------
