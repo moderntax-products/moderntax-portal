@@ -134,23 +134,35 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // Simple round-robin: pick expert with fewest active assignments
-        const { data: assignmentCounts } = await supabase
+        // Prefer the expert who COMPLETED the original pull on this entity — they
+        // have its context and may fetch updates via TDS instead of a fresh PPS
+        // call + SOR (matt 2026-08-08). Fall back to round-robin only if that
+        // expert is no longer active or never completed it.
+        let selectedExpert: any = null;
+        const { data: origAsg } = await supabase
           .from('expert_assignments')
-          .select('expert_id')
-          .in('status', ['assigned', 'in_progress']);
+          .select('expert_id, status, completed_at')
+          .eq('entity_id', entity.id)
+          .not('expert_id', 'is', null)
+          .order('completed_at', { ascending: false });
+        const origExpertId = ((origAsg || []).find((a: any) => a.status === 'completed') || (origAsg || [])[0])?.expert_id;
+        if (origExpertId) selectedExpert = experts.find((e: any) => e.id === origExpertId) || null;
 
-        const countByExpert = new Map<string, number>();
-        experts.forEach((e: any) => countByExpert.set(e.id, 0));
-        (assignmentCounts || []).forEach((a: any) => {
-          const current = countByExpert.get(a.expert_id) || 0;
-          countByExpert.set(a.expert_id, current + 1);
-        });
-
-        const sortedExperts = experts.sort(
-          (a: any, b: any) => (countByExpert.get(a.id) || 0) - (countByExpert.get(b.id) || 0)
-        );
-        const selectedExpert = sortedExperts[0] as any;
+        if (!selectedExpert) {
+          // Round-robin fallback: fewest active assignments.
+          const { data: assignmentCounts } = await supabase
+            .from('expert_assignments')
+            .select('expert_id')
+            .in('status', ['assigned', 'in_progress']);
+          const countByExpert = new Map<string, number>();
+          experts.forEach((e: any) => countByExpert.set(e.id, 0));
+          (assignmentCounts || []).forEach((a: any) => {
+            countByExpert.set(a.expert_id, (countByExpert.get(a.expert_id) || 0) + 1);
+          });
+          selectedExpert = experts.slice().sort(
+            (a: any, b: any) => (countByExpert.get(a.id) || 0) - (countByExpert.get(b.id) || 0)
+          )[0] as any;
+        }
 
         // ============================================================
         // CREATE A NEW REQUEST per pull — first-class lifecycle object
@@ -201,8 +213,9 @@ export async function GET(request: NextRequest) {
             loan_number: monitoringLoanNumber,
             // requests.intake_method is constrained to api|csv|manual|pdf, so a
             // re-pull is recorded as 'manual'. The monitoring marker lives on the
-            // cloned entity's gross_receipts.monitoring_repull (set below), which
-            // is what billing + reporting key off of.
+            // cloned entity's gross_receipts.monitoring_repull + source_entity_id
+            // (set below) — that entity link is what the client list uses to merge
+            // this re-pull under its source request's history.
             intake_method: 'manual',
             status: '8821_signed', // skip signature step — original 8821 covers
             notes: `Auto-created by monitoring re-pull cron on ${today}. Source enrollment: ${sub.id}. Source entity: ${entity.id} (${entity.entity_name}). 8821 reused from prior submission. Cadence: ${sub.frequency}.`,
