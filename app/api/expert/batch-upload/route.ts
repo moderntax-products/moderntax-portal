@@ -362,7 +362,12 @@ export async function POST(request: NextRequest) {
     if (htmlFile) {
       try {
         const htmlBuffer = Buffer.from(await htmlFile.arrayBuffer());
-        htmlStoragePath = `transcripts/${entityId}/${Date.now()}-${sanitizedFilename.replace(/\.pdf$/i, '')}.html`;
+        // Strip an existing .pdf OR .html before appending .html. Since v6.11 the
+        // primary upload is itself HTML, so a bare .replace(/\.pdf$/) left the
+        // secondary as "<name>.html.html" — a near-duplicate that dedupe-on-write
+        // couldn't collapse. Stripping either extension yields the same key as
+        // the primary, so the redundant secondary now collapses away.
+        htmlStoragePath = `transcripts/${entityId}/${Date.now()}-${sanitizedFilename.replace(/\.(pdf|html)$/i, '')}.html`;
 
         const { error: htmlUploadError } = await supabase.storage
           .from('uploads')
