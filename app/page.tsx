@@ -248,7 +248,7 @@ export default async function DashboardPage({
     // profile and see all recent pulls."
     const query = supabase
       .from('requests')
-      .select('*, request_entities(id, status, completed_at, created_at, entity_name, tid)')
+      .select('*, request_entities(id, status, completed_at, created_at, entity_name, tid, gross_receipts)')
       .eq('client_id', profile.client_id)
       .order('created_at', { ascending: false });
 
@@ -1139,10 +1139,21 @@ export default async function DashboardPage({
               </div>
             </div>
 
-            {/* Result count */}
-            <p className="text-sm text-gray-500">
-              Showing {requests.length} request{requests.length !== 1 ? 's' : ''}
-            </p>
+            {/* Result count — counts merged rows (monitoring re-pulls fold into their source). */}
+            {(() => {
+              const entityToRequest = new Map<string, string>();
+              for (const r of requests as any[]) for (const e of (r.request_entities || [])) entityToRequest.set(e.id, r.id);
+              const shown = (requests as any[]).filter((r) => {
+                const srcEntityId = (r.request_entities || []).map((e: any) => e.gross_receipts?.source_entity_id).find(Boolean);
+                const srcReqId = srcEntityId ? entityToRequest.get(srcEntityId) : null;
+                return !(srcReqId && srcReqId !== r.id); // keep unless it's a re-pull folded under a visible source
+              }).length;
+              return (
+                <p className="text-sm text-gray-500">
+                  Showing {shown} request{shown !== 1 ? 's' : ''}
+                </p>
+              );
+            })()}
           </div>
 
           {requests.length > 0 ? (
@@ -1162,7 +1173,35 @@ export default async function DashboardPage({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {requests.map((request) => {
+                  {(() => {
+                    // Merge monitoring re-pulls into their source request so a
+                    // client sees one continuous entity history instead of a
+                    // disconnected MON- row. A re-pull's cloned entity carries
+                    // gross_receipts.source_entity_id → the ORIGINAL entity; we
+                    // map that back to the original request (all in the already-
+                    // fetched set) and fold the re-pull under it.
+                    const entityToRequest = new Map<string, string>();
+                    for (const r of requests as any[]) {
+                      for (const e of (r.request_entities || [])) entityToRequest.set(e.id, r.id);
+                    }
+                    const repullSourceReq = (r: any): string | null => {
+                      const srcEntityId = (r.request_entities || [])
+                        .map((e: any) => e.gross_receipts?.source_entity_id).find(Boolean);
+                      return srcEntityId ? (entityToRequest.get(srcEntityId) || null) : null;
+                    };
+                    const repullsBySource = new Map<string, any[]>();
+                    const hidden = new Set<string>();
+                    for (const r of requests as any[]) {
+                      const srcReqId = repullSourceReq(r);
+                      if (srcReqId && srcReqId !== r.id) {
+                        const arr = repullsBySource.get(srcReqId) || [];
+                        arr.push(r);
+                        repullsBySource.set(srcReqId, arr);
+                        hidden.add(r.id);
+                      }
+                    }
+                    const topLevel = (requests as any[]).filter((r) => !hidden.has(r.id));
+                    return topLevel.map((request) => {
                     // Find officer name for manager view. 2026-05-29: prefer the
                     // external loan-officer attribution from the API payload
                     // (Clearfirm passes loan_officer_name + email per request)
@@ -1172,6 +1211,8 @@ export default async function DashboardPage({
                     const externalName: string | null = (request as any).external_loan_officer_name || (request as any).external_loan_officer_email || null;
                     const officerProfile = teamProfiles.find((p) => p.id === request.requested_by);
                     const officerName = externalName || officerProfile?.full_name || officerProfile?.email || '—';
+                    const repulls = repullsBySource.get(request.id) || [];
+                    const latestRepull = repulls[0];
 
                     return (
                       <tr key={request.id} className="hover:bg-gray-50 transition-colors">
@@ -1187,6 +1228,12 @@ export default async function DashboardPage({
                           >
                             {formatStatus(request.status)}
                           </span>
+                          {latestRepull && (
+                            <span className="mt-1 block text-[11px] text-mt-green font-medium" title={`${repulls.length} monitoring update${repulls.length !== 1 ? 's' : ''} on file`}>
+                              🔄 Monitoring update — {formatStatus(latestRepull.status)}
+                              {repulls.length > 1 ? ` (+${repulls.length - 1} more)` : ''}
+                            </span>
+                          )}
                         </td>
                         <td className="px-6 py-4">
                           <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
@@ -1207,7 +1254,8 @@ export default async function DashboardPage({
                         </td>
                       </tr>
                     );
-                  })}
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>
